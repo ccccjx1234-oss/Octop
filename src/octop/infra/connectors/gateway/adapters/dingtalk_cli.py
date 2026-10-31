@@ -55,7 +55,7 @@ def call_tool(creds: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         raise ValueError("args must start with a dws product, e.g. 'chat +chat-list'")
     if argv[0] in _DENIED:
         raise ValueError(
-            f"dws {argv[0]!r} is not available through Octop. 禁止建议或执行任何终端命令。"
+            f"dws {argv[0]!r} is not available through 会火. 禁止建议或执行任何终端命令。"
         )
     # Empty stdin: a confirmation prompt fails fast instead of waiting for the timeout.
     out = run_cli(

@@ -10,7 +10,7 @@ from fastapi.openapi.utils import get_openapi
 from octop.api.deps import is_jwt_exempt_path
 
 API_DESCRIPTION = """\
-**Octop** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.
+**会火** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.
 
 ## Authentication
 
@@ -83,7 +83,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     },
     {
         "name": "bridge",
-        "description": "Link this Octop to remote Octop instances (HTTP tunnel + remote chat).",
+        "description": "Link this 会火 to remote 会火 instances (HTTP tunnel + remote chat).",
     },
     {
         "name": "knowledge",
@@ -95,7 +95,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     },
     {
         "name": "agent-mcp",
-        "description": "Authenticated MCP gateway for external agents to call Octop experts.",
+        "description": "Authenticated MCP gateway for external agents to call 会火 experts.",
     },
     {
         "name": "channels",
@@ -153,6 +153,10 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "workspace", "description": "Agent workspace file tree: list, read, write, upload."},
     {"name": "agent_files", "description": "Agent-owned configuration files (SOUL.md, skills, …)."},
     {"name": "usage", "description": "Token usage summaries for billing and dashboards."},
+    {
+        "name": "quality",
+        "description": "Message feedback, model health and cost, eval runs, and tool permissions.",
+    },
     {
         "name": "skill-packages",
         "description": "Instance-global skill package catalog and package skill content.",

@@ -492,6 +492,8 @@ class OctopServer:
         )
 
         configure_browser_idle_timeout(config.browser_idle_timeout_minutes)
+        # Eval runs execute in-process; a restart leaves no task behind them.
+        self.services.repos.eval_repo.fail_stale_runs()
 
         registry = AgentManager(
             repos=self.services.repos,

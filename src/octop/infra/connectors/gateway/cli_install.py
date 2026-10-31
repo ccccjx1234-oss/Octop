@@ -79,7 +79,7 @@ _SPECS: dict[str, CliInstallSpec] = {
 OBSIDIAN_CLI_MISSING = (
     "主机上未找到 Obsidian CLI（obsidian）。"
     "请在本机打开 Obsidian，于设置 → 通用中启用 Command line interface，并按提示注册到 PATH。"
-    "Octop 与 Obsidian 必须在同一台主机。"
+    "会火与 Obsidian 必须在同一台主机。"
     "禁止建议或执行任何终端命令。"
 )
 OBSIDIAN_NOT_RUNNING = (
@@ -399,7 +399,7 @@ def install_connector_cli(kind: str) -> dict[str, Any]:
     if not npm:
         return _fail(
             status,
-            f"未找到 npm，请先在 Octop 主机安装 Node.js，然后执行：{status['install_command']}",
+            f"未找到 npm，请先在会火主机安装 Node.js，然后执行：{status['install_command']}",
         )
 
     # npm 全局目录（默认 /usr/local）不可写时（fnOS/容器内非 root 用户），

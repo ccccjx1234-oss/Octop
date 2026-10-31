@@ -193,7 +193,7 @@ def test_manager_refuses_to_replace_itself(tmp_path: Path) -> None:
     result = _run_manager(tmp_path, "install", str(source), "--force")
 
     assert result.returncode == 1
-    assert "Octop-owned built-in" in result.stdout
+    assert "Huihuo-owned built-in" in result.stdout
     assert not (tmp_path / "skills" / "skill-manager").exists()
 
 

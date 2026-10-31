@@ -19,6 +19,7 @@ import {
   GraduationCap,
   Shield,
   PanelsTopLeft,
+  Gauge,
 } from "lucide-react";
 import type { OctopUser } from "../api/modules/auth";
 import { navAllowed, userCan } from "../utils/permissions";
@@ -83,6 +84,7 @@ export const SIDEBAR_NAV_KEYS = [
   "admin-storage",
   "admin-plugins",
   "admin-security",
+  "admin-quality",
   "admin-advanced",
 ] as const;
 
@@ -137,6 +139,7 @@ export const SIDEBAR_GROUPED_NAV_KEYS = [
   "admin-storage",
   "admin-plugins",
   "admin-security",
+  "admin-quality",
   "admin-advanced",
   "agent-config",
 ] as const;
@@ -319,6 +322,14 @@ export function buildNavSections(
       path: "/admin/security",
       icon: <Shield size={iconSize} strokeWidth={iconStroke} />,
       labelKey: "nav.security",
+    });
+  }
+  if (navAllowed(user, "admin-quality")) {
+    adminItems.push({
+      key: "admin-quality",
+      path: "/admin/quality",
+      icon: <Gauge size={iconSize} strokeWidth={iconStroke} />,
+      labelKey: "nav.adminQuality",
     });
   }
   if (navAllowed(user, "admin-advanced")) {

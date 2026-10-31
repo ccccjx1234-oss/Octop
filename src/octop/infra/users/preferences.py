@@ -39,6 +39,7 @@ SIDEBAR_NAV_KEYS = frozenset(
         "admin-storage",
         "admin-plugins",
         "admin-security",
+        "admin-quality",
         "admin-advanced",
     }
 )

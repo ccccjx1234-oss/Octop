@@ -59,6 +59,7 @@ import {
   type HitlDecisionHandler,
 } from "../../../api/types/hitl";
 import styles from "../index.module.less";
+import FeedbackButtons from "./FeedbackButtons";
 import {
   DefaultToolRenderer,
   builtinPluginHost,
@@ -1095,6 +1096,13 @@ function MessageBubble({
                       >
                         <Volume2 size={13} />
                       </button>
+                      {agentId && (
+                        <FeedbackButtons
+                          agentId={agentId}
+                          messageId={message.id}
+                          text={textContent}
+                        />
+                      )}
                     </>
                   )}
                   {!isUser && !isStreaming && onRegenerate && (
