@@ -134,6 +134,8 @@ class OctopConfig:
     enable_dashboard: bool = True
     enable_api_docs: bool = False
     history_v2_enabled: bool = False
+    # Strip narration from final answers; turn text-only clarifying questions into cards.
+    output_guard_enabled: bool = True
     require_setup_password: bool = True
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     # False when config.json omits ``database`` (use PathLayout.db unless env overrides).
@@ -613,6 +615,13 @@ def load_config(path: Path) -> OctopConfig:
                 "OCTOP_HISTORY_V2_ENABLED", str(merged.get("history_v2_enabled", False))
             ),
             False,
+        ),
+        output_guard_enabled=_coerce_bool(
+            "OCTOP_OUTPUT_GUARD_ENABLED",
+            os.environ.get(
+                "OCTOP_OUTPUT_GUARD_ENABLED", str(merged.get("output_guard_enabled", True))
+            ),
+            True,
         ),
         require_setup_password=bool(merged["require_setup_password"]),
         database=parse_database_config(merged_db),

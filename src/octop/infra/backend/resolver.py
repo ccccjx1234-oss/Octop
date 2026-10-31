@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from octop.infra.backend.adapter import row_to_backend_spec
+
+# Windows drive root (``C:/``, ``C:\``, ``C:``) — the Windows counterpart of ``/``.
+_WINDOWS_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[/\\]?$")
 
 
 def default_agent_backend_spec(workspace_dir: Path) -> dict[str, Any]:
@@ -32,13 +36,16 @@ def default_agent_backend_spec(workspace_dir: Path) -> dict[str, Any]:
 
 
 def windows_neutralize_host_root(spec: Any, *, workspace_dir: Path) -> Any:
-    """Windows: rewrite local backends rooted at ``/`` to the agent workspace.
+    """Windows: rewrite local backends that cannot contain the agent workspace.
 
     ``root_dir: "/"`` is the dashboard's default for local backends. On Windows
     it resolves to the *current drive root* (often a different drive than the
     agent workspace), so deepagents virtual-path checks reject every workspace
-    path with ``Path ... outside root directory``. Only ``root_dir`` is rewritten
-    so ``type`` / ``virtual_mode`` and other fields stay intact.
+    path with ``Path ... outside root directory``. An explicit drive root such
+    as ``C:/`` (the default expert backend) has the same problem when the
+    workspace lives on another drive. Both are scoped to the agent workspace.
+    Only ``root_dir`` is rewritten so ``type`` / ``virtual_mode`` and other
+    fields stay intact.
 
     Applies to top-level ``local_shell`` / ``filesystem`` specs and to the
     ``default`` of composite specs (the default is what anchors the agent
@@ -50,12 +57,14 @@ def windows_neutralize_host_root(spec: Any, *, workspace_dir: Path) -> Any:
     if not isinstance(spec, dict):
         return spec
     kind = spec.get("type")
-    if kind in ("local_shell", "filesystem") and _is_host_root(spec.get("root_dir")):
+    if kind in ("local_shell", "filesystem") and _excludes_workspace(
+        spec.get("root_dir"), workspace_dir
+    ):
         return {**spec, "root_dir": str(workspace_dir.resolve())}
     if (
         kind == "composite"
         and isinstance(spec.get("default"), dict)
-        and _is_host_root(spec["default"].get("root_dir"))
+        and _excludes_workspace(spec["default"].get("root_dir"), workspace_dir)
     ):
         default = spec["default"]
         return {
@@ -63,6 +72,11 @@ def windows_neutralize_host_root(spec: Any, *, workspace_dir: Path) -> Any:
             "default": {**default, "root_dir": str(workspace_dir.resolve())},
         }
     return spec
+
+
+def _excludes_workspace(root: Any, workspace_dir: Path) -> bool:
+    """True when a host-rooted *root* cannot contain *workspace_dir*."""
+    return _is_host_root(root) or _drive_root_excludes(root, workspace_dir)
 
 
 def _is_host_root(root: Any) -> bool:
@@ -74,6 +88,23 @@ def _is_host_root(root: Any) -> bool:
     design.
     """
     return root is not None and str(root).strip() in ("/", "\\", "")
+
+
+def _drive_root_excludes(root: Any, workspace_dir: Path) -> bool:
+    """True when *root* is a Windows drive root on a different drive.
+
+    A drive root (``C:/``) is a deliberate choice and is kept as-is, but when
+    the agent workspace lives on another drive every virtual path is rejected;
+    such a root is treated like the ``/`` sentinel and scoped to the workspace.
+    """
+    if root is None:
+        return False
+    text = str(root).strip()
+    if not _WINDOWS_DRIVE_ROOT_RE.match(text):
+        return False
+    drive = text[:2].casefold()
+    workspace = str(workspace_dir).replace("\\", "/").casefold()
+    return not workspace.startswith(drive + "/")
 
 
 def resolve_agent_backend_spec(

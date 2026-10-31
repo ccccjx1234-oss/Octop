@@ -14,6 +14,7 @@ from octop_harness.backends import resolve_backend
 from octop_harness.backends.workspace import BackendWorkspace
 
 from octop.infra.backend.resolver import (
+    _drive_root_excludes,
     _is_host_root,
     backend_spec_supports_execution,
     default_agent_backend_spec,
@@ -88,6 +89,74 @@ def test_is_host_root_ignores_drive_root_and_missing() -> None:
     assert not _is_host_root("C:/")
     # harness falls back to workspace_dir on its own; do not rewrite absent config.
     assert not _is_host_root(None)
+
+
+def test_drive_root_excludes_workspace_on_other_drive() -> None:
+    assert _drive_root_excludes("C:/", Path("D:/agents/AGT001"))
+    assert _drive_root_excludes("c:\\", Path("D:/agents/AGT001"))
+
+
+def test_drive_root_kept_for_workspace_on_same_drive() -> None:
+    assert not _drive_root_excludes("C:/", Path("C:/Users/a/.octop/agents/AGT001"))
+    assert not _drive_root_excludes("C:\\", Path(r"C:\Users\a\.octop\agents\AGT001"))
+    assert not _drive_root_excludes("C:", Path("c:/ws"))
+
+
+def test_drive_root_excludes_ignores_non_drive_roots() -> None:
+    assert not _drive_root_excludes("/", Path("/tmp/ws"))
+    assert not _drive_root_excludes(None, Path("/tmp/ws"))
+    assert not _drive_root_excludes("D:/scoped", Path("C:/ws"))
+
+
+def test_windows_neutralize_cross_drive_root_scopes_to_workspace(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "agents" / "AGT001"
+    ws.mkdir(parents=True)
+    ws_text = str(ws.resolve()).replace("\\", "/").casefold()
+    other_drive = "Y:/" if ws_text.startswith("z:/") else "Z:/"
+    with patch("octop.infra.backend.resolver.os", SimpleNamespace(name="nt")):
+        out = windows_neutralize_host_root(
+            {"type": "local_shell", "root_dir": other_drive, "virtual_mode": True},
+            workspace_dir=ws,
+        )
+    assert out == {
+        "type": "local_shell",
+        "root_dir": str(ws.resolve()),
+        "virtual_mode": True,
+    }
+
+
+def test_windows_neutralize_cross_drive_composite_default_scopes_to_workspace(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "agents" / "AGT001"
+    ws.mkdir(parents=True)
+    ws_text = str(ws.resolve()).replace("\\", "/").casefold()
+    other_drive = "Y:/" if ws_text.startswith("z:/") else "Z:/"
+    spec = {
+        "type": "composite",
+        "default": {"type": "filesystem", "root_dir": other_drive, "virtual_mode": True},
+    }
+    with patch("octop.infra.backend.resolver.os", SimpleNamespace(name="nt")):
+        out = windows_neutralize_host_root(spec, workspace_dir=ws)
+    assert out["default"] == {
+        "type": "filesystem",
+        "root_dir": str(ws.resolve()),
+        "virtual_mode": True,
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive roots only exist on Windows")
+def test_windows_neutralize_keeps_drive_root_containing_workspace(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "agents" / "AGT001"
+    ws.mkdir(parents=True)
+    spec = {"type": "local_shell", "root_dir": ws.drive + "/", "virtual_mode": True}
+    with patch("octop.infra.backend.resolver.os", SimpleNamespace(name="nt")):
+        out = windows_neutralize_host_root(spec, workspace_dir=ws)
+    assert out == spec
 
 
 def test_windows_neutralize_is_passthrough_on_posix(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -98,12 +99,16 @@ class ModelHealthRegistry:
         clock: Callable[[], float] = time.monotonic,
         base_cooldown_s: float = 60.0,
         max_cooldown_s: float = 900.0,
+        availability_window_s: float = 600.0,
     ) -> None:
         self._clock = clock
         self._base_cooldown_s = base_cooldown_s
         self._max_cooldown_s = max_cooldown_s
+        self._availability_window_s = availability_window_s
         self._models: dict[str, _OpenCircuit] = {}
         self._providers: dict[str, _OpenCircuit] = {}
+        # Sliding window of (time, ok) outcomes per model ref, for the health view.
+        self._outcomes: dict[str, deque[tuple[float, bool]]] = {}
 
     @staticmethod
     def _provider(ref: str) -> str:
@@ -152,6 +157,40 @@ class ModelHealthRegistry:
             return min(self._base_cooldown_s * 5, self._max_cooldown_s)
         return self._max_cooldown_s
 
+    def _note_outcome(self, ref: str, ok: bool) -> None:
+        if not ref:
+            return
+        now = self._clock()
+        window = self._outcomes.setdefault(ref, deque())
+        window.append((now, ok))
+        self._trim(window, now)
+
+    def _trim(self, window: deque[tuple[float, bool]], now: float) -> None:
+        cutoff = now - self._availability_window_s
+        while window and window[0][0] < cutoff:
+            window.popleft()
+
+    def availability(self, ref: str) -> dict[str, object]:
+        """Calls, failures, and success rate for *ref* in the sliding window."""
+        window = self._outcomes.get(ref)
+        if window is not None:
+            self._trim(window, self._clock())
+        calls = len(window) if window else 0
+        failures = sum(1 for _, ok in window if not ok) if window else 0
+        return {
+            "window_s": int(self._availability_window_s),
+            "calls": calls,
+            "failures": failures,
+            "success_rate": round((calls - failures) / calls, 4) if calls else None,
+        }
+
+    def overview(self) -> list[dict[str, object]]:
+        """Health and availability for every model ref seen by this process."""
+        refs = set(self._outcomes) | set(self._models)
+        return [
+            {"ref": ref, **self.snapshot(ref), **self.availability(ref)} for ref in sorted(refs)
+        ]
+
     def record_failure(self, ref: str, *, kind: str, scope: FailureScope) -> None:
         """Open the model or provider circuit after exhausted retries."""
         del kind
@@ -161,6 +200,7 @@ class ModelHealthRegistry:
             # Release any expired half-open reservation without quarantining it.
             self.record_success(ref)
             return
+        self._note_outcome(ref, False)
         if scope is FailureScope.MODEL:
             provider_circuit = self._providers.get(provider)
             if provider_circuit is not None and self._clock() >= provider_circuit.open_until:
@@ -180,6 +220,7 @@ class ModelHealthRegistry:
 
     def record_success(self, ref: str) -> None:
         """Close model health state after a successful real call."""
+        self._note_outcome(ref, True)
         self._models.pop(ref, None)
         provider = self._provider(ref)
         self._providers.pop(provider, None)

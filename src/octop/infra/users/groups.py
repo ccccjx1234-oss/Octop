@@ -21,6 +21,8 @@ STORAGE_FEATURE_KEY = "feature"  # legacy feature-wide key; prefer backend name
 RESOURCE_PLUGIN = "plugin"
 RESOURCE_BRIDGE = "bridge"
 RESOURCE_EXPERT = "expert"
+# Agent tools by name. A tool with no grant stays usable by everyone.
+RESOURCE_TOOL = "tool"
 
 RESOURCE_TYPES = frozenset(
     {
@@ -32,6 +34,7 @@ RESOURCE_TYPES = frozenset(
         RESOURCE_PLUGIN,
         RESOURCE_BRIDGE,
         RESOURCE_EXPERT,
+        RESOURCE_TOOL,
     }
 )
 

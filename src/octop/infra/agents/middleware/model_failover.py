@@ -1,4 +1,8 @@
-"""Health-aware and context-safe model failover for AUTO-routed turns."""
+"""Health-aware and context-safe model failover.
+
+AUTO-routed turns switch among AUTO candidates. Turns pinned to one model may
+switch to the admin-configured fallback chain (``fallback_refs``).
+"""
 
 from __future__ import annotations
 
@@ -53,7 +57,10 @@ def _fits_context(
 
 
 class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
-    """Retry one model, then switch only for AUTO and safe failure classes."""
+    """Retry one model, then switch only for safe failure classes.
+
+    AUTO turns use AUTO candidates; pinned turns use ``fallback_refs``.
+    """
 
     def __init__(
         self,
@@ -65,9 +72,11 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
         initial_delay: float,
         max_delay: float,
         on_failure: Callable[[Exception], str] | Literal["error"] | None = None,
+        fallback_refs: Callable[[], Sequence[str]] | None = None,
     ) -> None:
         super().__init__()
         self._health = health
+        self._fallback_refs = fallback_refs
         self._candidates = candidates
         self._model_for_ref = model_for_ref
         self._on_failure = on_failure
@@ -109,6 +118,31 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
             and _fits_context(candidate, estimated, route_cap)
         ]
 
+    def _chain(self, current_ref: str) -> list[str]:
+        if self._fallback_refs is None or not current_ref:
+            return []
+        return [
+            ref
+            for ref in self._fallback_refs()
+            if ref != current_ref and self._health.is_routable(ref)
+        ]
+
+    def _plan(self, request: ModelRequest[Any]) -> tuple[str, bool, list[tuple[str, Any]]]:
+        """Return ``(current_ref, may_switch, attempts)`` for one model call."""
+        current_ref, automatic = self._route(request)
+        attempts: list[tuple[str, Any]] = []
+        if not automatic or not current_ref or self._health.begin_attempt(current_ref):
+            attempts.append((current_ref, request.model))
+        if automatic and current_ref:
+            attempts.extend(
+                (candidate.ref, self._model_for_ref(candidate.ref))
+                for candidate in self._fallbacks(request, current_ref)
+            )
+            return current_ref, True, attempts
+        chain = self._chain(current_ref)
+        attempts.extend((ref, self._model_for_ref(ref)) for ref in chain)
+        return current_ref, bool(chain), attempts
+
     def _record_failure(self, ref: str, exc: Exception) -> bool:
         decision = classify_model_failure(exc)
         if decision.scope is not FailureScope.NONE:
@@ -120,22 +154,14 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
-        current_ref, automatic = self._route(request)
+        current_ref, may_switch, attempts = self._plan(request)
         last_error: Exception | None = None
-        attempts: list[tuple[str, Any]] = []
-        if not automatic or not current_ref or self._health.begin_attempt(current_ref):
-            attempts.append((current_ref, request.model))
-        if automatic and current_ref:
-            attempts.extend(
-                (candidate.ref, self._model_for_ref(candidate.ref))
-                for candidate in self._fallbacks(request, current_ref)
-            )
 
         for ref, model in attempts:
-            if automatic and ref != current_ref and not self._health.begin_attempt(ref):
+            if may_switch and ref != current_ref and not self._health.begin_attempt(ref):
                 continue
             routed = request if model is request.model else request.override(model=model)
-            if automatic and ref and ref != current_ref:
+            if may_switch and ref and ref != current_ref:
                 _configurable(request)["model"] = ref
             try:
                 response = self._retry.wrap_model_call(routed, handler)
@@ -144,38 +170,28 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
             except Exception as exc:
                 last_error = exc
                 may_failover = self._record_failure(ref, exc)
-                if not automatic or not may_failover:
+                if not may_switch or not may_failover:
                     return self._failure_response(exc)
-                logger.warning("AUTO model route failed; trying next candidate: model=%s", ref)
+                logger.warning("model route failed; trying next candidate: model=%s", ref)
                 continue
             self._health.record_success(ref)
             return cast(ModelResponse[Any], response)
 
-        return self._failure_response(
-            last_error or RuntimeError("no healthy AUTO model is available")
-        )
+        return self._failure_response(last_error or RuntimeError("no healthy model is available"))
 
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
-        current_ref, automatic = self._route(request)
+        current_ref, may_switch, attempts = self._plan(request)
         last_error: Exception | None = None
-        attempts: list[tuple[str, Any]] = []
-        if not automatic or not current_ref or self._health.begin_attempt(current_ref):
-            attempts.append((current_ref, request.model))
-        if automatic and current_ref:
-            attempts.extend(
-                (candidate.ref, self._model_for_ref(candidate.ref))
-                for candidate in self._fallbacks(request, current_ref)
-            )
 
         for ref, model in attempts:
-            if automatic and ref != current_ref and not self._health.begin_attempt(ref):
+            if may_switch and ref != current_ref and not self._health.begin_attempt(ref):
                 continue
             routed = request if model is request.model else request.override(model=model)
-            if automatic and ref and ref != current_ref:
+            if may_switch and ref and ref != current_ref:
                 _configurable(request)["model"] = ref
             try:
                 response = await self._retry.awrap_model_call(routed, handler)
@@ -184,16 +200,14 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
             except Exception as exc:
                 last_error = exc
                 may_failover = self._record_failure(ref, exc)
-                if not automatic or not may_failover:
+                if not may_switch or not may_failover:
                     return self._failure_response(exc)
-                logger.warning("AUTO model route failed; trying next candidate: model=%s", ref)
+                logger.warning("model route failed; trying next candidate: model=%s", ref)
                 continue
             self._health.record_success(ref)
             return cast(ModelResponse[Any], response)
 
-        return self._failure_response(
-            last_error or RuntimeError("no healthy AUTO model is available")
-        )
+        return self._failure_response(last_error or RuntimeError("no healthy model is available"))
 
 
 __all__ = [

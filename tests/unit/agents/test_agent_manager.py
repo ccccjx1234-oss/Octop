@@ -1594,6 +1594,34 @@ def test_backend_spec_for_row_neutralizes_host_root_on_windows(
     }
 
 
+def test_backend_spec_for_row_neutralizes_cross_drive_root_on_windows(
+    manager: AgentManager, monkeypatch: Any
+) -> None:
+    # Default experts persist root_dir as the home drive root (e.g. "C:/").
+    # When OCTOP_HOME lives on another drive the workspace is unreachable; the
+    # resolver must scope such a drive root to the workspace too.
+    monkeypatch.setattr(os, "name", "nt")
+    row = _row(
+        config_json=json.dumps(
+            {"backend": {"type": "local_shell", "root_dir": "C:/", "virtual_mode": True}}
+        )
+    )
+    ws = manager.resolve_workspace_dir(row.agent_id)
+    ws_text = str(ws.resolve()).replace("\\", "/").casefold()
+    # Keep the drive-root case real unless this runner's workspace is on C:.
+    root = "Z:/" if ws_text.startswith("c:/") else "C:/"
+    row = _row(
+        config_json=json.dumps(
+            {"backend": {"type": "local_shell", "root_dir": root, "virtual_mode": True}}
+        )
+    )
+    assert manager._backend_spec_for_row(row) == {
+        "type": "local_shell",
+        "root_dir": str(ws.resolve()),
+        "virtual_mode": True,
+    }
+
+
 def test_build_harness_config_keeps_fs_permissions_for_local_shell_guard(
     manager: AgentManager,
 ) -> None:

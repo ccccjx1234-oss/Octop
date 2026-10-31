@@ -82,6 +82,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG PIP_INDEX_URL=
 ARG PIP_TRUSTED_HOST=
 ARG APT_MIRROR=
+ARG NPM_REGISTRY=
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -121,7 +122,9 @@ COPY --from=frontend-builder /build/src/octop/dashboard/ ./src/octop/dashboard/
 
 COPY .env.example ./
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Windows checkouts may carry CRLF; the shebang must be LF inside the image.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -n "$PIP_INDEX_URL" ]; then \
@@ -134,6 +137,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/* /tmp/*
+
+# ── 连接器宿主机 CLI ───────────────────────────────────────────────────────
+# 飞书 CLI 连接器依赖宿主机的 Node.js 与 lark-cli（@larksuite/cli）。
+# 单独分层，CLI 版本变更只重建这两层，不影响上方 Python 构建缓存。
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# 版本与 src/octop/infra/connectors/gateway/cli_install.py 的检测目标一致；
+# 升级 lark-cli 时改这里的版本号并重新构建镜像。
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
+    npm install -g --no-audit --no-fund @larksuite/cli@1.0.98 \
+    && lark-cli --version
 
 RUN mkdir -p /data/.octop
 

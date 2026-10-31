@@ -395,6 +395,46 @@ class UsageRepo:
             "buckets": buckets,
         }
 
+    def totals_by_user_model(
+        self,
+        *,
+        window: str = "last_30d",
+        timezone: str = "UTC",
+    ) -> list[dict[str, Any]]:
+        """Token totals grouped by ``(user_id, model)`` for cost reports."""
+        where_sql, params, _start, _end = self._scope_filter(
+            user_id=None,
+            agent_id=None,
+            window=window,
+            timezone=timezone,
+        )
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    user_id,
+                    COALESCE(NULLIF(model, ''), '(unknown)') AS model,
+                    SUM(uncached_input_tokens) AS uncached_input_tokens,
+                    SUM(cache_read_tokens) AS cache_read_tokens,
+                    SUM(output_tokens) AS output_tokens,
+                    SUM(total_tokens) AS total_tokens
+                FROM usage_log WHERE {where_sql}
+                GROUP BY user_id, COALESCE(NULLIF(model, ''), '(unknown)')
+                """,
+                params,
+            ).fetchall()
+        return [
+            {
+                "user_id": int(r["user_id"]),
+                "model": str(r["model"]),
+                "uncached_input_tokens": int(r["uncached_input_tokens"] or 0),
+                "cache_read_tokens": int(r["cache_read_tokens"] or 0),
+                "output_tokens": int(r["output_tokens"] or 0),
+                "total_tokens": int(r["total_tokens"] or 0),
+            }
+            for r in rows
+        ]
+
     def list_detail(
         self,
         *,

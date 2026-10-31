@@ -2007,6 +2007,10 @@ class AgentManager:
         """Return whether a usable model can start an automatic route now."""
         return self._providers.is_model_ref_usable(ref) and self._model_health.is_routable(ref)
 
+    def model_health_overview(self) -> list[dict[str, object]]:
+        """Circuit state and sliding-window availability for models seen this process."""
+        return self._model_health.overview()
+
     # ------------------------------------------------------------------
     # Hot-reload — rebuild harness agents after config / provider changes
     # ------------------------------------------------------------------
@@ -4026,9 +4030,11 @@ class AgentManager:
             harness_handles_mcp_tool_errors,
         )
         from octop.infra.agents.middleware.octop_ui_offload import OctopUiOffloadMiddleware
+        from octop.infra.agents.middleware.output_guard import OutputGuardMiddleware
         from octop.infra.agents.middleware.reasoning import ReasoningRequestMiddleware
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
         from octop.infra.agents.middleware.token_quota import TokenQuotaMiddleware
+        from octop.infra.agents.middleware.tool_permission import ToolPermissionMiddleware
         from octop.infra.agents.middleware.workspace_image import (
             WorkspaceImageMaterializeMiddleware,
         )
@@ -4041,12 +4047,16 @@ class AgentManager:
         # OctopUiOffload stays innermost so every outer middleware observes the
         # slimmed content consistently; it only touches octop_ui plugin envelopes,
         # disjoint from the file-tool results ThreadArtifacts cares about.
+        # ToolPermission is the single per-user tool gate (user-group grants).
+        # OutputGuard rewrites only the final answer, after every inner model hook.
         agent_middleware: list[Any] = [
             *plugin_middleware,
             TokenQuotaMiddleware(
                 policy_repo=self._repos.user_policy_repo,
                 usage_repo=self._repos.usage_repo,
             ),
+            ToolPermissionMiddleware(repos=self._repos),
+            *((OutputGuardMiddleware(),) if self._config.output_guard_enabled else ()),
             ReasoningRequestMiddleware(),
             KnowledgeSearchHintMiddleware(),
             BrowserProfileMiddleware(),
@@ -4239,7 +4249,9 @@ class AgentManager:
                 from octop.infra.agents.middleware.model_failover import (
                     SafeModelFailoverMiddleware,
                 )
+                from octop.infra.agents.providers.fallback_chain import load_fallback_chain
 
+                settings_repo = self._repos.settings_repo
                 retry_middleware: Any = SafeModelFailoverMiddleware(
                     health=self._model_health,
                     candidates=lambda _current_ref, needs_multimodal: (
@@ -4252,6 +4264,7 @@ class AgentManager:
                     initial_delay=applied.model_retry_initial_delay,
                     max_delay=applied.model_retry_max_delay,
                     on_failure="error",
+                    fallback_refs=lambda: load_fallback_chain(settings_repo),
                 )
             else:
                 from langchain.agents.middleware import ModelRetryMiddleware

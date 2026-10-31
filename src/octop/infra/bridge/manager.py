@@ -83,7 +83,7 @@ def _annotate_bridge_dial_error(exc: BaseException) -> str:
     detail = str(exc)
     status = _handshake_http_status(exc)
     if status == 404:
-        return f"{detail}; peer may not support Bridge yet (needs Octop with /api/bridge/ws)"
+        return f"{detail}; peer may not support Bridge yet (needs Huihuo with /api/bridge/ws)"
     if status == 403:
         return (
             f"{detail}; the peer refused the WebSocket handshake. "

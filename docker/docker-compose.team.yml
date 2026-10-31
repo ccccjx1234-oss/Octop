@@ -1,0 +1,141 @@
+# =============================================================================
+# Octop — team stack (PostgreSQL + SeaweedFS S3 + Caddy)
+#
+# Build/run from the repo root:
+#   docker build -f docker/Dockerfile -t octop:local .
+#   docker compose --env-file D:/octop-stack/octop-stack.env \
+#     -f docker/docker-compose.team.yml up -d
+#
+# Secrets live in the env file (outside the repo); see docker/README-team-stack.md.
+# Only Caddy publishes a host port; PostgreSQL and MinIO stay on the internal
+# networks. Octop itself is reachable only through the proxy.
+#
+# Note: PostgreSQL is greenfield — there is no SQLite→PostgreSQL data migrator.
+# =============================================================================
+
+name: octop-stack
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: octop-stack-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-octop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+      POSTGRES_DB: ${POSTGRES_DB:-octop}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-vector.sql:/docker-entrypoint-initdb.d/01-vector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    networks:
+      - backend
+
+  seaweedfs:
+    # S3-compatible object storage. The S3 API (8333) and volume server stay on
+    # the compose network; only the master UI is published locally.
+    image: chrislusf/seaweedfs:latest
+    container_name: octop-stack-seaweedfs
+    restart: unless-stopped
+    environment:
+      S3_APP_KEY: ${S3_APP_KEY:-octopapp}
+      S3_APP_SECRET: ${S3_APP_SECRET:?set S3_APP_SECRET in the env file}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/s3.json <<EOF
+        {"identities":[{"name":"$${S3_APP_KEY}","credentials":[{"accessKey":"$${S3_APP_KEY}","secretKey":"$${S3_APP_SECRET}"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+        EOF
+        exec weed server -dir=/data -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    volumes:
+      - seaweeddata:/data
+    ports:
+      - "127.0.0.1:${SEAWEEDFS_MASTER_PORT:-9333}:9333"
+    networks:
+      - backend
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:latest
+    container_name: octop-stack-seaweedfs-init
+    restart: "no"
+    depends_on:
+      - seaweedfs
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-octop-workspaces}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until echo "cluster.check" | weed shell -master=seaweedfs:9333 >/dev/null 2>&1; do
+          echo "waiting for SeaweedFS..."
+          sleep 2
+        done
+        echo "s3.bucket.create -name $${S3_BUCKET}" | weed shell -master=seaweedfs:9333
+        echo "s3.bucket.list" | weed shell -master=seaweedfs:9333
+    networks:
+      - backend
+
+  octop:
+    image: octop:local
+    container_name: octop-stack-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    expose:
+      - "8088"
+    volumes:
+      # Host-side state that stays on disk even with the S3 workspace backend:
+      # knowledge bases, skill packages, per-agent sessions/checkpoints.
+      - ${OCTOP_DATA_DIR:-D:/octop-stack/octop-data}:/data/.octop
+    environment:
+      HOME: /data
+      OCTOP_BIND_HOST: 0.0.0.0
+      OCTOP_PORT: "8088"
+      OCTOP_LOG_LEVEL: ${OCTOP_LOG_LEVEL:-info}
+      OCTOP_DATABASE_DRIVER: postgresql
+      OCTOP_DATABASE_URL: postgresql://${POSTGRES_USER:-octop}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-octop}?sslmode=disable
+      OCTOP_ADMIN_USERNAME: ${OCTOP_ADMIN_USERNAME:-admin}
+      OCTOP_DEFAULT_PASSWORD: ${OCTOP_DEFAULT_PASSWORD:?set OCTOP_DEFAULT_PASSWORD in the env file}
+    extra_hosts:
+      # Lets the container reach host services (e.g. the opencodex proxy).
+      - "host.docker.internal:host-gateway"
+    networks:
+      - backend
+      - edge
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: octop-stack-caddy
+    restart: unless-stopped
+    depends_on:
+      - octop
+    environment:
+      OCTOP_SITE_HOST: ${OCTOP_SITE_HOST:-localhost}
+    ports:
+      - "127.0.0.1:${OCTOP_HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    networks:
+      - edge
+
+networks:
+  edge:
+  backend:
+
+volumes:
+  pgdata:
+  seaweeddata:
+  caddydata:
+  caddyconfig:

@@ -45,3 +45,6 @@ node_modules
 *.log
 logs
 agent-transcripts
+
+# Local Octop data home (DB, workspaces, secrets) — never send to build context
+.octop-data

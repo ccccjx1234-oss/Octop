@@ -1,0 +1,34 @@
+# Octop team stack — TLS-terminating reverse proxy.
+#
+# `tls internal` issues a certificate from Caddy's local CA (fine for an
+# intranet trial; clients must trust the CA or be told to accept it).
+# For a real domain replace the site address and the tls line, e.g.:
+#     octop.example.com {
+#         tls admin@example.com
+#
+# The app itself only listens on the compose network (no host port).
+
+# Hostname is what the internal CA issues the certificate for. Use `localhost`
+# for a local trial; set OCTOP_SITE_HOST to a LAN IP or a real domain (and
+# switch `tls internal` to ACME) for team access.
+https://{$OCTOP_SITE_HOST:localhost}:8443 {
+	tls internal
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=15552000; includeSubDomains"
+		# The SPA ships inline boot scripts; tighten to hashes/nonces before
+		# claiming a strict CSP. Everything else is self-hosted.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ws: wss:; font-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+		-Server
+	}
+
+	reverse_proxy octop:8088 {
+		# Stream assistant tokens without proxy buffering.
+		flush_interval -1
+	}
+}

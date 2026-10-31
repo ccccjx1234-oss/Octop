@@ -107,7 +107,7 @@ def build_app(server: OctopServer) -> FastAPI:
     )
 
     app = FastAPI(
-        title="Octop API",
+        title="会火 API",
         version="0.1.0",
         description=API_DESCRIPTION,
         openapi_url="/api/openapi.json" if enable_api_docs else None,
@@ -194,6 +194,7 @@ def build_app(server: OctopServer) -> FastAPI:
         preferences,
         proactive_care,
         providers,
+        quality,
         search,
         settings,
         setup,
@@ -286,6 +287,8 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(proactive_care.router, "/api", ["proactive-care"]),
             _RouterMount(usage.router, "/api", ["usage"]),
             _RouterMount(usage.admin_router, "/api/admin", ["admin"]),
+            _RouterMount(quality.router, "/api", ["quality"]),
+            _RouterMount(quality.admin_router, "/api/admin/quality", ["quality"]),
             _RouterMount(skill_packages.router, "/api", ["skill-packages"]),
             _RouterMount(skills.router, "/api", ["skills"]),
             _RouterMount(subagents.router, "/api", ["subagents"]),
@@ -314,7 +317,7 @@ def build_app(server: OctopServer) -> FastAPI:
         async def api_docs() -> HTMLResponse:
             return get_scalar_api_reference(
                 openapi_url=app.openapi_url,
-                title="Octop API",
+                title="会火 API",
             )
 
     if enable_dashboard:
