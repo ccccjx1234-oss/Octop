@@ -4,6 +4,10 @@ Rules are user-group grants on resource type ``tool`` keyed by tool name. A
 tool with no grant behaves as before (everyone may call it), so restrictions
 can be rolled out one tool at a time. Admins always pass. The check reads the
 database on every call, so revoking access takes effect on the next call.
+
+Subagent graphs do not inherit this middleware, so a user with any restricted
+tool cannot use ``task`` delegation: the subagent could otherwise run the
+restricted tool. Granting the user every restricted tool restores delegation.
 """
 
 from __future__ import annotations
@@ -21,6 +25,39 @@ from octop.infra.agents.middleware.token_quota import configurable_user_id
 from octop.infra.users.groups import RESOURCE_TOOL, GroupAccess
 from octop.infra.utils.locale import resolve_user_locale
 
+TASK_TOOL_NAME = "task"
+
+
+def _restricted_tool_denied(repos: Any, *, user_id: int, is_admin: bool) -> bool:
+    """True when any tool grant excludes this user."""
+    if is_admin:
+        return False
+    grants = repos.resource_group_grant_repo.group_ids_by_resource(RESOURCE_TOOL)
+    if not grants:
+        return False
+    access = GroupAccess(repos)
+    return any(
+        not access.allows(
+            user_id=user_id,
+            is_admin=False,
+            resource_type=RESOURCE_TOOL,
+            resource_key=tool_name,
+            is_owner=False,
+        )
+        for tool_name in grants
+    )
+
+
+def task_delegation_blocked(repos: Any, *, user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    row = repos.user_repo.get(user_id)
+    if row is None:
+        return False
+    return _restricted_tool_denied(
+        repos, user_id=user_id, is_admin=str(getattr(row, "role", "")) == "admin"
+    )
+
 
 def tool_allowed(repos: Any, *, user_id: int | None, tool_name: str) -> bool:
     if user_id is None or not tool_name:
@@ -28,9 +65,12 @@ def tool_allowed(repos: Any, *, user_id: int | None, tool_name: str) -> bool:
     row = repos.user_repo.get(user_id)
     if row is None:
         return False
+    is_admin = str(getattr(row, "role", "")) == "admin"
+    if tool_name == TASK_TOOL_NAME:
+        return not _restricted_tool_denied(repos, user_id=user_id, is_admin=is_admin)
     return GroupAccess(repos).allows(
         user_id=user_id,
-        is_admin=str(getattr(row, "role", "")) == "admin",
+        is_admin=is_admin,
         resource_type=RESOURCE_TOOL,
         resource_key=tool_name,
         is_owner=False,
@@ -49,8 +89,13 @@ class ToolPermissionMiddleware(AgentMiddleware[Any, Any]):
         if tool_allowed(self._repos, user_id=user_id, tool_name=name):
             return None
         locale = resolve_user_locale(user_repo=self._repos.user_repo, user_id=user_id or 0)
+        content = (
+            tr("quality.tool_delegation_denied", locale)
+            if name == TASK_TOOL_NAME and task_delegation_blocked(self._repos, user_id=user_id)
+            else tr("quality.tool_denied", locale, tool_name=name)
+        )
         return ToolMessage(
-            content=tr("quality.tool_denied", locale, tool_name=name),
+            content=content,
             tool_call_id=str(call.get("id") or ""),
             name=name,
             status="error",
@@ -73,4 +118,4 @@ class ToolPermissionMiddleware(AgentMiddleware[Any, Any]):
         return denied if denied is not None else await handler(request)
 
 
-__all__ = ["ToolPermissionMiddleware", "tool_allowed"]
+__all__ = ["TASK_TOOL_NAME", "ToolPermissionMiddleware", "task_delegation_blocked", "tool_allowed"]

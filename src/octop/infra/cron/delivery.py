@@ -251,6 +251,7 @@ class CronDeliveryService:
             text=command.prompt,
             model=command.model,
             message_kwargs=message_kwargs,
+            unattended=True,
         )
         if servers:
             request["mcp_servers"] = servers

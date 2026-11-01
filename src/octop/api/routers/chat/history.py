@@ -652,6 +652,10 @@ async def delete_thread(
     else:
         await registry.delete_thread_checkpoint(agent_id, thread_id)
     server.app_runtime.gateway.thread_registry.delete_thread(thread_id)
+    try:
+        server.services.repos.message_feedback_repo.delete_for_thread(thread_id)
+    except Exception:
+        logger.exception("feedback cascade delete failed thread=%s", thread_id)
     runtime = getattr(server, "app_runtime", None)
     trajectory = getattr(runtime, "trajectory_service", None) if runtime is not None else None
     if isinstance(trajectory, TrajectoryService):

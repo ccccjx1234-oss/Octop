@@ -416,6 +416,7 @@ class UsageRepo:
                     COALESCE(NULLIF(model, ''), '(unknown)') AS model,
                     SUM(uncached_input_tokens) AS uncached_input_tokens,
                     SUM(cache_read_tokens) AS cache_read_tokens,
+                    SUM(cache_write_tokens) AS cache_write_tokens,
                     SUM(output_tokens) AS output_tokens,
                     SUM(total_tokens) AS total_tokens
                 FROM usage_log WHERE {where_sql}
@@ -429,6 +430,7 @@ class UsageRepo:
                 "model": str(r["model"]),
                 "uncached_input_tokens": int(r["uncached_input_tokens"] or 0),
                 "cache_read_tokens": int(r["cache_read_tokens"] or 0),
+                "cache_write_tokens": int(r["cache_write_tokens"] or 0),
                 "output_tokens": int(r["output_tokens"] or 0),
                 "total_tokens": int(r["total_tokens"] or 0),
             }

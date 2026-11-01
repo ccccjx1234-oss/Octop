@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Input, Popover } from "antd";
 import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -63,12 +63,13 @@ export default function FeedbackButtons({
   const [rating, setRating] = useState(0);
   const [reasonOpen, setReasonOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const touched = useRef(false);
 
   useEffect(() => {
     if (!threadId) return;
     let alive = true;
     void loadRatings(agentId, threadId).then((ratings) => {
-      if (alive) setRating(ratings[messageId] ?? 0);
+      if (alive && !touched.current) setRating(ratings[messageId] ?? 0);
     });
     return () => {
       alive = false;
@@ -78,8 +79,8 @@ export default function FeedbackButtons({
   if (!threadId) return null;
 
   const send = (next: number, comment = "") => {
+    touched.current = true;
     setRating(next);
-    rememberRating(agentId, threadId, messageId, next);
     void feedbackApi
       .rate(
         agentId,
@@ -89,6 +90,7 @@ export default function FeedbackButtons({
         text.slice(0, EXCERPT_CHARS),
         comment,
       )
+      .then(() => rememberRating(agentId, threadId, messageId, next))
       .catch(() => setRating(0));
   };
 

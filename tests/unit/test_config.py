@@ -430,3 +430,21 @@ def test_non_object_config_raises(tmp_path: Path):
     with pytest.raises(ValueError, match="JSON object"):
         load_config(cfg_path)
     assert cfg_path.read_text(encoding="utf-8") == "[1, 2]"
+
+
+def test_postgresql_conninfo_percent_encodes_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOP_DATABASE_DRIVER", "postgresql")
+    monkeypatch.setenv("OCTOP_DATABASE_HOST", "postgres")
+    monkeypatch.setenv("OCTOP_DATABASE_NAME", "octop")
+    monkeypatch.setenv("OCTOP_DATABASE_USER", "octop")
+    monkeypatch.setenv("OCTOP_DATABASE_PASSWORD", "pa/ss@word%#")
+    cfg = load_config(tmp_path / "config.json")
+
+    from psycopg.conninfo import conninfo_to_dict
+
+    parsed = conninfo_to_dict(cfg.database.postgresql_conninfo())
+    assert parsed["password"] == "pa/ss@word%#"
+    assert parsed["host"] == "postgres"
+    assert parsed["dbname"] == "octop"

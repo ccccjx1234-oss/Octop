@@ -24,11 +24,14 @@ from uuid import uuid4
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage
 from octop_harness.builtin.tools.ask_user import ASK_USER_TOOL_NAME
+from octop_harness.middleware.runtime import runtime_config
 
 _NARRATION = [
     re.compile(p, re.IGNORECASE)
     for p in (
-        r"^(好的[,，]?\s*)?我?(已经|已)(获得|拿到|得到|获取|查到)(了)?.{0,12}(结果|数据|信息|内容).{0,30}$",
+        r"^(好的[,，]?\s*)?我?(已经|已)(获得|拿到|得到|获取|查到)(了)?.{0,12}(结果|数据|信息|内容)"
+        r"(\s*[，,。！!：:]?\s*(现在|接下来|下面)?\s*(我)?(来|将|为你|给你|为您|给您)?"
+        r"(整理|输出|总结|回答|生成|汇总|展示|汇报|说明).{0,20})?$",
         r"^(现在|接下来|下面)[,，]?\s*(我|让我)?(来|将|开始|马上)?(为你|给你|为您|给您)?"
         r"(整理|输出|总结|回答|生成|汇总|展示).{0,20}[:：。.!！]?$",
         r"^(让我|我来|我先)(来)?(整理|总结|汇总|看看|查看|分析).{0,20}[:：。.]$",
@@ -60,9 +63,14 @@ def strip_narration(text: str) -> str:
     """Drop narration-only lines at the head and tail of *text*."""
     lines = text.split("\n")
     head = 0
-    while head < min(MAX_NARRATION_LINES, len(lines)) and (
-        not lines[head].strip() or _is_narration(lines[head])
-    ):
+    dropped_head = 0
+    while head < len(lines):
+        if not lines[head].strip():
+            head += 1
+            continue
+        if dropped_head >= MAX_NARRATION_LINES or not _is_narration(lines[head]):
+            break
+        dropped_head += 1
         head += 1
     tail = len(lines)
     dropped = 0
@@ -95,6 +103,12 @@ def _text_of(message: AIMessage) -> str | None:
     if isinstance(content, str):
         return content
     return None  # multi-part content (images, reasoning blocks): leave untouched
+
+
+def _unattended(request: ModelRequest[Any]) -> bool:
+    config = runtime_config(request)
+    configurable = config.get("configurable") if isinstance(config, dict) else None
+    return isinstance(configurable, dict) and configurable.get("octop_unattended") is True
 
 
 def _tool_names(request: ModelRequest[Any]) -> set[str]:
@@ -137,7 +151,7 @@ def guard_message(message: AIMessage, *, can_ask: bool) -> AIMessage:
 
 class OutputGuardMiddleware(AgentMiddleware[Any, Any]):
     def _apply(self, request: ModelRequest[Any], response: Any) -> Any:
-        can_ask = ASK_USER_TOOL_NAME in _tool_names(request)
+        can_ask = ASK_USER_TOOL_NAME in _tool_names(request) and not _unattended(request)
         if isinstance(response, AIMessage):
             return guard_message(response, can_ask=can_ask)
         result = getattr(response, "result", None)

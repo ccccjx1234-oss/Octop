@@ -532,7 +532,8 @@
     "LOCAL_DOWNLOAD_UNAVAILABLE": "Saving to the host Downloads folder is only available when Huihuo is opened on this computer.",
     "SKILL_PACKAGE_COPY_DENIED": "The creator of this skill package has disabled copying its skills.",
     "SKILL_PACKAGE_DOWNLOAD_DENIED": "Downloading this skill package is disabled.",
-    "SKILL_PACKAGE_LOCKED": "This skill was copied from a locked skill package and cannot be edited in the workspace."
+    "SKILL_PACKAGE_LOCKED": "This skill was copied from a locked skill package and cannot be edited in the workspace.",
+    "INVALID_ARGUMENT": "Invalid arguments."
   },
   "desktop": {
     "install_log_deps": "Installing Python dependencies…",
@@ -1112,6 +1113,7 @@
     }
   },
   "quality": {
-    "tool_denied": "Tool \"{tool_name}\" is not available to this user. Tell the user an administrator has restricted it; do not retry."
+    "tool_denied": "Tool \"{tool_name}\" is not available to this user. Tell the user an administrator has restricted it; do not retry.",
+    "tool_delegation_denied": "This user has restricted tools, so task delegation is unavailable. Ask an administrator to grant the restricted tools, or answer without delegating."
   }
 }

@@ -24,6 +24,7 @@ import {
 import { useAgent } from "../../../context/AgentContext";
 import { useServerTimezone } from "../../../hooks/useServerTimezone";
 import { message } from "@/utils/antdMessage";
+import { apiErrorMessage } from "../../../utils/apiError";
 import { formatServerDateTime } from "../../../utils/formatMessageTime";
 
 interface CaseForm {
@@ -38,10 +39,6 @@ const lines = (text: string | undefined): string[] =>
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 const STATUS_COLOR: Record<EvalRun["status"], string> = {
   running: "processing",
@@ -72,20 +69,27 @@ export default function EvalsPanel() {
       setCases(c);
       setRuns(r);
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   // Poll while any run is still going.
+  const hasRunning = runs.some((r) => r.status === "running");
   useEffect(() => {
-    if (!runs.some((r) => r.status === "running")) return;
+    if (!hasRunning) return;
     const timer = setInterval(() => void load(), 3000);
     return () => clearInterval(timer);
-  }, [runs, load]);
+  }, [hasRunning, load]);
 
   const suites = useMemo(
     () => Array.from(new Set(cases.map((c) => c.suite))).sort(),
@@ -128,7 +132,13 @@ export default function EvalsPanel() {
       setEditing(null);
       await load();
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
   };
 
@@ -138,7 +148,13 @@ export default function EvalsPanel() {
       await qualityApi.startEvalRun(runAgent, runSuite);
       await load();
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
   };
 

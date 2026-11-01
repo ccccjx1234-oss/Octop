@@ -48,7 +48,7 @@ def clean_case_fields(
     suite_name = suite.strip() or "default"
     text = prompt.strip()
     if not text:
-        raise OctopError(ErrorCode.FORBIDDEN, "prompt is required", status=400)
+        raise OctopError(ErrorCode.INVALID_ARGUMENT, "prompt is required")
     contains = [p.strip() for p in expect_contains if p.strip()]
     not_contains = [p.strip() for p in expect_not_contains if p.strip()]
     return suite_name[:64], text, contains, not_contains
@@ -71,6 +71,7 @@ async def _run_case(
         source="eval",
         text=case.prompt,
         model=model,
+        unattended=True,
     )
     usage = UsageTracker()
     parts: list[str] = []
@@ -158,9 +159,13 @@ def start_eval_run(
         raise OctopError(ErrorCode.NOT_FOUND, "eval suite has no cases")
     agent_manager.get_agent(agent_id)  # raises when the expert is not running
     row = agent_manager.get_row(agent_id)
-    model = (row.default_model if row is not None else None) or (
-        agent_manager.resolve_fallback_model_ref()
-    )
+    model = None
+    if row is not None:
+        model = agent_manager.providers.resolve_explicit_default_model(
+            row, agent_manager.get_config(agent_id)
+        )
+    if model is None:
+        model = agent_manager.resolve_fallback_model_ref()
     run: EvalRunRow = repos.eval_repo.create_run(
         agent_id=agent_id, suite=suite, total=len(cases), started_by=user_id
     )

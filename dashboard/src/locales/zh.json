@@ -247,7 +247,8 @@
     "LOCAL_DOWNLOAD_UNAVAILABLE": "仅在本机打开会火时才能保存到系统「下载」文件夹。",
     "SKILL_PACKAGE_COPY_DENIED": "该技能包的创建者已禁止复制其中的技能。",
     "SKILL_PACKAGE_DOWNLOAD_DENIED": "该技能包已禁止打包下载。",
-    "SKILL_PACKAGE_LOCKED": "此技能复制自锁定策略的技能包，无法在工作区编辑。"
+    "SKILL_PACKAGE_LOCKED": "此技能复制自锁定策略的技能包，无法在工作区编辑。",
+    "INVALID_ARGUMENT": "参数无效。"
   },
   "nav": {
     "chat": "对话",
@@ -4126,8 +4127,6 @@
       "slate": "石墨",
       "custom": "自定义颜色"
     },
-    "currentVersion": "当前版本 v{{version}}",
-    "currentVersionAdmin": "当前版本 v{{version}}，点击查看更新",
     "versionUpdateAvailable": "当前 v{{current}}，新版本 v{{latest}} 可用，点击前往更新",
     "versionUpdateAvailableReadonly": "当前 v{{current}}，新版本 v{{latest}} 可用",
     "newVersionBadge": "有新版本",
@@ -4178,9 +4177,7 @@
     "languageHint": "选择界面显示语言。",
     "themeLight": "浅色",
     "themeDark": "深色",
-    "helpFeedback": "帮助与反馈",
     "helpBuilding": "正在建设中",
-    "projectUrl": "项目地址",
     "checkUpdates": "检查更新",
     "username": "用户名",
     "role": "角色",
@@ -5748,8 +5745,6 @@
     "expertsRequired": "此页需要专家"
   },
   "login": {
-    "title": "登录",
-    "subtitle": "统一管理 AI 专家、知识库、连接器与自动化任务",
     "username": "用户名或邮箱",
     "password": "密码",
     "remember": "记住登录状态",
@@ -7230,7 +7225,8 @@
       "edit": "编辑",
       "cancel": "取消",
       "saved": "已保存",
-      "none": "无"
+      "none": "无",
+      "requestFailed": "请求失败"
     },
     "models": {
       "healthTitle": "模型可用率（最近 {{minutes}} 分钟）",
@@ -7315,7 +7311,8 @@
       "allowed": "允许的分组",
       "everyone": "所有人",
       "custom": "其他工具名（MCP 或插件）",
-      "addCustom": "添加"
+      "addCustom": "添加",
+      "groupOff": "{{name}}（已停用）"
     }
   }
 }

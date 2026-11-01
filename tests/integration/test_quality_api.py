@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 import pytest
+
+from octop.infra.db.repos.thread_messages import ThreadMessageInput
+from tests.support.auth import resolve_user_id
 
 
 @pytest.fixture
@@ -21,8 +25,32 @@ async def env(env_usage):
     yield env_usage
 
 
+def _seed_feedback_thread(srv: Any, *, thread_id: str, user_id: int) -> None:
+    repos = srv.services.repos
+    now = int(time.time())
+    repos.thread_repo.insert(
+        thread_id=thread_id,
+        agent_id="agq",
+        user_id=user_id,
+        channel_type="dashboard",
+        session_key=f"agq:dashboard:{user_id}:dm",
+    )
+    repos.thread_message_repo.append_if_ready(
+        thread_id,
+        [
+            ThreadMessageInput(
+                message_id="m1",
+                role="ai",
+                message_json=json.dumps({"type": "ai", "data": {"content": "x"}}),
+                created_at=now,
+            )
+        ],
+    )
+
+
 async def test_feedback_round_trip_and_admin_summary(env: Any) -> None:
-    c, _srv, admin_auth, alice_auth, _ctx = env
+    c, srv, admin_auth, alice_auth, ctx = env
+    _seed_feedback_thread(srv, thread_id="t1", user_id=ctx["alice_id"])
     url = "/api/agents/agq/threads/t1/messages/m1/feedback"
     r = await c.put(
         url, json={"rating": -1, "comment": "wrong", "excerpt": "x"}, headers=alice_auth
@@ -67,7 +95,17 @@ async def test_pricing_and_cost(env: Any) -> None:
 
 
 async def test_model_health_and_fallback_chain(env: Any) -> None:
-    c, _srv, admin_auth, _alice_auth, _ctx = env
+    c, srv, admin_auth, _alice_auth, _ctx = env
+    for provider, model in (("p", "a"), ("q", "b")):
+        srv.services.repos.provider_repo.create(
+            name=provider,
+            kind="openai",
+            base_url=f"https://{provider}.example/v1",
+            api_key=f"sk-{provider}",
+            models_json=json.dumps(
+                [{"id": model, "name": model, "enabled": True, "input": ["text"]}]
+            ),
+        )
     r = await c.put(
         "/api/admin/quality/fallback-chain", json={"refs": ["p/a", "q/b"]}, headers=admin_auth
     )
@@ -123,3 +161,41 @@ async def test_tool_permissions(env: Any) -> None:
         "/api/admin/quality/tool-permissions/execute", json={"group_ids": []}, headers=admin_auth
     )
     assert r.json()["visibility"] == "all"
+
+
+async def test_feedback_rejects_unknown_message(env: Any) -> None:
+    c, srv, _admin_auth, alice_auth, ctx = env
+    _seed_feedback_thread(srv, thread_id="t1", user_id=ctx["alice_id"])
+    url = "/api/agents/agq/threads/t1/messages/not-a-message/feedback"
+
+    r = await c.put(url, json={"rating": -1, "excerpt": ""}, headers=alice_auth)
+    assert r.status_code == 404, r.text
+
+    # Clearing a vote for an unknown message is idempotent.
+    r = await c.put(url, json={"rating": 0}, headers=alice_auth)
+    assert r.status_code == 204, r.text
+
+
+async def test_feedback_rejects_another_users_thread(env: Any) -> None:
+    c, srv, admin_auth, alice_auth, _ctx = env
+    admin_id = await resolve_user_id(c, admin_auth, "admin")
+    _seed_feedback_thread(srv, thread_id="t-admin", user_id=admin_id)
+
+    r = await c.put(
+        "/api/agents/agq/threads/t-admin/messages/m1/feedback",
+        json={"rating": 1, "excerpt": "x"},
+        headers=alice_auth,
+    )
+
+    assert r.status_code == 404, r.text
+
+
+async def test_fallback_chain_validation_uses_argument_code(env: Any) -> None:
+    c, _srv, admin_auth, _alice_auth, _ctx = env
+    r = await c.put(
+        "/api/admin/quality/fallback-chain",
+        json={"refs": ["bad"]},
+        headers=admin_auth,
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "INVALID_ARGUMENT"

@@ -15,9 +15,6 @@ vi.mock("../components/AvatarDropdown", () => ({
 vi.mock("../components/AppVersionBadge", () => ({
   default: () => null,
 }));
-vi.mock("../components/CurrentVersionBadge", () => ({
-  default: () => null,
-}));
 vi.mock("../hooks/useUpdateStatus", () => ({
   useUpdateStatus: () => ({ hasUpdate: false }),
 }));

@@ -4249,9 +4249,15 @@ class AgentManager:
                 from octop.infra.agents.middleware.model_failover import (
                     SafeModelFailoverMiddleware,
                 )
+                from octop.infra.agents.middleware.token_quota import configurable_user_id
                 from octop.infra.agents.providers.fallback_chain import load_fallback_chain
 
                 settings_repo = self._repos.settings_repo
+
+                def _fallback_ref_allowed(ref: str) -> bool:
+                    user_id = configurable_user_id()
+                    return user_id is None or self.model_ref_allowed_for_user(user_id, ref)
+
                 retry_middleware: Any = SafeModelFailoverMiddleware(
                     health=self._model_health,
                     candidates=lambda _current_ref, needs_multimodal: (
@@ -4265,6 +4271,7 @@ class AgentManager:
                     max_delay=applied.model_retry_max_delay,
                     on_failure="error",
                     fallback_refs=lambda: load_fallback_chain(settings_repo),
+                    ref_allowed=_fallback_ref_allowed,
                 )
             else:
                 from langchain.agents.middleware import ModelRetryMiddleware

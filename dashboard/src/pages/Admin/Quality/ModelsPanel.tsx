@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   Card,
@@ -23,15 +23,12 @@ import {
   type ModelPrice,
 } from "../../../api/modules/quality";
 import { message } from "@/utils/antdMessage";
+import { apiErrorMessage } from "../../../utils/apiError";
 
 const WINDOWS = ["today", "last_7d", "last_30d"] as const;
 
 function percent(value: number | null): string {
   return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export default function ModelsPanel() {
@@ -40,28 +37,63 @@ export default function ModelsPanel() {
   const [chain, setChain] = useState<string[]>([]);
   const [prices, setPrices] = useState<ModelPrice[]>([]);
   const [cost, setCost] = useState<CostReport | null>(null);
-  const [window, setWindow] = useState<string>("last_30d");
+  const [costWindow, setCostWindow] = useState<string>("last_30d");
   const [form] = Form.useForm<ModelPrice>();
+  const baseSeq = useRef(0);
+  const costSeq = useRef(0);
 
-  const load = useCallback(async () => {
-    try {
-      const [h, p, c] = await Promise.all([
-        qualityApi.modelHealth(),
-        qualityApi.pricing(),
-        qualityApi.cost(window),
-      ]);
-      setHealth(h);
-      setChain(h.fallback_chain);
-      setPrices(p);
-      setCost(c);
-    } catch (err) {
-      message.error(errorText(err));
-    }
-  }, [window]);
+  const loadBase = useCallback(
+    async (resetChain: boolean) => {
+      const seq = ++baseSeq.current;
+      try {
+        const [h, p] = await Promise.all([
+          qualityApi.modelHealth(),
+          qualityApi.pricing(),
+        ]);
+        if (seq !== baseSeq.current) return;
+        setHealth(h);
+        setPrices(p);
+        if (resetChain) setChain(h.fallback_chain);
+      } catch (err) {
+        message.error(
+          apiErrorMessage(
+            err,
+            t("quality.common.requestFailed", "Request failed"),
+            t,
+          ),
+        );
+      }
+    },
+    [t],
+  );
+
+  const loadCost = useCallback(
+    async (win: string) => {
+      const seq = ++costSeq.current;
+      try {
+        const c = await qualityApi.cost(win);
+        if (seq !== costSeq.current) return;
+        setCost(c);
+      } catch (err) {
+        message.error(
+          apiErrorMessage(
+            err,
+            t("quality.common.requestFailed", "Request failed"),
+            t,
+          ),
+        );
+      }
+    },
+    [t],
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadBase(true);
+  }, [loadBase]);
+
+  useEffect(() => {
+    void loadCost(costWindow);
+  }, [costWindow, loadCost]);
 
   const saveChain = async () => {
     try {
@@ -69,7 +101,13 @@ export default function ModelsPanel() {
       setChain(res.fallback_chain);
       message.success(t("quality.common.saved"));
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
   };
 
@@ -84,9 +122,16 @@ export default function ModelsPanel() {
       });
       form.resetFields();
       message.success(t("quality.common.saved"));
-      await load();
+      await loadBase(false);
+      await loadCost(costWindow);
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
   };
 
@@ -97,7 +142,13 @@ export default function ModelsPanel() {
       <Card
         title={t("quality.models.healthTitle", { minutes: windowMinutes })}
         extra={
-          <Button icon={<RefreshCw size={14} />} onClick={() => void load()}>
+          <Button
+            icon={<RefreshCw size={14} />}
+            onClick={() => {
+              void loadBase(false);
+              void loadCost(costWindow);
+            }}
+          >
             {t("quality.common.refresh")}
           </Button>
         }
@@ -215,7 +266,8 @@ export default function ModelsPanel() {
                     title={t("quality.common.delete")}
                     onConfirm={async () => {
                       await qualityApi.deletePrice(row.model);
-                      await load();
+                      await loadBase(false);
+                      await loadCost(costWindow);
                     }}
                   >
                     <Button size="small" danger>
@@ -239,8 +291,8 @@ export default function ModelsPanel() {
         }
         extra={
           <Segmented
-            value={window}
-            onChange={(v) => setWindow(String(v))}
+            value={costWindow}
+            onChange={(v) => setCostWindow(String(v))}
             options={WINDOWS.map((w) => ({
               value: w,
               label: t(`quality.models.windows.${w}`),

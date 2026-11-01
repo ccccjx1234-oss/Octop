@@ -15,6 +15,8 @@ CHAT_TABLES_CHILD_FIRST = (
     "trajectory_events",
     "thread_messages",
     "thread_history_projection",
+    "message_feedback",
+    "eval_results",
     "threads",
     "sessions",
 )

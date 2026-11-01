@@ -521,11 +521,7 @@ export default function Sidebar({
           borderRadius: isRailCollapsed ? 8 : undefined,
         }}
       />
-      {!isRailCollapsed && !isMobile && (
-        <>
-          <AppVersionBadge isMobile={isMobile} />
-        </>
-      )}
+      {!isRailCollapsed && !isMobile && <AppVersionBadge isMobile={isMobile} />}
     </>
   );
 
