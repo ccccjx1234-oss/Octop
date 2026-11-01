@@ -118,3 +118,12 @@ async def test_block_to_content_part_base64_image():
     assert isinstance(part, ImageContent)
     assert part.data == "aGVsbG8="
     assert part.mime_type == "image/png"
+
+
+def test_harness_request_marks_unattended():
+    req = build_harness_request(
+        thread_id="t1", user_id=1, source="cron", text="hi", unattended=True
+    )
+    assert req["configurable"]["octop_unattended"] is True
+    req = build_harness_request(thread_id="t1", user_id=1, source="dashboard", text="hi")
+    assert "octop_unattended" not in (req.get("configurable") or {})

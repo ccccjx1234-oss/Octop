@@ -7,10 +7,7 @@ import {
 } from "../../../api/modules/quality";
 import { userGroupsApi, type UserGroup } from "../../../api/modules/userGroups";
 import { message } from "@/utils/antdMessage";
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+import { apiErrorMessage } from "../../../utils/apiError";
 
 export default function ToolsPanel() {
   const { t } = useTranslation();
@@ -27,9 +24,15 @@ export default function ToolsPanel() {
       setTools(res.tools);
       setGroups(g);
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -53,13 +56,19 @@ export default function ToolsPanel() {
       });
       message.success(t("quality.common.saved"));
     } catch (err) {
-      message.error(errorText(err));
+      message.error(
+        apiErrorMessage(
+          err,
+          t("quality.common.requestFailed", "Request failed"),
+          t,
+        ),
+      );
     }
   };
 
   const groupOptions = groups.map((g) => ({
     value: g.user_group_id,
-    label: g.enabled ? g.name : `${g.name} (off)`,
+    label: g.enabled ? g.name : t("quality.tools.groupOff", { name: g.name }),
   }));
 
   return (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,15 @@ from octop.infra.agents.middleware.tool_permission import tool_allowed
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.repos.evals import EvalCaseRow
+from octop.infra.db.repos.thread_messages import ThreadMessageInput
 from octop.infra.db.services import RepoBundle
-from octop.infra.errors import OctopError
+from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.quality.evals import check_output, clean_case_fields
-from octop.infra.quality.feedback import quality_summary, record_feedback
+from octop.infra.quality.feedback import (
+    quality_summary,
+    record_feedback,
+    resolve_feedback_target,
+)
 from octop.infra.quality.pricing import cost_report, save_price
 from octop.infra.users.groups import RESOURCE_TOOL, GroupAccess
 
@@ -76,7 +82,7 @@ def test_unpriced_model_is_flagged(repos: RepoBundle) -> None:
     assert report["by_model"] == [
         {"model": "x/y", "total_tokens": 20, "cost": 0.0, "priced": False}
     ]
-    with pytest.raises(OctopError):
+    with pytest.raises(OctopError) as excinfo:
         save_price(
             repos,
             model="x/y",
@@ -85,6 +91,7 @@ def test_unpriced_model_is_flagged(repos: RepoBundle) -> None:
             cache_read_per_mtok=0,
             currency="",
         )
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
 
 
 def test_feedback_vote_update_clear_and_summary(repos: RepoBundle) -> None:
@@ -186,3 +193,94 @@ def test_tool_gate_no_grant_allows_and_grant_narrows(repos: RepoBundle) -> None:
 
     repos.user_group_member_repo.remove(finance.user_group_id, ada)
     assert not tool_allowed(repos, user_id=ada, tool_name="execute")
+
+
+def test_cost_report_counts_cache_write_tokens(repos: RepoBundle) -> None:
+    ada = _user(repos, "ada")
+    repos.agent_repo.create(agent_id="ag1", user_id=ada, name="Helper")
+    repos.usage_repo.record(
+        agent_id="ag1",
+        user_id=ada,
+        input_tokens=1_000_000,
+        uncached_input_tokens=400_000,
+        cache_write_tokens=600_000,
+        output_tokens=0,
+        model="ds/chat",
+    )
+    save_price(
+        repos,
+        model="ds/chat",
+        input_per_mtok=2,
+        output_per_mtok=8,
+        cache_read_per_mtok=0.5,
+        currency="CNY",
+    )
+
+    report = cost_report(repos, window="last_30d", timezone="UTC")
+
+    # 400k uncached + 600k cache writes at the input rate.
+    assert report["total_cost"] == pytest.approx((400_000 + 600_000) * 2 / 1_000_000)
+
+
+def test_feedback_resolves_live_message_by_excerpt(repos: RepoBundle) -> None:
+    ada = _user(repos, "ada")
+    repos.agent_repo.create(agent_id="ag1", user_id=ada, name="Helper")
+    repos.thread_repo.insert(
+        thread_id="t1",
+        agent_id="ag1",
+        user_id=ada,
+        channel_type="dashboard",
+        session_key="ag1:dashboard:1:dm",
+    )
+    text = "本月营收 120 万元，环比 +8%。"
+    repos.thread_message_repo.append_if_ready(
+        "t1",
+        [
+            ThreadMessageInput(
+                message_id="srv-1",
+                role="ai",
+                message_json=json.dumps({"type": "ai", "data": {"content": text}}),
+                created_at=1,
+            )
+        ],
+    )
+
+    assert resolve_feedback_target(repos, thread_id="t1", message_id="srv-1", excerpt="") == (
+        "srv-1",
+        text,
+    )
+    assert resolve_feedback_target(
+        repos, thread_id="t1", message_id="client-only", excerpt="本月营收"
+    ) == ("srv-1", text)
+    assert (
+        resolve_feedback_target(
+            repos, thread_id="t1", message_id="client-only", excerpt="not there"
+        )
+        is None
+    )
+
+
+def test_feedback_rejects_invalid_rating_with_argument_code(repos: RepoBundle) -> None:
+    ada = _user(repos, "ada")
+    repos.agent_repo.create(agent_id="ag1", user_id=ada, name="Helper")
+    with pytest.raises(OctopError) as excinfo:
+        record_feedback(
+            repos, agent_id="ag1", thread_id="t1", message_id="m1", user_id=ada, rating=5
+        )
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_task_delegation_requires_all_restricted_tools(repos: RepoBundle) -> None:
+    admin = _user(repos, "root", role="admin")
+    ada = _user(repos, "ada")
+    bob = _user(repos, "bob")
+    finance = repos.user_group_repo.create(name="finance", description=None)
+    repos.user_group_member_repo.add(finance.user_group_id, ada)
+    GroupAccess(repos).set_visibility(RESOURCE_TOOL, "execute", "groups", [finance.user_group_id])
+
+    # Ada can run execute, so delegation cannot reach a denied tool.
+    assert tool_allowed(repos, user_id=ada, tool_name="task")
+    # Bob cannot run execute; a subagent could, so delegation is denied.
+    assert not tool_allowed(repos, user_id=bob, tool_name="task")
+    assert tool_allowed(repos, user_id=admin, tool_name="task")
+    assert tool_allowed(repos, user_id=bob, tool_name="read_file")

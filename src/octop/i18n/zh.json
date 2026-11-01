@@ -532,7 +532,8 @@
     "LOCAL_DOWNLOAD_UNAVAILABLE": "仅在本机打开会火时才能保存到系统「下载」文件夹。",
     "SKILL_PACKAGE_COPY_DENIED": "该技能包的创建者已禁止复制其中的技能。",
     "SKILL_PACKAGE_DOWNLOAD_DENIED": "该技能包已禁止打包下载。",
-    "SKILL_PACKAGE_LOCKED": "此技能复制自锁定策略的技能包，无法在工作区编辑。"
+    "SKILL_PACKAGE_LOCKED": "此技能复制自锁定策略的技能包，无法在工作区编辑。",
+    "INVALID_ARGUMENT": "参数无效。"
   },
   "desktop": {
     "install_log_deps": "正在安装 Python 依赖…",
@@ -1112,6 +1113,7 @@
     }
   },
   "quality": {
-    "tool_denied": "当前用户无权使用工具“{tool_name}”。请告诉用户该工具已被管理员限制使用，不要重试。"
+    "tool_denied": "当前用户无权使用工具“{tool_name}”。请告诉用户该工具已被管理员限制使用，不要重试。",
+    "tool_delegation_denied": "当前用户存在被限制的工具，暂不可使用任务委派。请让管理员授予相应工具权限，或不要委派子智能体。"
   }
 }

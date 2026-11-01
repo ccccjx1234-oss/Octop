@@ -78,6 +78,10 @@ class MessageFeedbackRepo:
                 (agent_id, thread_id, message_id, user_id),
             )
 
+    def delete_for_thread(self, thread_id: str) -> None:
+        with self._db.connect() as conn:
+            conn.execute("DELETE FROM message_feedback WHERE thread_id = ?", (thread_id,))
+
     def ratings_for_thread(self, *, agent_id: str, thread_id: str, user_id: int) -> dict[str, int]:
         with self._db.connect() as conn:
             rows = conn.execute(

@@ -18,7 +18,12 @@ from octop.infra.agents.settings.tool_catalog import BUILTIN_TOOL_CATALOG
 from octop.infra.db.services import RepoBundle
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.quality.evals import clean_case_fields, start_eval_run
-from octop.infra.quality.feedback import MAX_COMMENT, quality_summary, record_feedback
+from octop.infra.quality.feedback import (
+    MAX_COMMENT,
+    quality_summary,
+    record_feedback,
+    resolve_feedback_target,
+)
 from octop.infra.quality.pricing import cost_report, save_price
 from octop.infra.users.groups import RESOURCE_TOOL, VISIBILITY_ALL, VISIBILITY_GROUPS, GroupAccess
 
@@ -67,15 +72,27 @@ async def put_feedback(
     user: Any = Depends(current_user),
 ) -> Response:
     assert_agent_access(server, agent_id, user)
+    repos = _repos(server)
+    thread = repos.thread_repo.get(thread_id)
+    if thread is None or thread.agent_id != agent_id or int(thread.user_id) != int(user.id):
+        raise OctopError(ErrorCode.NOT_FOUND, "thread not found", status=404)
+    target = resolve_feedback_target(
+        repos, thread_id=thread_id, message_id=message_id, excerpt=body.excerpt
+    )
+    if target is None:
+        if body.rating == 0:
+            return Response(status_code=204)
+        raise OctopError(ErrorCode.NOT_FOUND, "message not found", status=404)
+    resolved_id, resolved_excerpt = target
     record_feedback(
-        _repos(server),
+        repos,
         agent_id=agent_id,
         thread_id=thread_id,
-        message_id=message_id,
+        message_id=resolved_id,
         user_id=int(user.id),
         rating=body.rating,
         comment=body.comment,
-        excerpt=body.excerpt,
+        excerpt=resolved_excerpt,
     )
     return Response(status_code=204)
 
@@ -136,7 +153,14 @@ async def admin_put_fallback_chain(
     server: Any = Depends(get_server),
     _: Any = Depends(require_admin()),
 ) -> dict[str, Any]:
-    return {"fallback_chain": save_fallback_chain(_repos(server).settings_repo, body.refs)}
+    providers = server.app_runtime.agent_registry.providers
+    return {
+        "fallback_chain": save_fallback_chain(
+            _repos(server).settings_repo,
+            body.refs,
+            is_usable=providers.is_model_ref_usable,
+        )
+    }
 
 
 class PriceBody(BaseModel):
@@ -191,7 +215,7 @@ async def admin_cost(
     try:
         return cost_report(_repos(server), window=window, timezone=_timezone(server))
     except ValueError as exc:
-        raise OctopError(ErrorCode.FORBIDDEN, str(exc), status=400) from exc
+        raise OctopError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
 
 
 # --- admin: evals ----------------------------------------------------------
@@ -350,7 +374,7 @@ async def admin_put_tool_permission(
 ) -> dict[str, Any]:
     name = tool_name.strip()
     if not name:
-        raise OctopError(ErrorCode.FORBIDDEN, "tool name is required", status=400)
+        raise OctopError(ErrorCode.INVALID_ARGUMENT, "tool name is required")
     access = GroupAccess(_repos(server))
     visibility = VISIBILITY_GROUPS if body.group_ids else VISIBILITY_ALL
     access.set_visibility(RESOURCE_TOOL, name, visibility, body.group_ids)

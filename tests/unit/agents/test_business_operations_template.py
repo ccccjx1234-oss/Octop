@@ -61,7 +61,7 @@ def test_business_operations_skill_files_and_attribution() -> None:
         assert "\ndescription:" in raw.split("---", 2)[1]
         # Modified upstream files must carry their own notice, not only a directory notice.
         notice = raw.split("---", 2)[2].strip().split("\n\n", 1)[0]
-        assert "已为 Octop 改编" in notice
+        assert "已为会火改编" in notice
     for name in EXPECTED_SKILLS:
         assert name in (EXPERT_DIR / "SOUL.md").read_text(encoding="utf-8")
     # The shared README and its complete upstream license must ship with the expert.

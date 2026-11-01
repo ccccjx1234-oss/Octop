@@ -530,6 +530,23 @@ def test_sqlite_strip_chats_reclaims_pages(tmp_path: Path) -> None:
             ") VALUES ('event-large', 'agent01', 't1', 1, 1, 'assistant', 'large', ?)",
             (json.dumps({"content": payload}),),
         )
+        conn.execute(
+            "INSERT INTO message_feedback("
+            "agent_id, thread_id, message_id, user_id, rating, comment, excerpt,"
+            " created_at, updated_at) VALUES ('agent01', 't1', 'm1', 1, -1, 'bad', ? , 1, 1)",
+            (payload,),
+        )
+        conn.execute(
+            "INSERT INTO eval_runs("
+            "eval_run_id, agent_id, suite, status, total, passed, error, started_by, started_at"
+            ") VALUES ('run1', 'agent01', 's', 'done', 1, 1, '', 1, 1)"
+        )
+        conn.execute(
+            "INSERT INTO eval_results("
+            "eval_run_id, eval_case_id, prompt, passed, output, detail, latency_ms"
+            ") VALUES ('run1', 'case1', ?, 1, ?, '', 5)",
+            (payload, payload),
+        )
     snap = tmp_path / "snap.db"
     snapshot_sqlite_file(pool.path, snap)
     pool.close()
@@ -540,9 +557,13 @@ def test_sqlite_strip_chats_reclaims_pages(tmp_path: Path) -> None:
     conn = sqlite3.connect(snap)
     count = conn.execute("SELECT COUNT(*) FROM thread_messages").fetchone()[0]
     trajectory_count = conn.execute("SELECT COUNT(*) FROM trajectory_events").fetchone()[0]
+    feedback_count = conn.execute("SELECT COUNT(*) FROM message_feedback").fetchone()[0]
+    eval_output_count = conn.execute("SELECT COUNT(*) FROM eval_results").fetchone()[0]
     conn.close()
     assert count == 0
     assert trajectory_count == 0
+    assert feedback_count == 0
+    assert eval_output_count == 0
 
 
 def test_backup_can_omit_config_and_workspaces(layout: PathLayout, tmp_path: Path) -> None:

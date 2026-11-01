@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { qualityApi, type FeedbackSummary } from "../../../api/modules/quality";
 import { useServerTimezone } from "../../../hooks/useServerTimezone";
 import { message } from "@/utils/antdMessage";
+import { apiErrorMessage } from "../../../utils/apiError";
 import { formatServerDateTime } from "../../../utils/formatMessageTime";
 
 const DAY_OPTIONS = [7, 30, 90];
@@ -20,13 +21,27 @@ export default function FeedbackPanel() {
   const [data, setData] = useState<FeedbackSummary | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     qualityApi
       .feedback(days)
-      .then(setData)
-      .catch((err: unknown) =>
-        message.error(err instanceof Error ? err.message : String(err)),
-      );
-  }, [days]);
+      .then((next) => {
+        if (!cancelled) setData(next);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          message.error(
+            apiErrorMessage(
+              err,
+              t("quality.common.requestFailed", "Request failed"),
+              t,
+            ),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [days, t]);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>

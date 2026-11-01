@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
+from octop.infra.agents.middleware import output_guard
 from octop.infra.agents.middleware.output_guard import (
     OutputGuardMiddleware,
     guard_message,
@@ -64,3 +65,28 @@ def test_middleware_rewrites_final_message() -> None:
     )
 
     assert response.result[0].tool_calls[0]["name"] == "ask_user_question"
+
+
+def test_data_bearing_result_line_is_kept() -> None:
+    text = "已获得结果：9 月营收 120 万元，环比 +8%\n\n明细如下。"
+    assert strip_narration(text) == text
+
+
+def test_leading_blank_lines_do_not_hide_narration() -> None:
+    assert strip_narration("\n\n我已获得结果，现在输出。\n\n正文第一段。") == "正文第一段。"
+
+
+def test_unattended_run_keeps_question_as_text(monkeypatch) -> None:
+    middleware = OutputGuardMiddleware()
+    tool = SimpleNamespace(name="ask_user_question")
+    request = ModelRequest(model=SimpleNamespace(), messages=[HumanMessage(content="hi")])
+    request = request.override(tools=[tool])
+    monkeypatch.setattr(output_guard, "_unattended", lambda _request: True)
+
+    response = middleware.wrap_model_call(
+        request,
+        lambda _req: ModelResponse(result=[AIMessage(content="报告已生成。要附上明细吗？")]),
+    )
+
+    assert response.result[0].tool_calls == []
+    assert response.result[0].content == "报告已生成。要附上明细吗？"

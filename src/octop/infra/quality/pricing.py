@@ -33,6 +33,8 @@ def row_cost(price: ModelPriceRow | None, totals: dict[str, Any]) -> float:
     return (
         int(totals.get("uncached_input_tokens", 0)) * price.input_per_mtok
         + int(totals.get("cache_read_tokens", 0)) * price.cache_read_per_mtok
+        # No separate cache-write rate exists; bill writes as input tokens.
+        + int(totals.get("cache_write_tokens", 0)) * price.input_per_mtok
         + int(totals.get("output_tokens", 0)) * price.output_per_mtok
     ) / _PER
 
@@ -94,9 +96,9 @@ def save_price(
 ) -> None:
     ref = model.strip()
     if not ref:
-        raise OctopError(ErrorCode.FORBIDDEN, "model is required", status=400)
+        raise OctopError(ErrorCode.INVALID_ARGUMENT, "model is required")
     if min(input_per_mtok, output_per_mtok, cache_read_per_mtok) < 0:
-        raise OctopError(ErrorCode.FORBIDDEN, "price cannot be negative", status=400)
+        raise OctopError(ErrorCode.INVALID_ARGUMENT, "price cannot be negative")
     repos.model_pricing_repo.upsert(
         model=ref,
         input_per_mtok=input_per_mtok,

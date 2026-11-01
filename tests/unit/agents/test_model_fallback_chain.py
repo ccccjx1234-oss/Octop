@@ -13,7 +13,7 @@ from octop.infra.agents.providers.fallback_chain import (
     save_fallback_chain,
 )
 from octop.infra.agents.providers.health import FailureScope, ModelHealthRegistry
-from octop.infra.errors import OctopError
+from octop.infra.errors import ErrorCode, OctopError
 
 
 def _model(ref: str) -> SimpleNamespace:
@@ -21,7 +21,13 @@ def _model(ref: str) -> SimpleNamespace:
     return SimpleNamespace(model=ref, provider=provider, model_name=model, profile={})
 
 
-def _middleware(health: ModelHealthRegistry, models: dict[str, SimpleNamespace], chain: list[str]):
+def _middleware(
+    health: ModelHealthRegistry,
+    models: dict[str, SimpleNamespace],
+    chain: list[str],
+    *,
+    ref_allowed=None,
+):
     return SafeModelFailoverMiddleware(
         health=health,
         candidates=lambda _current, _vision: [],
@@ -31,6 +37,7 @@ def _middleware(health: ModelHealthRegistry, models: dict[str, SimpleNamespace],
         max_delay=0,
         on_failure="error",
         fallback_refs=lambda: chain,
+        ref_allowed=ref_allowed,
     )
 
 
@@ -125,3 +132,50 @@ def test_fallback_chain_round_trip_and_validation() -> None:
     assert load_fallback_chain(settings) == ["p/a", "q/b"]
     with pytest.raises(OctopError):
         save_fallback_chain(settings, ["no-provider"])
+
+
+def test_unavailable_chain_ref_is_skipped(monkeypatch) -> None:
+    models = {"p/a": _model("p/a")}
+    health = ModelHealthRegistry(clock=lambda: 100.0)
+    middleware = _middleware(health, models, ["gone/model"])
+    monkeypatch.setattr(model_failover, "_configurable", lambda _request: {"model": "p/a"})
+
+    response = middleware.wrap_model_call(
+        ModelRequest(model=models["p/a"], messages=[HumanMessage(content="hi")]),
+        lambda _req: ModelResponse(result=[AIMessage(content="ok")]),
+    )
+
+    assert response.result[0].content == "ok"
+
+
+def test_chain_ref_denied_by_user_grant_is_not_tried(monkeypatch) -> None:
+    models = {"p/a": _model("p/a"), "q/b": _model("q/b")}
+    health = ModelHealthRegistry(clock=lambda: 100.0)
+    middleware = _middleware(health, models, ["q/b"], ref_allowed=lambda _ref: False)
+    monkeypatch.setattr(model_failover, "_configurable", lambda _request: {"model": "p/a"})
+    seen: list[str] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen.append(request.model.model)
+        raise RuntimeError("HTTP 503 service unavailable")
+
+    with pytest.raises(RuntimeError):
+        middleware.wrap_model_call(
+            ModelRequest(model=models["p/a"], messages=[HumanMessage(content="hi")]), handler
+        )
+    assert seen == ["p/a"]
+
+
+def test_save_chain_rejects_unusable_ref() -> None:
+    class Settings:
+        value: str | None = None
+
+        def get(self, _key: str) -> str | None:
+            return self.value
+
+        def set(self, _key: str, value: str) -> None:
+            self.value = value
+
+    with pytest.raises(OctopError) as excinfo:
+        save_fallback_chain(Settings(), ["p/a"], is_usable=lambda _ref: False)
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT

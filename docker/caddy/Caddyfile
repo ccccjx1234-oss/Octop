@@ -21,9 +21,10 @@ https://{$OCTOP_SITE_HOST:localhost}:8443 {
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		Strict-Transport-Security "max-age=15552000; includeSubDomains"
-		# The SPA ships inline boot scripts; tighten to hashes/nonces before
-		# claiming a strict CSP. Everything else is self-hosted.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ws: wss:; font-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+		# The SPA ships inline boot scripts; Monaco and its workers load from
+		# jsDelivr, and plugin UIs are imported from blob: URLs. Tighten to
+		# hashes/nonces and self-host Monaco before claiming a strict CSP.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' blob: https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ws: wss: https://cdn.jsdelivr.net; font-src 'self' data: https://cdn.jsdelivr.net; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
 		-Server
 	}
 

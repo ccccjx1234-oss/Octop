@@ -247,7 +247,8 @@
     "LOCAL_DOWNLOAD_UNAVAILABLE": "Saving to the host Downloads folder is only available when Huihuo is opened on this computer.",
     "SKILL_PACKAGE_COPY_DENIED": "The creator of this skill package has disabled copying its skills.",
     "SKILL_PACKAGE_DOWNLOAD_DENIED": "Downloading this skill package is disabled.",
-    "SKILL_PACKAGE_LOCKED": "This skill was copied from a locked skill package and cannot be edited in the workspace."
+    "SKILL_PACKAGE_LOCKED": "This skill was copied from a locked skill package and cannot be edited in the workspace.",
+    "INVALID_ARGUMENT": "Invalid arguments."
   },
   "nav": {
     "chat": "Conversation",
@@ -4126,8 +4127,6 @@
       "slate": "Slate",
       "custom": "Custom color"
     },
-    "currentVersion": "Current version v{{version}}",
-    "currentVersionAdmin": "Current version v{{version}}. Click to open Updates.",
     "versionUpdateAvailable": "v{{current}} installed — v{{latest}} is available. Click to open Updates.",
     "versionUpdateAvailableReadonly": "v{{current}} installed — v{{latest}} is available",
     "newVersionBadge": "New version",
@@ -4178,9 +4177,7 @@
     "languageHint": "Choose the console display language.",
     "themeLight": "Light",
     "themeDark": "Dark",
-    "helpFeedback": "Help & Feedback",
     "helpBuilding": "Under construction",
-    "projectUrl": "Project",
     "checkUpdates": "Check for Updates",
     "username": "Username",
     "role": "Role",
@@ -5748,8 +5745,6 @@
     "expertsRequired": "This page needs an expert"
   },
   "login": {
-    "title": "Sign in",
-    "subtitle": "Manage AI experts, knowledge bases, connectors and automation in one place",
     "username": "Username or email",
     "password": "Password",
     "remember": "Remember me",
@@ -7230,7 +7225,8 @@
       "edit": "Edit",
       "cancel": "Cancel",
       "saved": "Saved",
-      "none": "None"
+      "none": "None",
+      "requestFailed": "Request failed"
     },
     "models": {
       "healthTitle": "Model availability (last {{minutes}} min)",
@@ -7315,7 +7311,8 @@
       "allowed": "Allowed groups",
       "everyone": "Everyone",
       "custom": "Other tool name (MCP or plugin)",
-      "addCustom": "Add"
+      "addCustom": "Add",
+      "groupOff": "{{name}} (off)"
     }
   }
 }

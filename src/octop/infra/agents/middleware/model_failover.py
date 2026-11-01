@@ -73,10 +73,12 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
         max_delay: float,
         on_failure: Callable[[Exception], str] | Literal["error"] | None = None,
         fallback_refs: Callable[[], Sequence[str]] | None = None,
+        ref_allowed: Callable[[str], bool] | None = None,
     ) -> None:
         super().__init__()
         self._health = health
         self._fallback_refs = fallback_refs
+        self._ref_allowed = ref_allowed
         self._candidates = candidates
         self._model_for_ref = model_for_ref
         self._on_failure = on_failure
@@ -124,7 +126,9 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
         return [
             ref
             for ref in self._fallback_refs()
-            if ref != current_ref and self._health.is_routable(ref)
+            if ref != current_ref
+            and self._health.is_routable(ref)
+            and (self._ref_allowed is None or self._ref_allowed(ref))
         ]
 
     def _plan(self, request: ModelRequest[Any]) -> tuple[str, bool, list[tuple[str, Any]]]:
@@ -139,8 +143,15 @@ class SafeModelFailoverMiddleware(AgentMiddleware[Any, Any]):
                 for candidate in self._fallbacks(request, current_ref)
             )
             return current_ref, True, attempts
-        chain = self._chain(current_ref)
-        attempts.extend((ref, self._model_for_ref(ref)) for ref in chain)
+        chain: list[tuple[str, Any]] = []
+        for ref in self._chain(current_ref):
+            try:
+                chain.append((ref, self._model_for_ref(ref)))
+            except Exception:
+                # A deleted/disabled model in the saved chain must not take the
+                # healthy pinned model down with it.
+                logger.warning("skipping unavailable fallback model: %s", ref, exc_info=True)
+        attempts.extend(chain)
         return current_ref, bool(chain), attempts
 
     def _record_failure(self, ref: str, exc: Exception) -> bool:
