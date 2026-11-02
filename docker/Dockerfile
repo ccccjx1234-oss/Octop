@@ -139,8 +139,9 @@ COPY --from=frontend-builder /build/src/octop/dashboard/ ./src/octop/dashboard/
 COPY .env.example ./
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY docker/bake-desktop.sh /usr/local/bin/bake-desktop.sh
-# Windows checkouts may carry CRLF; the shebang must be LF inside the image.
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+# Windows checkouts may carry CRLF; shell scripts must be LF inside the image.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/bake-desktop.sh \
+    /app/src/octop/infra/control/desktop/scripts/linux/v1.0/*.sh \
     && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/bake-desktop.sh
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -150,7 +151,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fi \
     && uv sync --frozen --no-dev \
         --extra browser --extra desktop --extra local-embedding --extra knowledge-ocr \
-    && .venv/bin/python -c "import cv2, fastembed, huggingface_hub, mss, pynput, rapidocr, onnxruntime, pymupdf" \
+    && PYNPUT_BACKEND=dummy .venv/bin/python -c "import cv2, fastembed, huggingface_hub, mss, pynput, rapidocr, onnxruntime, pymupdf" \
     && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/* /tmp/*
