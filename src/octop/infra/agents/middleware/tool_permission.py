@@ -50,7 +50,7 @@ def _restricted_tool_denied(repos: Any, *, user_id: int, is_admin: bool) -> bool
 
 def task_delegation_blocked(repos: Any, *, user_id: int | None) -> bool:
     if user_id is None:
-        return False
+        return True
     row = repos.user_repo.get(user_id)
     if row is None:
         return False
@@ -60,7 +60,9 @@ def task_delegation_blocked(repos: Any, *, user_id: int | None) -> bool:
 
 
 def tool_allowed(repos: Any, *, user_id: int | None, tool_name: str) -> bool:
-    if user_id is None or not tool_name:
+    if user_id is None:
+        return False
+    if not tool_name:
         return True
     row = repos.user_repo.get(user_id)
     if row is None:

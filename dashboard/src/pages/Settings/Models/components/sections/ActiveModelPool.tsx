@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import { request } from "../../../../../api/request";
 import { preferencesApi } from "../../../../../api/modules/preferences";
 import type { ProviderRow, ResolvedModel } from "../../useProviders";
+import { providerHasApiKey } from "../../presetUtils";
 import { ModelMetaTags } from "../../modelMeta";
 import { modelOptionLabel } from "../../../../../utils/modelOptions";
 import styles from "../../index.module.less";
@@ -57,7 +58,7 @@ export function ActiveModelPool({
   const providerHasKey = useMemo(() => {
     const map = new Map<number, boolean>();
     for (const p of providers) {
-      map.set(p.id, !!p.api_key);
+      map.set(p.id, providerHasApiKey(p));
     }
     return map;
   }, [providers]);

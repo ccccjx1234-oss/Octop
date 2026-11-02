@@ -34,6 +34,7 @@ import {
   isLocalPreset,
   isPresetProvider,
   partitionCloudPresets,
+  providerHasApiKey,
 } from "./presetUtils";
 import type { PresetGroup } from "./presetUtils";
 import type { ProviderPreset } from "./useProviders";
@@ -380,13 +381,13 @@ export default function ModelsPage() {
         <SearchSettingsPanel />
       ) : modelCategory === "decision" ? (
         <DecisionSettingsPanel
-          openRouterKey={
+          openRouterProviderName={
             providers.find(
               (provider) =>
-                provider.api_key &&
+                providerHasApiKey(provider) &&
                 (provider.name === "openrouter" ||
                   (provider.base_url ?? "").includes("openrouter.ai")),
-            )?.api_key
+            )?.name
           }
         />
       ) : modelCategory === "embedding" ? (

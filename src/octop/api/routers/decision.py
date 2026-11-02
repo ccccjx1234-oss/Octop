@@ -47,6 +47,10 @@ class DecisionServiceBody(BaseModel):
         default=None,
         description="Omit to keep this service's key. Send an empty string to clear it.",
     )
+    copy_api_key_from_provider: str | None = Field(
+        default=None,
+        description="Copy that provider's stored key when api_key is omitted.",
+    )
 
 
 class DecisionSettingsBody(BaseModel):
@@ -74,6 +78,18 @@ class DecisionTestBody(BaseModel):
     api_key: str | None = None
     model: str | None = None
     provider: Literal["laya", "jev", "microsoft", "custom"] | None = None
+
+
+def _decision_service_payload(server: Any, item: DecisionServiceBody) -> dict[str, Any]:
+    """Resolve a copied provider key before it is stored. The client never sees it."""
+    payload = item.model_dump()
+    source = (payload.pop("copy_api_key_from_provider", None) or "").strip()
+    key = payload.get("api_key")
+    if source and not (isinstance(key, str) and key.strip()):
+        row = server.services.provider_repo.get_by_name(source)
+        if row is not None and row.api_key:
+            payload["api_key"] = row.api_key
+    return payload
 
 
 def _view(settings: DecisionSettings) -> DecisionSettingsResponse:
@@ -117,6 +133,11 @@ async def put_decision_settings(
     server: Any = Depends(get_server),
 ) -> DecisionSettingsResponse:
     """Save the switch and rebuild running agents so the middleware mounts or unmounts."""
+    services = (
+        [_decision_service_payload(server, item) for item in body.services]
+        if body.services is not None
+        else None
+    )
     saved = await server.app_runtime.agent_registry.save_decision(
         enabled=body.enabled,
         provider=body.provider,
@@ -128,9 +149,7 @@ async def put_decision_settings(
         threshold=body.threshold,
         tool_min_count=body.tool_min_count,
         api_key=body.api_key,
-        services=(
-            [item.model_dump() for item in body.services] if body.services is not None else None
-        ),
+        services=services,
     )
     return _view(saved)
 
