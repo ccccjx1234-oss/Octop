@@ -1,4 +1,4 @@
-# Octop 用户帮助文档
+# 会火用户帮助文档
 
 > 本帮助文档面向最终用户，介绍 **安装 → 设置向导 → 配置模型 → 基本使用** 的完整流程。
 > 所有运行时数据默认存放在 `~/.octop/`（可通过 `OCTOP_HOME` 覆盖）。
@@ -8,9 +8,9 @@
 ## 目录
 
 - [一、简介](#一简介)
-- [二、安装 Octop](#二安装-octop)
+- [二、安装会火](#二安装会火)
   - [2.1 环境要求](#21-环境要求)
-  - [2.2 一键脚本安装（推荐）](#22-一键脚本安装推荐)
+  - [2.2 源码安装（推荐）](#22-源码安装推荐)
   - [2.3 验证安装](#23-验证安装)
   - [2.4 Docker 安装（生产推荐）](#24-docker-安装生产推荐)
 - [三、首次启动与设置向导](#三首次启动与设置向导)
@@ -43,9 +43,9 @@
 
 ## 一、简介
 
-**Octop** 是一个开源、自托管的 AI 助手平台，支持多用户、多 Agent。它在单进程中同时提供 Web 控制台、CLI、IM 通道（飞书、钉钉、QQ、Discord、企业微信等）和定时任务，所有数据都保存在你自己的机器上。
+**会火** 是一个自托管的 AI 助手平台，支持多用户、多 Agent。它在单进程中同时提供 Web 控制台、CLI、IM 通道（飞书、钉钉、QQ、Discord、企业微信等）和定时任务，所有数据都保存在你自己的机器上。
 
-![图 1.1 — Octop 产品总览](assets/overview.png)
+![图 1.1 — 会火产品总览](assets/overview.png)
 
 核心特性速览：
 
@@ -58,55 +58,41 @@
 
 ---
 
-## 二、安装 Octop
+## 二、安装会火
 
 ### 2.1 环境要求
 
 - 操作系统：**macOS / Linux / Windows**。
-- **无需** 预先安装 Python —— 安装脚本会通过 [uv](https://docs.astral.sh/uv/) 在 `~/.octop/` 下自动创建隔离的 Python 3.12 虚拟环境。
-- 需要可访问外网，用于下载安装脚本与依赖。
+- Python 3.12+ 与 [uv](https://docs.astral.sh/uv/)。
+- Node.js 18+（仅在需要重新构建前端时使用）。
+- 需要可访问外网，用于下载依赖。
 
-### 2.2 一键脚本安装（推荐）
-
-**macOS / Linux**
-
-```bash
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
-```
-
-**Windows（PowerShell）**
-
-```powershell
-irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
-```
-
-**Windows（cmd）** —— 先下载再运行：
-
-```bat
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.bat -o install.bat
-install.bat
-```
-
-安装完成后，**打开一个新终端** 或重新加载 shell 配置，使 PATH 生效：
+### 2.2 源码安装（推荐）
 
 ```bash
-source ~/.zshrc   # Zsh
-# 或
-source ~/.bashrc  # Bash
+git clone <仓库地址> octop
+cd octop
+uv sync
+uv run octop init
+uv run octop run --host 0.0.0.0 --port 8088
 ```
 
-安装脚本会把 `octop` 命令放入 `~/.octop/bin` 并加入 PATH，并在 `~/.octop/venv` 创建隔离环境；**不会改动系统 Python**。
+首次启动会引导创建管理员账号；运行数据保存在 `~/.octop/`。
 
-> **可选附加组件**：安装脚本支持通过 `--extras` 追加能力，例如浏览器自动化 `--extras browser`；也可用 `--version` 指定版本、`--mirror <url>` 使用国内 PyPI 镜像。更多选项见 [scripts/README.md](../scripts/README.md)。
+前端已随仓库提供构建产物。修改 `dashboard/` 后重新构建：
+
+```bash
+make build-frontend
+```
 
 ### 2.3 验证安装
 
 ```bash
-octop --version
-octop run --help
+uv run octop --version
+uv run octop run --help
 ```
 
-若提示 `command not found: octop`，请确认已重新加载 shell 或检查 `~/.octop/bin` 是否在 PATH 中。
+若提示找不到 `octop`，请确认当前目录是仓库根目录，并使用 `uv run octop ...`。
 
 ### 2.4 Docker 安装（生产推荐）
 
@@ -220,7 +206,7 @@ octop run
 
 ## 四、配置模型（LLM 供应商）
 
-Octop 通过 **供应商（Provider）** 接入大模型。每个 Agent 可使用不同的供应商与模型。支持 OpenAI 兼容 API、Anthropic、AWS Bedrock、DashScope（通义千问）、Ollama 本地模型等。
+会火通过 **供应商（Provider）** 接入大模型。每个 Agent 可使用不同的供应商与模型。支持 OpenAI 兼容 API、Anthropic、AWS Bedrock、DashScope（通义千问）、Ollama 本地模型等。
 
 ### 4.1 预设供应商
 
@@ -278,7 +264,7 @@ octop provider --help     # 供应商增删改查帮助
 
 若本机已运行 Ollama，可选择 `ollama` 预设（默认 `base_url` 为本地地址），无需 API Key 即可接入本地模型，适合隐私敏感或离线场景。
 
-如果 Ollama 把模型存在非默认目录（例如从系统盘改到其它磁盘），在供应商设置里填写 **模型下载目录** 后保存。Octop 会按该路径识别已下载模型，并在启动本地 Ollama 服务时设置 `OLLAMA_MODELS`。
+如果 Ollama 把模型存在非默认目录（例如从系统盘改到其它磁盘），在供应商设置里填写 **模型下载目录** 后保存。会火会按该路径识别已下载模型，并在启动本地 Ollama 服务时设置 `OLLAMA_MODELS`。
 
 ### 4.7 图片与视频生成模型
 
@@ -351,9 +337,9 @@ octop provider --help     # 供应商增删改查帮助
 
 ### 5.7 ACP（与 IDE / 编码 Agent 协作）
 
-Octop 支持两个方向的 ACP 集成：
+会火支持两个方向的 ACP 集成：
 
-1. **入站** —— 让外部工具（Zed、OpenCode 等）使用你的 Octop Agent：
+1. **入站** —— 让外部工具（Zed、OpenCode 等）使用你的会火 Agent：
 
    ```bash
    octop acp --agent main
@@ -394,13 +380,13 @@ Octop 支持两个方向的 ACP 集成：
 
 | 命令 | 说明 |
 |------|------|
-| `octop run` | 前台启动 Octop |
+| `octop run` | 前台启动会火 |
 | `octop run --host 0.0.0.0 --port 8088` | 自定义监听地址与端口 |
 | `octop service start` | 安装并启动系统服务 |
 | `octop service stop` | 停止系统服务 |
 | `octop agent` | 创建、列出、启停 Agent |
 | `octop channel` | 安装与管理 IM 通道 |
-| `octop bridge` | 添加 / 探测 / 编辑 / 删除远程 Octop 对端 |
+| `octop bridge` | 添加 / 探测 / 编辑 / 删除远程会火对端 |
 | `octop chats` | REPL 与会话管理 |
 | `octop acp` | 为 IDE 提供 stdio ACP 服务 |
 | `octop cron` | 管理定时任务 |
@@ -463,7 +449,7 @@ Octop 支持两个方向的 ACP 集成：
 
 | 编号 | 位置 | 文件名 | 状态 | 内容说明 |
 |------|------|--------|------|----------|
-| 图 1.1 | 一、简介 | `overview.png` | ✅ 已就位 | Octop 品牌 Banner |
+| 图 1.1 | 一、简介 | `overview.png` | ✅ 已就位 | 会火品牌 Banner |
 | 图 3.1 | 3.2 向导步骤 | `setup-01-steps.png` | ✅ 已就位 | 向导步骤条（验证密码页） |
 | 图 3.2 | 3.2 管理员 | `setup-02-admin.png` | ✅ 已就位 | 创建管理员账号表单 |
 | 图 3.3 | 3.2 模型 | `setup-03-model.png` | ✅ 已就位 | 向导内预设供应商选择 |

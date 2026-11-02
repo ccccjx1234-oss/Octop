@@ -79,7 +79,7 @@ class LdapConfigBody(BaseModel):
         description="When set, only members of these groups may sign in through the directory.",
     )
     auto_provision: bool | None = Field(
-        default=None, description="Create an 会火 account on a first directory login."
+        default=None, description="Create a 会火 account on a first directory login."
     )
     timeout_seconds: int | None = Field(default=None, ge=1, le=60)
 

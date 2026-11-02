@@ -62,7 +62,7 @@ process starts. `GET /api/envs` redacts `OCTOP_CAPTCHA_SECRET` as
 If you serve the dashboard behind a CSP, allow
 `challenges.cloudflare.com`; `js.hcaptcha.com`, `newassets.hcaptcha.com`,
 `api.hcaptcha.com`; `www.google.com`, `www.gstatic.com`;
-`turing.captcha.qcloud.com`, `captcha.qq.com`, `ssl.captcha.qq.com`. Octop
+`turing.captcha.qcloud.com`, `captcha.qq.com`, `ssl.captcha.qq.com`. Huihuo
 does not set these headers itself.
 
 ## Setup & auth
@@ -78,7 +78,7 @@ does not set these headers itself.
 | `POST`   | `/setup/test-provider` | public | Ping a provider draft (kind/base_url/api_key/model) |
 | `POST`   | `/setup/finish` | public | Finalise setup and unlock the rest of the API |
 | `GET`    | `/auth/captcha` | public | `{provider, site_key?}` for the login widget; 503 while setup is required |
-| `POST`   | `/auth/login` | public | body `{username, password, captcha_token?}` (`username` may be email) → `{access_token, role, user, ...}`. When no local password matches, the credentials are retried against the configured LDAP directory; a first directory login provisions an Octop account (unless `auto_provision` is off) and derives the role from `admin_groups` |
+| `POST`   | `/auth/login` | public | body `{username, password, captcha_token?}` (`username` may be email) → `{access_token, role, user, ...}`. When no local password matches, the credentials are retried against the configured LDAP directory; a first directory login provisions a Huihuo account (unless `auto_provision` is off) and derives the role from `admin_groups` |
 | `GET`    | `/auth/oidc/status` | public | OIDC login availability and provider display name |
 | `POST`   | `/auth/oidc/start` | public | body `{redirect_after?}` → identity-provider authorization URL |
 | `GET`    | `/auth/oidc/callback` | public | Identity-provider callback; redirects to dashboard login completion |
@@ -408,7 +408,7 @@ version. The file save remains successful if the subsequent semantic check fails
 ### Current-expert memory storage maintenance
 
 SQLite restore requires a harness runtime with `MemoryMiddleware.pause_background`
-([octop-harness #69](https://github.com/TencentCloud/octop-harness/pull/69)). Older runtimes
+(a recent `octop-harness` runtime). Older runtimes
 reject restore before stopping the expert or changing its database. Independent retry
 controls also require this runtime; the extraction config API reports supported options.
 
@@ -527,7 +527,7 @@ for non-`/` paths.
 | `GET`    | `/connectors/oauth/callback` | public | OAuth redirect target |
 | `GET`    | `/connectors/oauth/pending/{state_id}` | user | poll the OAuth result |
 
-Custom MCP OAuth (streamable HTTP, public HTTPS URL only): Octop discovers the authorization
+Custom MCP OAuth (streamable HTTP, public HTTPS URL only): Huihuo discovers the authorization
 server from the MCP URL (401 / RFC 9728 protected-resource metadata), requires dynamic client
 registration (DCR), stores encrypted tokens in the custom MCP spec, and injects `Authorization:
 Bearer` when loading tools. Loopback and LAN MCP URLs may use HTTP and do not use remote OAuth
@@ -539,9 +539,9 @@ discovery.
 |--------|------|------|-------|
 | `POST`/`GET`/… | `/internal/mcp/*` | public (mTLS / network-isolated) | MCP gateway used by octop-harness agents (not the dashboard) |
 
-## Octop Agent MCP Gateway
+## Huihuo Agent MCP Gateway
 
-External agents call installed Octop experts through the authenticated
+External agents call installed Huihuo experts through the authenticated
 Streamable HTTP endpoint:
 
 `POST/GET/DELETE /mcp/agents`
@@ -558,7 +558,7 @@ The server exposes three tools:
 | `resume_octop_expert` | Resume a call that stopped for tool approval or user input |
 
 `call_octop_expert` returns `thread_id`. Store this value in the external
-agent's working state. Pass it only when the next task must use the same Octop
+agent's working state. Pass it only when the next task must use the same Huihuo
 conversation. Omit it for a new task. MCP threads cannot attach to dashboard,
 CLI, or IM threads.
 
@@ -617,7 +617,7 @@ endpoint (public, mounted directly in `api/app.py`).
 | `WS`/`POST`/`GET`/… | `/agents/{aid}/terminal` | owner | AI-assisted remote PTY |
 | `GET` | `/agents/{aid}/terminal/context` | owner | recent terminal context for the AI helper |
 | `WS`/`POST`/`GET`/… | `/browser/...` | user | octop-browser sessions, live stream, record/replay |
-| `POST` | `/browser/shutdown` | user | stop the current user's Octop-managed Chrome |
+| `POST` | `/browser/shutdown` | user | stop the current user's Huihuo-managed Chrome |
 | `POST` | `/agents/{aid}/upload` | user | multipart upload → `{workspace}/inbound/` |
 | `POST` | `/agents/{aid}/files/access-urls` | user | refresh inbound media URLs (signed) |
 | `GET`  | `/agents/{aid}/files/{path}` | owner | read an inbound file |

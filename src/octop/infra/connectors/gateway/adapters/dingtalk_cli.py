@@ -23,11 +23,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "dws",
         "description": (
-            "Run a DingTalk Workspace CLI (dws) command via Octop Connectors. "
+            "Run a DingTalk Workspace CLI (dws) command via Huihuo Connectors. "
             "args is the command line after `dws`, e.g. "
             "'contact user search --query Alice -f json'; quote values with spaces. "
             "Use '--help' or '<product> --help' to discover commands. "
-            "On auth errors, tell the user to authorize the DingTalk connector in Octop — "
+            "On auth errors, tell the user to authorize the DingTalk connector in Huihuo — "
             "never run shell/CLI commands."
         ),
         "inputSchema": {

@@ -353,7 +353,7 @@ class BridgeManager:
         if is_self_peer_url(peer_base_url, self._advertise_base_url):
             raise OctopError(
                 ErrorCode.BRIDGE_SELF_CONNECT,
-                "cannot link this Octop instance to itself",
+                "cannot link this 会火 instance to itself",
             )
         other = self._find_peer_link(
             owner_user_id,
@@ -1291,7 +1291,7 @@ class BridgeManager:
         if not is_tunnel_path_allowed(method, path):
             raise OctopError(
                 ErrorCode.BRIDGE_REMOTE_UNSUPPORTED,
-                "This action is not available through the remote bridge. Manage it on the peer Octop.",
+                "This action is not available through the remote bridge. Manage it on the peer 会火.",
             )
         sess = await self._require_live_session(connection_id)
         if body:
@@ -1330,7 +1330,7 @@ class BridgeManager:
             if code_raw == ErrorCode.BRIDGE_REMOTE_UNSUPPORTED.value:
                 raise OctopError(
                     ErrorCode.BRIDGE_REMOTE_UNSUPPORTED,
-                    "This action is not available through the remote bridge. Manage it on the peer Octop.",
+                    "This action is not available through the remote bridge. Manage it on the peer 会火.",
                 )
             raise OctopError(
                 ErrorCode.BRIDGE_TUNNEL_FAILED,

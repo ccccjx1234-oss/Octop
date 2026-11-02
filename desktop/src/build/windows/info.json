@@ -5,11 +5,11 @@
   "info": {
     "0000": {
       "ProductVersion": "0.9.26",
-      "CompanyName": "Octop",
-      "FileDescription": "Octop desktop",
+      "CompanyName": "Huihuo",
+      "FileDescription": "会火桌面端",
       "LegalCopyright": "Copyright © 2026",
-      "ProductName": "Octop",
-      "Comments": "Octop desktop shell"
+      "ProductName": "会火",
+      "Comments": "会火桌面端外壳"
     }
   }
 }

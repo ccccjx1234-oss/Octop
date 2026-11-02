@@ -167,7 +167,7 @@ def run(
     ssl_certfile: str | None,
     ssl_keyfile: str | None,
 ) -> None:
-    """Run octop-server in the foreground.
+    """Run 会火 server in the foreground.
 
     Host and port are resolved with the following precedence: explicit CLI
     flags > ``OCTOP_BIND_HOST``/``OCTOP_PORT`` env > ``~/.octop/config.json``

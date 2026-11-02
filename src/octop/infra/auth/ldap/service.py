@@ -187,7 +187,7 @@ class LdapAuthService:
             if not config.auto_provision:
                 raise OctopError(
                     ErrorCode.LDAP_USER_NOT_PROVISIONED,
-                    "this directory account has no Octop account yet",
+                    "this directory account has no 会火 account yet",
                 )
             return self._provision(row, config, identity)
 

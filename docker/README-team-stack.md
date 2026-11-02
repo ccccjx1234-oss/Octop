@@ -1,6 +1,6 @@
-# Octop 团队栈（PostgreSQL + SeaweedFS S3 + Caddy）
+# Huihuo 团队栈（PostgreSQL + SeaweedFS S3 + Caddy）
 
-`docker-compose.team.yml` 把 Octop 拆成四个服务，只有反向代理对外发布端口：
+`docker-compose.team.yml` 把 Huihuo 拆成四个服务，只有反向代理对外发布端口：
 
 | 服务 | 镜像 | 暴露 | 说明 |
 |------|------|------|------|
@@ -10,7 +10,7 @@
 | `seaweedfs` | chrislusf/seaweedfs | Master UI `127.0.0.1:9333` | S3 兼容对象存储（智能体工作区） |
 
 > MinIO 官方镜像已从 Docker Hub 下架、quay.io 匿名拉取返回 401，因此这里用
-> SeaweedFS 的 S3 网关（成熟、持续维护，path-style 寻址与 Octop 兼容）。
+> SeaweedFS 的 S3 网关（成熟、持续维护，path-style 寻址与 Huihuo 兼容）。
 > 如果公司已有 S3 / COS / OSS，直接在管理后台配置对应存储后端即可，不需要此服务。
 
 `seaweedfs-init` 是一次性初始化容器：等集群就绪后创建 bucket。
@@ -45,7 +45,7 @@ docker logs -f octop-stack-app
 
 - PostgreSQL：Docker 命名卷 `octop-stack_pgdata`
 - 对象存储：命名卷 `octop-stack_seaweeddata`
-- Octop 宿主侧文件：`${OCTOP_DATA_DIR}`（默认 `D:/octop-stack/octop-data`），
+- Huihuo 宿主侧文件：`${OCTOP_DATA_DIR}`（默认 `D:/octop-stack/octop-data`），
   包括知识库、技能包、每个专家的会话/记忆/检查点
 - 使用 S3 工作区时，专家的 `AGENTS.md`、上传件、产物在 bucket
   `octop-workspaces` 中；宿主工作区仍保留会话与检查点
@@ -88,7 +88,7 @@ ADR 002 明确说明没有 SQLite→PostgreSQL 的数据迁移器，备份也不
 ## 安全边界
 
 - 只有 Caddy 发布端口；数据库与对象存储只在 compose 网络内，密码使用生成的强口令；
-- Octop 容器仍以 root 运行，所有租户共享同一个容器与数据目录；本栈解决的是
+- Huihuo 容器仍以 root 运行，所有租户共享同一个容器与数据目录；本栈解决的是
   “服务拆分与外部化存储”，不是租户隔离。需要强隔离时按团队/实例拆分部署；
 - 自定义 MCP、共享专家工作区读取等已知问题仍在，详见安全审查结论；
 - 移动端 Redroid compose 使用了 privileged + host 网络 + docker.sock，本栈不包含。

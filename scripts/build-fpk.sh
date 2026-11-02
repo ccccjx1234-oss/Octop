@@ -52,7 +52,7 @@ esac
 # shellcheck source=scripts/fnos/store_version.sh
 source "$ROOT/scripts/fnos/store_version.sh"
 STORE_VER="$(fnos_store_version "$VER")"
-echo "[build-fpk] Octop 版本: $VER (飞牛商店: $STORE_VER)"
+echo "[build-fpk] 会火 版本: $VER (飞牛商店: $STORE_VER)"
 
 # 输出文件名前缀与迭代号（由 CI 传入，实现 Octop-fnos-docker-0.9.30.fpk 风格）
 PREFIX="${FPK_NAME_PREFIX:-octop}"

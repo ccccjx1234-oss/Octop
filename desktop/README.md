@@ -1,4 +1,4 @@
-# Octop desktop (Wails v3 + green portable)
+# Huihuo desktop (Wails v3 + green portable)
 
 All desktop-client code lives here. This is **not** `src/octop/infra/control/desktop`
 (remote desktop streaming).
@@ -6,12 +6,12 @@ All desktop-client code lives here. This is **not** `src/octop/infra/control/des
 | Path | Role |
 |------|------|
 | [`portable/`](portable/) | Green zip packaging (was `scripts/green/`) |
-| [`src/`](src/) | Wails v3 shell: load bundled zip, spawn Octop, tray/settings |
+| [`src/`](src/) | Wails v3 shell: load bundled zip, spawn Huihuo, tray/settings |
 | [`package-release.sh`](package-release.sh) | Native end-to-end portable + Wails release build |
 
 ## Data directory
 
-Same as the Octop CLI/server default:
+Same as the Huihuo CLI/server default:
 
 - `OCTOP_HOME` → `~/.octop` (or the existing `OCTOP_HOME` env)
 - Green runtime extract → `~/.octop/portable/`
@@ -62,7 +62,7 @@ wails3 task package ARCH=arm64 VERSION=<version> \
   PORTABLE_ZIP=../portable/release/Octop-portable-darwin-arm64-<version>.zip
 ```
 
-Dev against an already-running Octop (skips the bundled green zip):
+Dev against an already-running Huihuo (skips the bundled green zip):
 
 ```bash
 cd desktop/src
@@ -72,11 +72,11 @@ OCTOP_DESKTOP_URL=http://127.0.0.1:8088 wails3 dev
 Without `OCTOP_DESKTOP_URL`, first launch uses `~/.octop/portable/` if valid,
 otherwise extracts the matching zip shipped with the desktop package (embedded
 in the Windows and Linux binaries, under `Contents/Resources` on macOS). The
-Wails shell never downloads Octop. For local runtime debugging, set
+Wails shell never downloads Huihuo. For local runtime debugging, set
 `OCTOP_DESKTOP_PORTABLE_ZIP=/absolute/path/Octop-portable-<plat>-<version>.zip`.
 On later launches, a newer bundled portable version replaces the extracted
 runtime after creating a consistent SQLite backup under `~/.octop/backups/`.
-The upgraded Octop process then applies the normal database migrations during
+The upgraded Huihuo process then applies the normal database migrations during
 startup. Newer extracted runtimes are never downgraded; PostgreSQL remains
 externally managed and is not copied by the desktop shell.
 
@@ -90,9 +90,9 @@ GitHub Release names follow `Octop-<kind>-<os>-<arch>-<version>.<ext>`:
 - PyPI wheels stay `octop-<version>-py3-none-any.whl` (PEP 427)
 
 The Linux tar.gz contains only the GUI binary; it has no separate portable zip or
-server terminal process. Runtime upgrades remain owned by Octop:
+server terminal process. Runtime upgrades remain owned by Huihuo:
 the shell sets `OCTOP_GREEN_PACKAGES`, so `octop update` upgrades the extracted
-`packages/` directory through Octop's existing `--target` logic.
+`packages/` directory through Huihuo's existing `--target` logic.
 
 Linux also needs GTK4 + WebKitGTK 6 to link. macOS 12+.
 

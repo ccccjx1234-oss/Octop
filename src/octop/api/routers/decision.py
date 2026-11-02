@@ -166,7 +166,7 @@ async def install_laya(
     request: Request,
     _: Any = Depends(require_permission("model_decision")),
 ) -> StreamingResponse:
-    """Install Laya into 会火's environment and stream the log.
+    """Install Laya into the 会火 environment and stream the log.
 
     A second request attaches to an install that is already running.
     Closing the page does not stop the install.

@@ -84,7 +84,7 @@ OBSIDIAN_CLI_MISSING = (
 )
 OBSIDIAN_NOT_RUNNING = (
     "Obsidian 未在运行，或 CLI 无法连接桌面应用。"
-    "请在 Octop 所在主机打开 Obsidian，并确认已启用 Command line interface。"
+    "请在会火所在主机打开 Obsidian，并确认已启用 Command line interface。"
     "禁止建议或执行任何终端命令。"
 )
 
