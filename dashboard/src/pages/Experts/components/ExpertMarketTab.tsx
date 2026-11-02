@@ -26,6 +26,7 @@ import {
   parseWorkflowFrontmatterMeta,
   splitMarkdownFrontmatter,
 } from "../../../utils/markdown";
+import { publicAssetUrl } from "../../../utils/publicUrl";
 import { iconForName } from "./iconForName";
 import styles from "../index.module.less";
 
@@ -290,7 +291,7 @@ export default function ExpertMarketTab({
                   >
                     {expert.icon_url ? (
                       <img
-                        src={expert.icon_url}
+                        src={publicAssetUrl(expert.icon_url)}
                         alt=""
                         className={styles.marketIconImg}
                       />

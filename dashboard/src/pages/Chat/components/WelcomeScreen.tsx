@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWelcomeQuickCardsLayout } from "../hooks/useWelcomeQuickCardsLayout";
+import { publicUrl } from "../../../utils/publicUrl";
 import WelcomeQuickCards, { WelcomeQuickCardProbe } from "./WelcomeQuickCards";
 import styles from "../index.module.less";
 
 // Animated WebP keeps alpha on Safari; VP9 WebM alpha is unreliable there.
-const MASCOT_PEEK = "/octop-mascot-peek.webp";
-const MASCOT_TYPE = "/octop-mascot-type.webp";
+const MASCOT_PEEK = publicUrl("octop-mascot-peek.webp");
+const MASCOT_TYPE = publicUrl("octop-mascot-type.webp");
 const MASCOT_IMAGES = [MASCOT_PEEK, MASCOT_TYPE];
 
 function getRandomMascot(current?: string): string {

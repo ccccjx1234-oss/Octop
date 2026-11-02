@@ -63,10 +63,10 @@ RUN NODE_ENV=production NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
-LABEL maintainer="OrcaKit Team"
+LABEL maintainer="Huihuo"
 LABEL org.opencontainers.image.title="会火"
-LABEL org.opencontainers.image.description="Smarter self-hosted AI assistant — multi-user, multi-agent."
-LABEL org.opencontainers.image.source="https://github.com/TencentCloud/orca"
+LABEL org.opencontainers.image.description="会火 — 自托管 AI 助手平台，多用户、多专家。"
+LABEL org.opencontainers.image.source="https://github.com/ccccjx1234-oss/Octop"
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

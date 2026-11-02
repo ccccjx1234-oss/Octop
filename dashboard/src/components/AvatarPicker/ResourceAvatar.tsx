@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 
 import { useAuthImageSrc } from "../../hooks/useAuthImageSrc";
+import { publicAssetUrl } from "../../utils/publicUrl";
 import styles from "./AvatarPicker.module.less";
 import type { AvatarPreset, AvatarPresetCatalog } from "./types";
 
@@ -55,7 +56,7 @@ export function ResourceAvatar({
       {photo ? (
         <img src={src} alt="" />
       ) : portrait ? (
-        <img src={preset.src} alt="" className={styles.previewPortraitImg} />
+        <img src={publicAssetUrl(preset.src ?? "")} alt="" className={styles.previewPortraitImg} />
       ) : PresetIcon ? (
         <PresetIcon />
       ) : null}

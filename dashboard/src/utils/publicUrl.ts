@@ -16,3 +16,25 @@ export function routerBasename(): string | undefined {
   if (base === "/") return undefined;
   return base.replace(/\/$/, "") || undefined;
 }
+
+const BUNDLED_PUBLIC_PREFIXES = [
+  "/experts/avatars/",
+  "/octop-",
+  "/logo_",
+  "/pwa-",
+  "/favico",
+  "/apple-touch-icon",
+];
+
+/**
+ * Resolve a URL that points at a bundled file under ``dashboard/public``.
+ * Leaves API, data, blob, and external URLs untouched.
+ */
+export function publicAssetUrl(url: string): string {
+  const text = url.trim();
+  if (!text.startsWith("/")) return url;
+  if (text.startsWith("/api/") || text.startsWith("/octop/api/")) return url;
+  return BUNDLED_PUBLIC_PREFIXES.some((prefix) => text.startsWith(prefix))
+    ? publicUrl(text)
+    : url;
+}

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { requestBlob } from "../api/request";
+import { publicAssetUrl } from "../utils/publicUrl";
 import {
   asImageBlob,
   isDataUrl,
@@ -109,18 +110,19 @@ export function useAuthImageSrc(
   loadState: AuthImageLoadState;
   setSrc: React.Dispatch<React.SetStateAction<string>>;
 } {
-  const needsFetch = needsAuthBlobFetch(url) || isDataUrl(url);
-  const [src, setSrc] = useState(() => (needsFetch ? "" : url));
+  const resolvedUrl = publicAssetUrl(url);
+  const needsFetch = needsAuthBlobFetch(resolvedUrl) || isDataUrl(resolvedUrl);
+  const [src, setSrc] = useState(() => (needsFetch ? "" : resolvedUrl));
   const [loadState, setLoadState] = useState<AuthImageLoadState>(() =>
     needsFetch ? "loading" : "ready",
   );
   const heldRef = useRef<HeldAuthImage | undefined>(undefined);
 
   useLayoutEffect(() => {
-    if (!needsAuthBlobFetch(url) && !isDataUrl(url)) {
+    if (!needsAuthBlobFetch(resolvedUrl) && !isDataUrl(resolvedUrl)) {
       releaseHeld(heldRef.current);
       heldRef.current = undefined;
-      setSrc(url);
+      setSrc(resolvedUrl);
       setLoadState("ready");
       return;
     }
@@ -130,22 +132,22 @@ export function useAuthImageSrc(
 
     const load = async () => {
       try {
-        const objectUrl = await acquireAuthImageSrc(url, filename);
+        const objectUrl = await acquireAuthImageSrc(resolvedUrl, filename);
         if (cancelled) {
-          releaseAuthImageSrc(url, filename);
+          releaseAuthImageSrc(resolvedUrl, filename);
           return;
         }
         if (
           heldRef.current &&
-          (heldRef.current.url !== url || heldRef.current.filename !== filename)
+          (heldRef.current.url !== resolvedUrl || heldRef.current.filename !== filename)
         ) {
           releaseHeld(heldRef.current);
         }
-        heldRef.current = { url, filename };
+        heldRef.current = { url: resolvedUrl, filename };
         setSrc(objectUrl);
         setLoadState("ready");
       } catch {
-        releaseAuthImageSrc(url, filename);
+        releaseAuthImageSrc(resolvedUrl, filename);
         if (!cancelled) {
           setSrc("");
           setLoadState("error");
@@ -158,7 +160,7 @@ export function useAuthImageSrc(
     return () => {
       cancelled = true;
     };
-  }, [url, filename]);
+  }, [resolvedUrl, filename]);
 
   useLayoutEffect(() => {
     return () => {
