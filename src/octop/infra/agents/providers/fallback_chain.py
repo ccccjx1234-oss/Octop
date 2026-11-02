@@ -53,4 +53,25 @@ def save_fallback_chain(
     return cleaned
 
 
-__all__ = ["MAX_CHAIN", "SETTINGS_KEY", "load_fallback_chain", "save_fallback_chain"]
+def fallback_ref_allowed(
+    user_id: int | None,
+    ref: str,
+    allowed_for_user: Callable[[int, str], bool],
+) -> bool:
+    """Return whether *user_id* may fall back to *ref*.
+
+    A turn with no user id fails closed. Skipping the group check would let
+    an unscoped call use a model the caller was not allowed to select.
+    """
+    if user_id is None:
+        return False
+    return allowed_for_user(user_id, ref)
+
+
+__all__ = [
+    "MAX_CHAIN",
+    "SETTINGS_KEY",
+    "fallback_ref_allowed",
+    "load_fallback_chain",
+    "save_fallback_chain",
+]

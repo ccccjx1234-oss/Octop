@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
+from octop.api.common.secret_fields import api_key_public_fields
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.agents.providers.codex_apply import (
     CODEX_PROVIDER_NAME,
@@ -223,6 +224,7 @@ class ProviderTestDraftBody(BaseModel):
     name: str
     kind: str
     api_key: str | None = None
+    provider_id: int | None = None
     base_url: str | None = None
     model_id: str
     api_mode: Literal["chat_completions", "responses"] = "chat_completions"
@@ -234,6 +236,7 @@ class ProviderTestDraftBody(BaseModel):
 class ProviderFetchModelsBody(BaseModel):
     kind: str
     api_key: str | None = None
+    provider_id: int | None = None
     base_url: str | None = None
     extra_json: str | None = None
     name: str | None = None
@@ -272,7 +275,7 @@ def _row_to_dict(r: Any) -> dict[str, Any]:
         "name": r.name,
         "kind": r.kind,
         "base_url": r.base_url,
-        "api_key": r.api_key,
+        **api_key_public_fields(r.api_key),
         "models": models,
         "note": r.note,
         "enabled": bool(r.enabled),
@@ -456,14 +459,24 @@ async def admin_delete_provider(
         await server.app_runtime.agent_registry.on_provider_changed(provider_name=name)
 
 
+def _stored_provider_api_key(server: Any, provider_id: int | None) -> str:
+    if provider_id is None or server.services is None:
+        return ""
+    row = server.services.provider_repo.get(provider_id)
+    if row is None or not row.api_key:
+        return ""
+    return str(row.api_key).strip()
+
+
 @admin_router.post("/test-draft", summary="Test unsaved provider draft")
 async def admin_test_provider_draft(
     body: ProviderTestDraftBody,
     request: Request,
     _: Any = Depends(require_permission("providers")),
+    server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Probe connectivity for a provider draft before it is saved."""
-    api_key = (body.api_key or "").strip()
+    api_key = (body.api_key or "").strip() or _stored_provider_api_key(server, body.provider_id)
     if not api_key:
         return {"ok": False, "error": "api_key is required"}
     model_id = body.model_id.strip()
@@ -495,6 +508,7 @@ async def admin_fetch_provider_models(
     body: ProviderFetchModelsBody,
     request: Request,
     _: Any = Depends(require_permission("providers")),
+    server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Fetch remote model ids via OpenAI-compatible ``GET /models`` (openai kind only)."""
     if body.kind != "openai":
@@ -502,7 +516,7 @@ async def admin_fetch_provider_models(
             "ok": False,
             "error": "fetch models is only supported for openai-compatible providers",
         }
-    api_key = (body.api_key or "").strip()
+    api_key = (body.api_key or "").strip() or _stored_provider_api_key(server, body.provider_id)
     if not api_key:
         return {"ok": False, "error": "api_key is required"}
     draft = SimpleNamespace(extra_json=body.extra_json)

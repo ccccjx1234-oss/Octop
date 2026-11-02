@@ -83,7 +83,7 @@ from octop.infra.skills.workspace_catalog import (
     list_workspace_skill_summaries,
     repair_workspace_skill_manifests,
 )
-from octop.infra.utils.locale import Locale
+from octop.infra.utils.locale import Locale, resolve_user_locale
 from octop.infra.utils.turn_failure import turn_model_scope
 from octop.infra.utils.ulid import new_short_id
 
@@ -4194,6 +4194,12 @@ class AgentManager:
             name=_memory_namespace(row.agent_id),
             workspace_dir=harness_workspace,
             system_files_path=system_files_path_from_config(cfg),
+            # Owner's stored locale only. Per-message language would change
+            # the cached system prefix on every switch.
+            language=resolve_user_locale(
+                user_repo=self._repos.user_repo,
+                user_id=row.user_id or 0,
+            ),
             # Memory aux LLM (extraction / promotion) needs a concrete ref; fall
             # back to the same resolution AUTO chat routing uses (active model
             # first, else first usable) — so promotion works whenever chat does.
@@ -4250,13 +4256,19 @@ class AgentManager:
                     SafeModelFailoverMiddleware,
                 )
                 from octop.infra.agents.middleware.token_quota import configurable_user_id
-                from octop.infra.agents.providers.fallback_chain import load_fallback_chain
+                from octop.infra.agents.providers.fallback_chain import (
+                    fallback_ref_allowed,
+                    load_fallback_chain,
+                )
 
                 settings_repo = self._repos.settings_repo
 
                 def _fallback_ref_allowed(ref: str) -> bool:
-                    user_id = configurable_user_id()
-                    return user_id is None or self.model_ref_allowed_for_user(user_id, ref)
+                    return fallback_ref_allowed(
+                        configurable_user_id(),
+                        ref,
+                        self.model_ref_allowed_for_user,
+                    )
 
                 retry_middleware: Any = SafeModelFailoverMiddleware(
                     health=self._model_health,

@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from octop.api.deps import current_user
+from octop.api.deps import require_permission
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.utils.browser_media import user_browser_profile
 
@@ -115,6 +115,11 @@ async def resolve_harness_session(
 
     if not create:
         return None
+
+    from octop.infra.control.browser.bundled import browser_enabled  # noqa: PLC0415
+
+    if not browser_enabled():
+        raise OctopError(ErrorCode.BROWSER_NOT_ENABLED, "The browser is installed but not enabled.")
 
     profile = hint
     harness_settings = None
@@ -290,7 +295,9 @@ async def harness_sessions_payload(profile_name: str) -> dict[str, Any]:
 
 
 @router.get("/browser/harness-sessions")
-async def list_harness_sessions(user: Any = Depends(current_user)) -> dict[str, Any]:
+async def list_harness_sessions(
+    user: Any = Depends(require_permission("browser")),
+) -> dict[str, Any]:
     """List the current user's live octop-browser profile."""
     return await harness_sessions_payload(user_browser_profile(user.id))
 
@@ -299,7 +306,7 @@ async def list_harness_sessions(user: Any = Depends(current_user)) -> dict[str, 
 async def handoff(
     session_id: str,
     body: HandoffBody,
-    user: Any = Depends(current_user),
+    user: Any = Depends(require_permission("browser")),
 ) -> dict[str, Any]:
     """Switch control of a browser session between the agent and the user.
 
@@ -343,7 +350,7 @@ async def handoff(
     "/browser/shutdown",
     summary="Stop the local Chrome process for an octop-browser profile",
 )
-async def shutdown_browser(user: Any = Depends(current_user)) -> dict[str, Any]:
+async def shutdown_browser(user: Any = Depends(require_permission("browser"))) -> dict[str, Any]:
     """Terminate the current user's 会火-managed Chrome. Cookies stay on disk."""
     try:
         from octop_browser.tool_interface import browser_tool
