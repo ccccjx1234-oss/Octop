@@ -10,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import { request } from "../../../../api/request";
 import type { ProviderModel, ProviderRow } from "../useProviders";
 import { isEmbeddingModel } from "../useProviders";
-import { isOnnxProviderRow } from "../presetUtils";
+import { isOnnxProviderRow, providerHasApiKey } from "../presetUtils";
 import styles from "../index.module.less";
 
 interface EmbeddingModelPoolProps {
@@ -50,7 +50,7 @@ export function EmbeddingModelPool({
   const entries = useMemo(() => {
     const out: PoolEntry[] = [];
     for (const provider of providers) {
-      if (!provider.enabled || !provider.api_key) continue;
+      if (!provider.enabled || !providerHasApiKey(provider)) continue;
       const onnx = isOnnxProviderRow(provider);
       const embeddingLane = onnx || provider.purpose === "embedding";
       for (const model of provider.models ?? []) {

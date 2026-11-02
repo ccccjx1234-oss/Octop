@@ -4,6 +4,7 @@ export interface TestProviderDraftParams {
   name: string;
   kind: string;
   api_key?: string;
+  provider_id?: number;
   base_url?: string | null;
   model_id: string;
   api_mode?: "chat_completions" | "responses";
@@ -29,6 +30,7 @@ export async function testProviderDraft(
       name: params.name,
       kind: params.kind,
       api_key: params.api_key?.trim() || null,
+      provider_id: params.provider_id ?? null,
       base_url: params.base_url?.trim() || null,
       model_id: params.model_id,
       api_mode: params.api_mode ?? "chat_completions",
@@ -42,6 +44,7 @@ export async function testProviderDraft(
 export interface FetchProviderModelsParams {
   kind: string;
   api_key?: string;
+  provider_id?: number;
   base_url?: string | null;
   extra_json?: string | null;
   name?: string | null;
@@ -66,6 +69,7 @@ export async function fetchProviderModels(
     body: JSON.stringify({
       kind: params.kind,
       api_key: params.api_key?.trim() || null,
+      provider_id: params.provider_id ?? null,
       base_url: params.base_url?.trim() || null,
       extra_json: params.extra_json ?? null,
       name: params.name?.trim() || null,
