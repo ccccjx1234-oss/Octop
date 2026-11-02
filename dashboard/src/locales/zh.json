@@ -2750,7 +2750,7 @@
     "fieldMustBeJsonObject": "{{label}} 必须是 JSON 对象",
     "jsonMustBeObject": "必须是 JSON 对象",
     "invalidJson": "非法 JSON",
-    "rawConfigTooltip": "渠道特定配置 — 详见 octop-gateway 文档",
+    "rawConfigTooltip": "渠道特定配置 — 详见渠道配置文档",
     "getCredentials": "前往获取凭据",
     "channelSettingsNamed": "{{kind}} 频道设置",
     "deleteConfirmTitle": "删除频道「{{name}}」？",
@@ -3030,7 +3030,7 @@
     "toolGuardYamlEditor": "规则 YAML",
     "toolGuardSaveRules": "保存规则",
     "toolGuardResetRules": "恢复默认规则",
-    "toolGuardResetConfirm": "恢复为 octop-harness 内置默认规则？当前修改将丢失。",
+    "toolGuardResetConfirm": "恢复为内置默认规则？当前修改将丢失。",
     "toolGuardRulesSaved": "已保存 {{count}} 条规则",
     "toolGuardRulesSaveFailed": "保存失败，请检查 YAML 格式",
     "toolGuardRulesReset": "已恢复默认规则",
@@ -3897,17 +3897,9 @@
           "title": "控制台一键升级",
           "body": "优先使用左侧「检查更新」与「立即升级」（非源码/可编辑安装）。服务模式可在完成后点「重启服务」。"
         },
-        "installer": {
-          "title": "一键安装脚本",
-          "body": "若你是用官方安装脚本装的，重新执行同一安装命令即可自动升级到最新版（会复用 ~/.octop 下的环境与数据）。"
-        },
         "cli": {
           "title": "CLI：octop update",
-          "body": "若命令行可直接使用 octop（安装脚本或 venv 布局），在终端执行："
-        },
-        "pip": {
-          "title": "pip 安装",
-          "body": "若你是用 pip 装到自己的 Python 环境，可升级包本身："
+          "body": "若命令行可直接使用 octop（托管 venv 布局），在终端执行："
         },
         "source": {
           "title": "源码安装",
@@ -4396,7 +4388,7 @@
       "extraBodyLabel": "高级模型参数（JSON）",
       "extraBodyHint": "可填写模型支持的思考深度等参数，例如 reasoning_effort。仅用于首选的 OpenAI 兼容模型，回退时不携带；这些参数优先于上方思考模式。留空恢复默认。",
       "extraBodyInvalid": "模型扩展参数必须是有效的 JSON 对象",
-      "upgradeHint": "请配套更新记忆运行组件（octop-harness）。当前不可用的设置已禁用，更新后会恢复。",
+      "upgradeHint": "请配套更新记忆运行组件。当前不可用的设置已禁用，更新后会恢复。",
       "upgradeRequired": "当前版本尚不支持全部调用设置",
       "callParametersTitle": "提炼调用参数"
     },

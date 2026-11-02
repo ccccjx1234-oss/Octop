@@ -86,7 +86,7 @@ async def agent_mcp_get(
     )
 
 
-@router.delete("/mcp/agents", status_code=204, summary="Close an 会火 Agent MCP session")
+@router.delete("/mcp/agents", status_code=204, summary="Close a 会火 Agent MCP session")
 async def agent_mcp_delete(_user: Any = Depends(current_user)) -> Response:
     """Acknowledge Streamable HTTP session cleanup."""
     return Response(status_code=204)

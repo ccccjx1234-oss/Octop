@@ -16,7 +16,7 @@ from octop.infra.errors import OctopError
 
 @click.group()
 def bridge() -> None:
-    """Manage remote Octop bridge peers (add / edit / probe / connect)."""
+    """Manage remote 会火 bridge peers (add / edit / probe / connect)."""
 
 
 def _resolve_owner(as_user: str | None) -> int:
@@ -138,7 +138,7 @@ def get_connection(connection_id: str, as_user: str | None) -> None:
 
 @bridge.command("probe")
 @click.argument("connection_id", required=False)
-@click.option("--url", "--peer-url", "peer_base_url", default=None, help="Remote Octop base URL.")
+@click.option("--url", "--peer-url", "peer_base_url", default=None, help="Remote 会火 base URL.")
 @click.option(
     "--peer-user",
     "--username",
@@ -192,7 +192,7 @@ def probe(
 
 
 @bridge.command("create")
-@click.option("--url", "--peer-url", "peer_base_url", required=True, help="Remote Octop base URL.")
+@click.option("--url", "--peer-url", "peer_base_url", required=True, help="Remote 会火 base URL.")
 @click.option(
     "--peer-user",
     "--username",
@@ -256,7 +256,7 @@ def create(
 @click.option("--name", "display_name", default=None, help="Local display name.")
 @click.option("--notes", default=None, help="Local notes; pass empty string to clear.")
 @click.option("--icon", "icon_name", default=None, help="Lucide icon key; empty to clear.")
-@click.option("--url", "--peer-url", "peer_base_url", default=None, help="Remote Octop base URL.")
+@click.option("--url", "--peer-url", "peer_base_url", default=None, help="Remote 会火 base URL.")
 @click.option(
     "--peer-user",
     "--username",

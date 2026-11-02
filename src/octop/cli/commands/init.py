@@ -46,7 +46,7 @@ def init(
     force: bool,
     non_interactive: bool,
 ) -> None:
-    """Bootstrap an Octop server (~/.octop dir, DB migrations, first admin)."""
+    """Bootstrap a 会火 server (~/.octop dir, DB migrations, first admin)."""
     from octop.config import load_config
     from octop.infra.agents.plugins.manager import PluginManager
     from octop.infra.db.factory import open_database
@@ -75,7 +75,7 @@ def init(
                 from octop.cli.support import prompts as _prompts
 
                 if not _prompts.confirm(
-                    f"Wipe {home}? This deletes ALL Octop state.", default=False
+                    f"Wipe {home}? This deletes ALL 会火 state.", default=False
                 ):
                     click.echo("aborted", err=True)
                     raise SystemExit(1)
@@ -128,6 +128,6 @@ def init(
     finally:
         db.close()
 
-    click.echo(f"\u2705 Octop bootstrapped at {home}")
+    click.echo(f"\u2705 会火 bootstrapped at {home}")
     click.echo(f"   admin user: {username}")
     click.echo("   next: `octop run` (optional: `octop agent use <id>` to pin default agent)")

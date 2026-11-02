@@ -978,7 +978,7 @@ write_systemd_units() {
 
     cat > "/etc/systemd/system/${SVC_XVNC}.service" << UNIT_EOF
 [Unit]
-Description=Octop virtual desktop - Xvnc
+Description=会火 virtual desktop - Xvnc
 After=network.target
 
 [Service]
@@ -994,7 +994,7 @@ UNIT_EOF
 
     cat > "/etc/systemd/system/${SVC_SESSION}.service" << UNIT_EOF
 [Unit]
-Description=Octop virtual desktop - D-Bus session
+Description=会火 virtual desktop - D-Bus session
 After=${SVC_XVNC}.service
 Wants=${SVC_XVNC}.service
 
@@ -1010,7 +1010,7 @@ UNIT_EOF
 
     cat > "/etc/systemd/system/${SVC_OPENBOX}.service" << UNIT_EOF
 [Unit]
-Description=Octop virtual desktop - Openbox
+Description=会火 virtual desktop - Openbox
 After=${SVC_XVNC}.service ${SVC_SESSION}.service
 Wants=${SVC_XVNC}.service
 

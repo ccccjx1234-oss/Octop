@@ -27,17 +27,12 @@ import styles from "./UpdateConfig.module.less";
 
 /** Shell snippets shown in the manual upgrade guide (commands are locale-agnostic). */
 const UPGRADE_GUIDE_CODE = {
-  installerUnix: `curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash`,
-  installerWin: `irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex`,
   cli: `octop update
 # or non-interactive:
 octop update --yes
 # pre-release (beta) requires --allow-prerelease:
 # octop update --allow-prerelease --yes`,
-  pip: `pip install -U octop
-# optional extras, e.g. browser automation:
-# pip install -U "octop[browser]"`,
-  source: `cd Octop
+  source: `cd octop
 git pull
 make build-frontend
 # or: cd dashboard && npm ci && npm run build && cd ..
@@ -61,20 +56,11 @@ octop service restart
 octop run`,
 } as const;
 
-type GuideMethodKey =
-  | "ui"
-  | "installer"
-  | "cli"
-  | "pip"
-  | "source"
-  | "docker"
-  | "restart";
+type GuideMethodKey = "ui" | "cli" | "source" | "docker" | "restart";
 
 const GUIDE_METHOD_ORDER: GuideMethodKey[] = [
   "ui",
-  "installer",
   "cli",
-  "pip",
   "source",
   "docker",
   "restart",
@@ -82,18 +68,8 @@ const GUIDE_METHOD_ORDER: GuideMethodKey[] = [
 
 function codeFor(key: GuideMethodKey): string | null {
   switch (key) {
-    case "installer":
-      return [
-        `# macOS / Linux`,
-        UPGRADE_GUIDE_CODE.installerUnix,
-        ``,
-        `# Windows (PowerShell)`,
-        UPGRADE_GUIDE_CODE.installerWin,
-      ].join("\n");
     case "cli":
       return UPGRADE_GUIDE_CODE.cli;
-    case "pip":
-      return UPGRADE_GUIDE_CODE.pip;
     case "source":
       return UPGRADE_GUIDE_CODE.source;
     case "docker":

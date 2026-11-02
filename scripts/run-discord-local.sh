@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bridge_dir="$(cd ../octop-gateway && pwd)"
 if [[ ! -x .venv/bin/python ]]; then
-  echo "Create the Octop development environment first: uv sync --extra dev" >&2
+  echo "Create the 会火 development environment first: uv sync --extra dev" >&2
   exit 1
 fi
 if ! .venv/bin/python - "$bridge_dir" <<'PY'

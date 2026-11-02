@@ -690,7 +690,7 @@ elif [ ! -f "$APPLIED" ]; then
     octop user passwd "$USER_NAME" --password "$PASSWORD" || true
     : > "$APPLIED"
 fi
-echo "[fnos-boot] 正在启动 Octop，端口 $PORT ..."
+echo "[fnos-boot] 正在启动会火，端口 $PORT ..."
 exec octop run --host 0.0.0.0 --port "$PORT"
 EOF
     chmod 755 "${data_dir}/fnos-boot.sh" 2>/dev/null || true
@@ -744,7 +744,7 @@ octop_write_login_file() {
     file="${data_dir}/octop-login.txt"
     cat > "$file" << EOF
 ==========================================================
- Octop 管理员登录信息（请妥善保管，勿泄露给他人）
+ 会火管理员登录信息（请妥善保管，勿泄露给他人）
 ==========================================================
 访问地址：http://<飞牛IP>:${port}
 管理员账号：${username}
@@ -768,7 +768,7 @@ octop_render_config_wizard() {
     [ -d "$wizard_dir" ] || return 0
     target="${wizard_dir}/config"
     content="$(cat "$template" 2>/dev/null)" || return 0
-    dir_label="${data_dir:-应用共享 / Octop 数据目录}"
+    dir_label="${data_dir:-应用共享 / 会火数据目录}"
     content="${content//<octop-current-username>/${username}}"
     content="${content//<octop-current-password>/${password}}"
     content="${content//<octop-data-dir>/${dir_label}}"

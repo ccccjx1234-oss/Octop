@@ -5,7 +5,7 @@
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleName</key>
-        <string>Octop</string>
+        <string>会火</string>
         <key>CFBundleExecutable</key>
         <string>Octop</string>
         <key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
         <key>CFBundleVersion</key>
         <string>0.9.26.dev</string>
         <key>CFBundleGetInfoString</key>
-        <string>Octop desktop shell (dev)</string>
+        <string>会火桌面端（开发版）</string>
         <key>CFBundleShortVersionString</key>
         <string>0.9.26.dev</string>
         <key>CFBundleIconFile</key>
@@ -23,7 +23,7 @@
         <key>NSHighResolutionCapable</key>
         <string>true</string>
         <key>NSHumanReadableCopyright</key>
-        <string>Copyright © 2026</string>
+        <string>Copyright © 2026 会火</string>
         <key>NSAppTransportSecurity</key>
         <dict>
             <key>NSAllowsArbitraryLoads</key>

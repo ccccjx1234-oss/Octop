@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-GITHUB_REPO = "TencentCloud/Octop"
+GITHUB_REPO = "ccccjx1234-oss/Octop"
 DOWNLOAD_BASE = f"https://github.com/{GITHUB_REPO}/releases/download"
 
 

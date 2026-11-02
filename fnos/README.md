@@ -1,12 +1,12 @@
-# Octop — 飞牛 FnOS 安装包
+# Huihuo — 飞牛 FnOS 安装包
 
-本目录包含将 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 打包为飞牛 fnOS `.fpk` 安装包所需的全部文件，并附带自动同步上游 + 自动构建的 GitHub Actions。
+本目录包含将 Huihuo 打包为飞牛 fnOS `.fpk` 安装包所需的全部文件，并附带自动同步上游 + 自动构建的 GitHub Actions。
 
 ## 首次使用（初始账号）
 
-安装向导中设置管理员账号：用户名与密码必填，显示名称、邮箱可选。密码至少 8 位，且必须同时包含字母和数字（与应用侧密码策略一致；过于常见的密码如 `Octop123` 会被拒绝，无效输入会在安装时直接提示）。
+安装向导中设置管理员账号：用户名与密码必填，显示名称、邮箱可选。密码至少 8 位，且必须同时包含字母和数字（与应用侧密码策略一致；过于常见的密码如 `Huihuo123` 会被拒绝，无效输入会在安装时直接提示）。
 
-密码由用户自己设定，不再自动生成。忘记时打开飞牛「文件管理」，进入应用共享里的 Octop 数据目录，查看 `octop-login.txt`（应用「设置」窗口会显示当前目录）。该文件只备份安装或应用「设置」改密时的密码，**网页改密后不会自动更新**。
+密码由用户自己设定，不再自动生成。忘记时打开飞牛「文件管理」，进入应用共享里的 Huihuo 数据目录，查看 `octop-login.txt`（应用「设置」窗口会显示当前目录）。该文件只备份安装或应用「设置」改密时的密码，**网页改密后不会自动更新**。
 
 > 若你在 Web 控制台「头像菜单 → 修改密码」中改过密码，请用网页密码登录。
 
@@ -38,9 +38,9 @@ octop backup --help     # 备份/恢复
 | **本地版 ARM64** | `Octop-fnos-native-arm64-<ver>.fpk` | ~200 MB | 同上，site-packages 为 aarch64；勿装到 x86 | 无需 Docker；ARM 飞牛无 Docker 时再用 |
 
 - **Docker 版**实现为 FnOS `docker-project`：包体只含 `docker-compose.yaml` 与向导配置，运行时由飞牛从 GHCR 拉取镜像。x86 / ARM 飞牛共用这一份 FPK，Docker 按本机架构拉对应镜像层。ARM 飞牛优先用这一份。镜像已内置 `desktop` 桌面控制与前端；Playwright Chromium 不预装，可在控制台按需安装。
-- **本地版**实现为 FnOS 原生 `app`：解释器复用飞牛「Python 3.12」开发工具；包内是 Octop 核心依赖与前端。专家 shell / 技能若要跑 `node` / `npx`，会复用飞牛已装的 Node.js（不强制安装）。扩展里的 `.so` 与 CPU 架构绑定，因此 x86 与 ARM 各打一份；装错架构会在安装或启动时报错。
+- **本地版**实现为 FnOS 原生 `app`：解释器复用飞牛「Python 3.12」开发工具；包内是 Huihuo 核心依赖与前端。专家 shell / 技能若要跑 `node` / `npx`，会复用飞牛已装的 Node.js（不强制安装）。扩展里的 `.so` 与 CPU 架构绑定，因此 x86 与 ARM 各打一份；装错架构会在安装或启动时报错。
 
-> 上述包随正式版一起挂在 **`v*` GitHub Release** 上（例如 [v0.9.31](https://github.com/TencentCloud/Octop/releases/latest)）：`Octop-fnos-docker-<ver>.fpk` / `Octop-fnos-native-<ver>.fpk` / `Octop-fnos-native-arm64-<ver>.fpk`。
+> 上述包随正式版一起挂在 **`v*` GitHub Release** 上：`Octop-fnos-docker-<ver>.fpk` / `Octop-fnos-native-<ver>.fpk` / `Octop-fnos-native-arm64-<ver>.fpk`。
 
 ## 目录结构
 

@@ -5,11 +5,11 @@
 version: "3"
 
 info:
-  companyName: "Octop"
-  productName: "Octop"
+  companyName: "Huihuo"
+  productName: "会火"
   productIdentifier: "com.tencent.octop"
-  description: "Octop desktop shell"
-  copyright: "(c) 2026, Octop"
+  description: "会火桌面端"
+  copyright: "(c) 2026, 会火"
   comments: "Wails v3 + green portable"
   version: "0.9.26"
 

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a defect or unexpected behavior in Octop
+about: Report a defect or unexpected behavior in Huihuo
 title: "[bug] "
 labels: bug
 ---

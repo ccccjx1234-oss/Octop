@@ -1,4 +1,4 @@
-"""Octop — smarter self-hosted AI assistant (multi-user, multi-agent)."""
+"""会火 — smarter self-hosted AI assistant (multi-user, multi-agent)."""
 
 from __future__ import annotations
 
