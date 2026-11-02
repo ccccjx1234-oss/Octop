@@ -509,7 +509,7 @@ export default function Sidebar({
   const brandInner = (
     <>
       <img
-        src={isRailCollapsed ? "/pwa-192.png" : wordmarkSrc}
+        src={isRailCollapsed ? publicUrl("pwa-192.png") : wordmarkSrc}
         alt="会火"
         style={{
           height: isRailCollapsed ? 32 : isMobile ? 38 : 36,
