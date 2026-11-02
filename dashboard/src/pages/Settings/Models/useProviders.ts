@@ -75,7 +75,10 @@ export interface ProviderRow {
   name: string;
   kind: string;
   base_url: string | null;
-  api_key: string | null;
+  /** Present only on older responses. List endpoints now send the fields below. */
+  api_key?: string | null;
+  api_key_set?: boolean;
+  api_key_preview?: string | null;
   models: ProviderModel[];
   note: string | null;
   enabled: boolean;

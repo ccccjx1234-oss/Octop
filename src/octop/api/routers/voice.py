@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
 
+from octop.api.common.secret_fields import api_key_public_fields
 from octop.api.deps import (
     current_user,
     get_server,
@@ -58,6 +59,46 @@ def _active_payload(mgr: VoiceManager) -> dict[str, Any]:
     return active
 
 
+def _public_voice_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    """Drop credential fields. ``secret_key_set`` tells the form a key is stored."""
+    public = dict(extra)
+    secret = public.pop("secret_key", None)
+    if isinstance(secret, str) and secret.strip():
+        public["secret_key_set"] = True
+    else:
+        public.pop("secret_key_set", None)
+    return public
+
+
+def _merge_voice_extra(stored_json: str | None, incoming_json: str | None) -> str | None:
+    """Keep a stored Tencent secret when the client omits it.
+
+    Read endpoints no longer return ``secret_key``. An unchanged form posts
+    the public extra back; an empty or missing secret must not wipe the row.
+    A non-empty value still replaces it.
+    """
+    if incoming_json is None:
+        return None
+    try:
+        incoming = json.loads(incoming_json)
+    except json.JSONDecodeError:
+        return incoming_json
+    if not isinstance(incoming, dict):
+        return incoming_json
+    stored: dict[str, Any] = {}
+    if stored_json:
+        try:
+            parsed = json.loads(stored_json)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            stored = parsed
+    incoming.pop("secret_key_set", None)
+    if not str(incoming.get("secret_key") or "").strip() and stored.get("secret_key"):
+        incoming["secret_key"] = stored["secret_key"]
+    return json.dumps(incoming)
+
+
 def _row_to_dict(r: Any) -> dict[str, Any]:
     return {
         "id": r.id,
@@ -65,8 +106,8 @@ def _row_to_dict(r: Any) -> dict[str, Any]:
         "kind": r.kind,
         "capability": r.capability,
         "base_url": r.base_url,
-        "api_key": r.api_key,
-        "extra": r.get_extra(),
+        **api_key_public_fields(r.api_key),
+        "extra": _public_voice_extra(r.get_extra()),
         "note": r.note,
         "enabled": bool(r.enabled),
     }
@@ -382,7 +423,7 @@ async def admin_patch_voice_provider(
         capability=body.capability,
         base_url=body.base_url,
         api_key=body.api_key,
-        extra_json=body.extra_json,
+        extra_json=_merge_voice_extra(row.extra_json, body.extra_json),
         note=body.note,
         enabled=body.enabled,
     )
@@ -430,13 +471,20 @@ async def admin_test_voice_configuration(
     _: Any = Depends(require_permission("voice")),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
+    api_key = body.api_key
+    extra_json = body.extra_json
+    if not (api_key or "").strip():
+        stored = server.services.voice_provider_repo.get_by_name(body.name)
+        if stored is not None:
+            api_key = stored.api_key
+            extra_json = _merge_voice_extra(stored.extra_json, extra_json)
     return await _voice_manager(server).test_configuration(
         name=body.name,
         kind=body.kind,
         capability=body.capability,
         base_url=body.base_url,
-        api_key=body.api_key,
-        extra_json=body.extra_json,
+        api_key=api_key,
+        extra_json=extra_json,
         mode=body.mode,
         locale=resolve_request_locale(request),
     )

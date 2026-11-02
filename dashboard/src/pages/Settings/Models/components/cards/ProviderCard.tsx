@@ -11,7 +11,11 @@ import { useTranslation } from "react-i18next";
 import { request } from "../../../../../api/request";
 import { ollamaModelApi } from "../../../../../api/modules/ollamaModel";
 import { onnxModelApi } from "../../../../../api/modules/onnxModel";
-import { isOllamaProviderRow, isOnnxProviderRow } from "../../presetUtils";
+import {
+  isOllamaProviderRow,
+  isOnnxProviderRow,
+  providerHasApiKey,
+} from "../../presetUtils";
 import type { ProviderRow } from "../../useProviders";
 import { ProviderConfigModal } from "../modals/ProviderConfigModal";
 import {
@@ -51,7 +55,7 @@ export function ProviderCard({
   const isOnnx = isOnnxProviderRow(provider);
   const isLocalRuntime = isOllama || isOnnx;
 
-  const hasApiKey = !!provider.api_key && provider.api_key.length > 0;
+  const hasApiKey = providerHasApiKey(provider);
   /** green = ready, blue = configured but off, gray = missing credentials */
   const statusTone: "active" | "configured" | "inactive" = !hasApiKey
     ? "inactive"
@@ -147,12 +151,7 @@ export function ProviderCard({
   };
 
   // Mask api_key for display: show first 4 + last 4, mask middle.
-  const maskedKey = (() => {
-    if (!provider.api_key) return null;
-    const k = provider.api_key;
-    if (k.length <= 10) return "•".repeat(k.length);
-    return `${k.slice(0, 4)}${"•".repeat(6)}${k.slice(-4)}`;
-  })();
+  const maskedKey = provider.api_key_preview ?? null;
 
   // Try lookup by name, lowercase name, then fall back to custom logo.
   // Provider names like "DeepSeek" → "deepseek", "Tencent Cloud Coding Plan" → try both.

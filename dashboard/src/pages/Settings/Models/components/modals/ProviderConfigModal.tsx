@@ -33,7 +33,11 @@ import {
   setOnnxDownloadProgressHandler,
   watchOnnxDownload,
 } from "../../../../../api/modules/onnxDownloadWatcher";
-import { looksLikeOllamaProvider, isOnnxProviderRow } from "../../presetUtils";
+import {
+  looksLikeOllamaProvider,
+  isOnnxProviderRow,
+  providerHasApiKey,
+} from "../../presetUtils";
 import { expandOllamaDownloadedIds } from "../../ollamaNames";
 import { ModelListEditor } from "./ModelListEditor";
 import { StreamUsageAdvanced } from "../StreamUsageAdvanced";
@@ -98,7 +102,7 @@ export function ProviderConfigModal({
   const [form] = Form.useForm<ProviderConfigForm>();
   const [draftModels, setDraftModels] = useState<ProviderModel[]>([]);
 
-  const hasApiKey = !!provider.api_key && provider.api_key.length > 0;
+  const hasApiKey = providerHasApiKey(provider);
   const isOllama = looksLikeOllamaProvider(provider);
   const isOnnx = isOnnxProviderRow(provider);
   const [downloadedIds, setDownloadedIds] = useState<string[]>([]);
@@ -846,7 +850,8 @@ export function ProviderConfigModal({
           ? await testProviderDraft({
               name: provider.name,
               kind: provider.kind,
-              api_key: draftApiKey || provider.api_key || undefined,
+              api_key: draftApiKey || undefined,
+              provider_id: draftApiKey ? undefined : provider.id,
               base_url: draftBaseUrl || provider.base_url,
               model_id: modelId,
               api_mode: apiMode,
@@ -941,8 +946,8 @@ export function ProviderConfigModal({
       }
       const draftApiKey = (values.api_key as string | undefined)?.trim();
       const draftBaseUrl = (values.base_url as string | undefined)?.trim();
-      const apiKey = draftApiKey || provider.api_key || "";
-      if (!apiKey) {
+      const apiKey = draftApiKey || "";
+      if (!apiKey && !hasApiKey) {
         message.warning(t("models.pleaseEnterApiKey"));
         return;
       }
@@ -950,7 +955,8 @@ export function ProviderConfigModal({
       setFetchingModels(true);
       const result = await fetchProviderModels({
         kind: "openai",
-        api_key: apiKey,
+        api_key: apiKey || undefined,
+        provider_id: apiKey ? undefined : provider.id,
         base_url: draftBaseUrl || provider.base_url,
         name: provider.name,
       });
