@@ -524,7 +524,7 @@ export default function LoginPage() {
           ? publicUrl("logo_horizontal_white.png")
           : publicUrl("logo_horizontal_dark.png")
       }
-      alt="Octop"
+      alt="会火"
       style={{
         height: 48,
         width: "auto",
