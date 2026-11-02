@@ -21,7 +21,8 @@ Use the web console, Feishu, DingTalk, QQ, WeChat, WeCom, Telegram, Discord, or 
 |---|---------|-------------|
 | 👥 | **Multi-user workspace** | One admin, multiple members; each user gets isolated agents, workspaces, providers, channels, and scheduled jobs |
 | 🎭 | **Expert team** | Built-in expert library, 16 MBTI persona templates, and a coordinator that schedules multiple experts on multi-step work |
-| 🔌 | **Connectors** | OAuth and MCP connectors for Feishu, DingTalk, WeCom, WeChat, Tencent Docs, Notion, and more — including custom MCP servers such as ERP |
+| 🔐 | **Account security** | TOTP, passkey passwordless sign-in, recovery codes, and remembered-session renewal |
+| 🔌 | **Connectors** | OAuth and MCP connectors for Feishu, DingTalk, WeCom, WeChat, Tencent Docs, Notion, Ragflow, and more — including custom MCP servers such as ERP |
 | 📚 | **Knowledge base** | RAG over private documents, shareable within one deployment |
 | 💾 | **Pluggable storage** | Local disk, Docker sandbox, PostgreSQL, or S3/COS for agent files, separate from the control-plane database |
 | 🧠 | **Portable memory** | Agent memory travels with the workspace and survives restarts |

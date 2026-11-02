@@ -102,6 +102,15 @@ def test_run_migrations_idempotent(db: SqlitePool):
     assert v == 25
     assert "login_failed_count" in cols
     assert "login_locked_until" in cols
+    assert {"mfa_version", "mfa_failed_count", "mfa_locked_until", "password_version"}.issubset(
+        cols
+    )
+    assert {
+        "user_totp",
+        "user_webauthn_credentials",
+        "user_recovery_codes",
+        "auth_challenges",
+    }.issubset(table_names)
     assert "preferences_json" in cols
     assert "permissions" in cols
     assert "workspace_root_dir" not in cols
@@ -285,6 +294,10 @@ def test_migration_005_preserves_populated_users_and_constraints(tmp_path: Path)
             "permissions": "[]",
             "role_name": None,
             "avatar_icon": None,
+            "mfa_version": 0,
+            "mfa_failed_count": 0,
+            "mfa_locked_until": 0,
+            "password_version": 0,
         }
         assert dict(agent) == {
             "agent_id": "legacy-agent",
