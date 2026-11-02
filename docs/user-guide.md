@@ -37,15 +37,12 @@
   - [5.9 远程桌面与浏览器 AI](#59-远程桌面与浏览器-ai)
 - [六、常用命令速查](#六常用命令速查)
 - [七、常见问题](#七常见问题)
-- [八、插图清单](#八插图清单)
 
 ---
 
 ## 一、简介
 
 **会火** 是一个自托管的 AI 助手平台，支持多用户、多 Agent。它在单进程中同时提供 Web 控制台、CLI、IM 通道（飞书、钉钉、QQ、Discord、企业微信等）和定时任务，所有数据都保存在你自己的机器上。
-
-![图 1.1 — 会火产品总览](assets/overview.png)
 
 核心特性速览：
 
@@ -147,8 +144,6 @@ octop service start   # Linux(systemd) / macOS(launchd) / Windows 服务
 
 设置向导为分步引导，依次完成以下步骤（若关闭了 `require_setup_password`，则从「数据库」步开始）：
 
-![图 3.1 — 设置向导步骤条](assets/setup-01-steps.png)
-
 **步骤 1：设置密码（可选）**
 
 - 首次配置需要一个临时「设置密码」作为保护（默认开启）。
@@ -170,8 +165,6 @@ octop service start   # Linux(systemd) / macOS(launchd) / Windows 服务
 - 该账号为首个管理员，拥有用户管理、系统设置等最高权限。
 - 记下该账号，后续登录与日常使用都依赖它。
 
-![图 3.2 — 创建管理员账号](assets/setup-02-admin.png)
-
 **步骤 4：配置模型（LLM 供应商）**
 
 - 选择预设供应商（如 OpenAI、DeepSeek、Ollama 等）或自定义供应商。
@@ -180,8 +173,6 @@ octop service start   # Linux(systemd) / macOS(launchd) / Windows 服务
 - 该步骤可**跳过**（Skip），稍后在控制台「设置 → 模型 / 供应商」中再配置。
 
 详见下一节 [四、配置模型](#四配置模型llm-供应商)。
-
-![图 3.3 — 向导中的模型配置](assets/setup-03-model.png)
 
 **步骤 5：完成**
 
@@ -232,8 +223,6 @@ octop run
 - **Base URL**：API 接入地址（如 `https://api.openai.com/v1`）。
 - **API Key**：服务商提供的密钥。
 
-![图 4.1 — 自定义供应商与模型选择](assets/model-01-custom.png)
-
 ### 4.3 选择模型并测试连接
 
 1. 在供应商下勾选要启用的模型（可全选 / 全不选）。
@@ -249,8 +238,6 @@ octop run
 - 新增 / 编辑 / 删除供应商。
 - 为一个供应商增删模型（含自定义模型 ID、上下文窗口、最大 Token、是否支持推理）。
 - 为不同 Agent 指定默认供应商与模型。
-
-![图 4.2 — 控制台模型管理](assets/model-02-manage.png)
 
 ### 4.5 通过 CLI 配置供应商
 
@@ -289,23 +276,17 @@ octop provider --help     # 供应商增删改查帮助
 
 > ⚠️ **安全提醒**：Docker 若未设置合格的 `OCTOP_DEFAULT_PASSWORD`，首次打开会进入设置向导（向导口令在 `/data/.octop/octop-login.txt`，可用 `docker exec <容器> cat /data/.octop/octop-login.txt` 查看）。无论哪种方式，都请尽快在 **个人设置 → 修改密码** 中更换，避免服务暴露到公网时被未授权访问。
 
-![图 5.1 — 登录页面](assets/use-01-login.png)
-
 ### 5.2 对话（Chat）
 
 - 进入 **对话** 页面，选择当前 Agent 即可开始实时聊天。
 - 支持多轮对话、附件上传、工具调用展示。
 - 可在对话中通过斜杠命令（slash）触发特定能力。
 
-![图 5.2 — 对话主界面](assets/use-02-chat.png)
-
 ### 5.3 创建 Agent（专家库 / MBTI 人格）
 
 - 进入 **Agent → 专家** 页面，从专家库模板中选择专业角色（如写作、编程、数据分析），一键创建。
 - 选择 **MBTI 人格** 模板为 Agent 赋予性格（也可做人格测试自动生成）。
 - 为该 Agent 指定 **供应商与模型**、工作区后端。
-
-![图 5.3 — 专家库（创建 Agent）](assets/use-03-agent.png)
 
 ### 5.4 连接器（Connectors）
 
@@ -326,14 +307,10 @@ octop provider --help     # 供应商增删改查帮助
 | 企业微信 | Corp ID、Agent Secret |
 | Web 控制台 | 默认启用 |
 
-![图 5.4 — 通道配置](assets/use-04-channels.png)
-
 ### 5.6 定时任务（Cron）
 
 - 进入 **定时任务** 页面，可视化创建 Cron 任务。
 - 支持自然语言或斜杠命令触发，让 Agent 按时推送或执行任务。
-
-![图 5.5 — 定时任务管理](assets/use-05-cron.png)
 
 ### 5.7 ACP（与 IDE / 编码 Agent 协作）
 
@@ -360,19 +337,13 @@ octop provider --help     # 供应商增删改查帮助
 
 > 手动编辑配置文件：运行时参数保存在 `~/.octop/config.json`，可用环境变量覆盖（如 `OCTOP_PORT`、`OCTOP_BIND_HOST`）。详见 [docs/configuration.md](configuration.md)。
 
-![图 5.6 — 设置页面](assets/use-06-settings.png)
-
 ### 5.9 远程桌面与浏览器 AI
 
 在 **控制台 → 控制（Control）** 页面中可使用：
 
 - **远程桌面**：实时查看屏幕并控制键鼠，支持 Linux / Windows / macOS；无图形的 Linux 可一键创建隔离桌面，适合远程办公与 GUI 软件操作。
 
-![图 5.7 — 远程桌面](assets/use-07-remote-desktop.png)
-
 - **浏览器 AI+**：基于 Chromium 的无头会话，支持网页自动化、截图与远程浏览，内置 AI 助手与技能录制。
-
-![图 5.8 — 浏览器 AI+](assets/use-08-browser-ai.png)
 
 ---
 
@@ -432,35 +403,8 @@ octop provider --help     # 供应商增删改查帮助
 ```
 
 **Q：如何升级？**
-- `octop update`（若通过一键安装）；或从 PyPI / 源码重新安装后重启服务。
-
-**Q：如何加入客户企业微信服务群？**
-- 请扫描下方二维码加入：
-
-![客户企业微信服务群二维码](assets/qrcode.png)
-
-> 二维码有效期至 **2026-08-03**，过期后请联系管理员更新。
+- 源码部署：`git pull`，重新构建前端（`make build-frontend`），再重启服务。
+- Docker 部署：重新构建镜像并重建容器，保留原有数据卷。
 
 ---
 
-## 八、插图清单
-
-文档中的插图汇总如下（已放置在 `docs/assets/` 目录）：
-
-| 编号 | 位置 | 文件名 | 状态 | 内容说明 |
-|------|------|--------|------|----------|
-| 图 1.1 | 一、简介 | `overview.png` | ✅ 已就位 | 会火品牌 Banner |
-| 图 3.1 | 3.2 向导步骤 | `setup-01-steps.png` | ✅ 已就位 | 向导步骤条（验证密码页） |
-| 图 3.2 | 3.2 管理员 | `setup-02-admin.png` | ✅ 已就位 | 创建管理员账号表单 |
-| 图 3.3 | 3.2 模型 | `setup-03-model.png` | ✅ 已就位 | 向导内预设供应商选择 |
-| 图 4.1 | 4.2 自定义 | `model-01-custom.png` | ✅ 已就位 | 自定义供应商弹窗 |
-| 图 4.2 | 4.4 管理 | `model-02-manage.png` | ✅ 已就位 | 控制台模型管理页（预设/自定义供应商列表） |
-| 图 5.1 | 5.1 登录 | `use-01-login.png` | ✅ 已就位 | 登录页面 |
-| 图 5.2 | 5.2 对话 | `use-02-chat.png` | ✅ 已就位 | 对话主界面（Welcome + 快捷卡片） |
-| 图 5.3 | 5.3 Agent | `use-03-agent.png` | ✅ 已就位 | 专家库模板列表 |
-| 图 5.4 | 5.5 通道 | `use-04-channels.png` | ✅ 已就位 | IM 通道开关列表 |
-| 图 5.5 | 5.6 Cron | `use-05-cron.png` | ✅ 已就位 | 创建定时任务弹窗 |
-| 图 5.6 | 5.8 设置 | `use-06-settings.png` | ✅ 已就位 | 应用设置页面 |
-| 图 5.7 | 5.9 远程桌面 | `use-07-remote-desktop.png` | ✅ 已就位 | 远程桌面连接页 |
-| 图 5.8 | 5.9 浏览器 AI | `use-08-browser-ai.png` | ✅ 已就位 | 浏览器 AI+ 会话页 |
-| 图 7.1 | 七、常见问题 | `qrcode.png` | ✅ 已就位 | 客户企业微信服务群二维码（有效期至 2026-08-03） |
