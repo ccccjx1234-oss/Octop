@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from octop.infra.agents.middleware import model_failover
 from octop.infra.agents.middleware.model_failover import SafeModelFailoverMiddleware
 from octop.infra.agents.providers.fallback_chain import (
+    fallback_ref_allowed,
     load_fallback_chain,
     save_fallback_chain,
 )
@@ -146,6 +147,12 @@ def test_unavailable_chain_ref_is_skipped(monkeypatch) -> None:
     )
 
     assert response.result[0].content == "ok"
+
+
+def test_missing_user_cannot_use_fallback_ref() -> None:
+    assert fallback_ref_allowed(None, "q/b", lambda _user_id, _ref: True) is False
+    assert fallback_ref_allowed(7, "q/b", lambda _user_id, _ref: True) is True
+    assert fallback_ref_allowed(7, "q/b", lambda _user_id, _ref: False) is False
 
 
 def test_chain_ref_denied_by_user_grant_is_not_tried(monkeypatch) -> None:

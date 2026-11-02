@@ -31,6 +31,7 @@ export interface DecisionServiceBody {
   endpoint: string;
   model: string;
   api_key?: string | null;
+  copy_api_key_from_provider?: string | null;
 }
 
 export interface DecisionSettingsBody {

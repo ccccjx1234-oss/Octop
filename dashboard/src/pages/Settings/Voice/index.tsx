@@ -107,7 +107,7 @@ export function VoiceSettingsPanel() {
   const openConfigure = (preset: VoicePreset) => {
     const existing = findConfigured(preset);
     setConfigure({ preset, existing });
-    setApiKey(existing?.api_key ?? "");
+    setApiKey("");
     const extra = existing?.extra ?? {};
     setSecretId(String(extra.secret_id ?? ""));
     setSecretKey(String(extra.secret_key ?? ""));
@@ -161,10 +161,12 @@ export function VoiceSettingsPanel() {
 
   const validateCredentials = () => {
     if (!configure?.preset.requires_key) return true;
+    const storedKey = Boolean(configure.existing?.api_key_set);
+    const storedSecret = configure.existing?.extra?.secret_key_set === true;
     const complete =
       configure.preset.kind === "tencent"
-        ? Boolean(secretId.trim() && secretKey.trim())
-        : Boolean(apiKey.trim());
+        ? Boolean(secretId.trim() && (secretKey.trim() || storedSecret))
+        : Boolean(apiKey.trim() || storedKey);
     if (!complete) message.warning(t("voice.credentialsRequired"));
     if (complete && realtimeStt && !appId.trim()) {
       message.warning(t("voice.realtimeAppIdRequired"));
@@ -429,7 +431,11 @@ export function VoiceSettingsPanel() {
               </Form.Item>
               <Form.Item label="SecretKey" required>
                 <Input.Password
-                  placeholder="SecretKey"
+                  placeholder={
+                    configure.existing?.extra?.secret_key_set
+                      ? t("voice.secretKept", "已保存，留空则不修改")
+                      : "SecretKey"
+                  }
                   value={secretKey}
                   onChange={(e) => setSecretKey(e.target.value)}
                 />

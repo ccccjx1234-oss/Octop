@@ -63,6 +63,7 @@ interface ServiceDraft {
   apiKey: string;
   apiKeySet: boolean;
   filledSavedKey: boolean;
+  copyFromProvider: string;
   edited: boolean;
 }
 
@@ -73,6 +74,7 @@ function blankDraft(): ServiceDraft {
     apiKey: "",
     apiKeySet: false,
     filledSavedKey: false,
+    copyFromProvider: "",
     edited: false,
   };
 }
@@ -110,6 +112,7 @@ function draftsFrom(
       apiKeySet:
         saved?.api_key_set ?? (selected ? settings.api_key_set : false),
       filledSavedKey: false,
+      copyFromProvider: "",
       edited: false,
     };
   }
@@ -170,7 +173,7 @@ function DrawerFields({
   apiKey,
   apiKeySet,
   filledSavedKey,
-  openRouterKey,
+  openRouterProviderName,
   onEndpoint,
   onModel,
   onApiKey,
@@ -184,7 +187,7 @@ function DrawerFields({
   apiKey: string;
   apiKeySet: boolean;
   filledSavedKey: boolean;
-  openRouterKey?: string | null;
+  openRouterProviderName?: string | null;
   onEndpoint: (value: string) => void;
   onModel: (value: string) => void;
   onApiKey: (value: string) => void;
@@ -221,7 +224,9 @@ function DrawerFields({
           (value) => ({ value, label: value }),
         );
   const showSavedKey =
-    cloud && Boolean(openRouterKey) && endpoint.includes("openrouter.ai");
+    cloud &&
+    Boolean(openRouterProviderName) &&
+    endpoint.includes("openrouter.ai");
   return (
     <div className={styles.drawerBody}>
       <div className={styles.drawerHint}>
@@ -351,9 +356,9 @@ function DrawerFields({
 }
 
 export function DecisionSettingsPanel({
-  openRouterKey,
+  openRouterProviderName,
 }: {
-  openRouterKey?: string | null;
+  openRouterProviderName?: string | null;
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -515,6 +520,10 @@ export function DecisionSettingsPanel({
             endpoint: connection.endpoint,
             model: connection.model,
             api_key: keep && drafts[id].apiKey ? drafts[id].apiKey : null,
+            copy_api_key_from_provider:
+              keep && !drafts[id].apiKey && drafts[id].copyFromProvider
+                ? drafts[id].copyFromProvider
+                : null,
           };
         }),
       });
@@ -881,7 +890,7 @@ export function DecisionSettingsPanel({
             apiKey={drafts[editing].apiKey}
             apiKeySet={drafts[editing].apiKeySet && !drafts[editing].apiKey}
             filledSavedKey={drafts[editing].filledSavedKey}
-            openRouterKey={openRouterKey}
+            openRouterProviderName={openRouterProviderName}
             layaActive={savedActive && savedProvider === "laya"}
             onLayaStatus={(status) => setLayaReady(status.running)}
             onEndpoint={(value) =>
@@ -894,9 +903,10 @@ export function DecisionSettingsPanel({
               patchDraft(editing, { apiKey: value, edited: true })
             }
             onUseSavedKey={() => {
-              if (!openRouterKey) return;
+              if (!openRouterProviderName) return;
               patchDraft(editing, {
-                apiKey: openRouterKey,
+                apiKey: "",
+                copyFromProvider: openRouterProviderName,
                 filledSavedKey: true,
                 edited: true,
               });

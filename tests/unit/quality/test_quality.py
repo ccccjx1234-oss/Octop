@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from octop.infra.agents.middleware.tool_permission import tool_allowed
+from octop.infra.agents.middleware.tool_permission import (
+    task_delegation_blocked,
+    tool_allowed,
+)
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.repos.evals import EvalCaseRow
@@ -189,7 +192,8 @@ def test_tool_gate_no_grant_allows_and_grant_narrows(repos: RepoBundle) -> None:
     assert not tool_allowed(repos, user_id=bob, tool_name="execute")
     assert tool_allowed(repos, user_id=admin, tool_name="execute")
     assert tool_allowed(repos, user_id=bob, tool_name="read_file")
-    assert tool_allowed(repos, user_id=None, tool_name="execute")
+    assert not tool_allowed(repos, user_id=None, tool_name="execute")
+    assert task_delegation_blocked(repos, user_id=None)
 
     repos.user_group_member_repo.remove(finance.user_group_id, ada)
     assert not tool_allowed(repos, user_id=ada, tool_name="execute")

@@ -199,9 +199,32 @@ export function isLocalNoKeyPresetId(presetId: string): boolean {
   return presetId === "ollama" || presetId === "onnx";
 }
 
-/** Stable placeholder api_key written when creating a local preset row. */
-function localPresetApiKey(provider: { api_key?: string | null }): string {
-  return (provider.api_key ?? "").trim().toLowerCase();
+const LOCAL_API_KEY_PLACEHOLDERS = new Set([
+  "ollama",
+  "onnx",
+  "lm-studio",
+  "sk-local",
+]);
+
+/** Stable placeholder stored for a local runtime, never a cloud secret. */
+function localPresetApiKey(provider: {
+  api_key?: string | null;
+  api_key_preview?: string | null;
+}): string {
+  const candidates = [provider.api_key_preview, provider.api_key];
+  for (const value of candidates) {
+    const key = (value ?? "").trim().toLowerCase();
+    if (LOCAL_API_KEY_PLACEHOLDERS.has(key)) return key;
+  }
+  return "";
+}
+
+export function providerHasApiKey(provider: {
+  api_key_set?: boolean;
+  api_key?: string | null;
+}): boolean {
+  if (typeof provider.api_key_set === "boolean") return provider.api_key_set;
+  return Boolean(provider.api_key && provider.api_key.length > 0);
 }
 
 function providerNameKey(name: string | null | undefined): string {
