@@ -260,3 +260,43 @@ def test_wrap_tools_for_shared_use() -> None:
     wrapped = wrap_tools_for_shared_use([inner], lock)
     assert len(wrapped) == 1
     assert isinstance(wrapped[0], StructuredTool)
+
+
+@pytest.mark.asyncio
+async def test_warm_mcp_tool_cache_loads_unique_user_servers() -> None:
+    from octop.infra.agents.manager import AgentManager
+
+    mgr = object.__new__(AgentManager)
+    mgr._mcp_tool_cache = {}
+    mgr._mcp_tool_cache_locks = {}
+    mgr._mcp_tool_cache_guard = asyncio.Lock()
+    mgr._paths = MagicMock(root=MagicMock())
+    mgr._connector_user_override = {}
+
+    mgr._repos = MagicMock()
+    mgr._repos.agent_repo.list_all.return_value = [
+        MagicMock(agent_id="A1", user_id=7, kind="chat"),
+        MagicMock(agent_id="A2", user_id=7, kind="chat"),
+        MagicMock(agent_id="A3", user_id=8, kind="chat"),
+    ]
+    mgr._connector_svc = MagicMock()
+    mgr._connector_svc.custom_harness_configs.side_effect = lambda uid: {
+        7: {"wiki": {"transport": "http", "url": "https://w"}},
+        8: {"erp": {"transport": "http", "url": "https://e"}},
+    }[uid]
+
+    calls: list[tuple[int, str]] = []
+
+    async def _load(user_id: int, name: str, spec: dict[str, Any]) -> list[Any]:
+        _ = spec
+        calls.append((user_id, name))
+        if name == "erp":
+            raise RuntimeError("boom")
+        return [MagicMock()]
+
+    mgr._get_or_load_mcp_tools = _load  # type: ignore[method-assign]
+
+    await mgr.warm_mcp_tool_cache()
+
+    # One load per unique (user, server); a failed server does not stop the rest.
+    assert calls == [(7, "wiki"), (8, "erp")]
