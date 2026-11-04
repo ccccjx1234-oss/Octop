@@ -2277,6 +2277,56 @@ class AgentManager:
             )
             return wrapped
 
+    async def warm_mcp_tool_cache(self) -> None:
+        """Preload custom MCP tools per user so the first chat skips cold connect.
+
+        Boot-time best effort: a failing server is logged and skipped; chat still
+        loads it on demand through ``prepare_chat_mcp``.
+        """
+        from octop.infra.agents.teams import is_team_agent
+
+        configs_by_user: dict[int, dict[str, Any]] = {}
+        loaded: set[tuple[int, str]] = set()
+        for row in self._repos.agent_repo.list_all(include_disabled=False):
+            if is_team_agent(row):
+                continue
+            user_id = self._connector_uid_for(row)
+            if user_id is None:
+                continue
+            configs = configs_by_user.get(user_id)
+            if configs is None:
+                try:
+                    configs = self._connector_svc.custom_harness_configs(user_id)
+                except Exception:
+                    logger.warning("mcp warm-up: configs failed user=%s", user_id, exc_info=True)
+                    configs = {}
+                configs_by_user[user_id] = configs
+            for name, spec in configs.items():
+                if (user_id, name) in loaded:
+                    continue
+                loaded.add((user_id, name))
+                if not isinstance(spec, dict) or not spec.get("transport"):
+                    continue
+                try:
+                    tools = await asyncio.wait_for(
+                        self._get_or_load_mcp_tools(user_id, name, spec),
+                        timeout=30,
+                    )
+                except Exception:
+                    logger.warning(
+                        "mcp warm-up: load failed user=%s server=%s",
+                        user_id,
+                        name,
+                        exc_info=True,
+                    )
+                    continue
+                logger.info(
+                    "mcp warm-up: ready user=%s server=%s tools=%d",
+                    user_id,
+                    name,
+                    len(tools),
+                )
+
     def merge_turn_mcp_servers(
         self,
         user_id: int,

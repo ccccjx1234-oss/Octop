@@ -682,6 +682,14 @@ class OctopServer:
 
         asyncio.create_task(_resume_bridges(), name="bridge-auto-resume")
 
+        # Warm custom MCP tool cache so a chat arriving right after boot does
+        # not pay the cold connect + tool listing per server (best-effort).
+        async def _warm_mcp_tools() -> None:
+            with suppress(Exception):
+                await registry.warm_mcp_tool_cache()
+
+        asyncio.create_task(_warm_mcp_tools(), name="mcp-tool-warmup")
+
     async def refresh_plugin_channels(self) -> None:
         """Reconcile only changed kinds and report registration failures to callers."""
         from octop.infra.errors import ErrorCode, OctopError
