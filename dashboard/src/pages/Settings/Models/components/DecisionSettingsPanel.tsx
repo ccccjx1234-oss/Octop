@@ -16,6 +16,7 @@ import {
 } from "antd";
 import { Activity, Settings2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import cx from "classnames";
 import {
   decisionApi,
   type DecisionProvider,
@@ -666,18 +667,17 @@ export function DecisionSettingsPanel({
                 return (
                   <div
                     key={id}
-                    className={`${styles.choice} ${
-                      selected ? styles.choiceOn : ""
-                    }`}
+                    className={cx(styles.choice, selected && styles.choiceOn)}
                     aria-pressed={selected}
                     onClick={() => selectProvider(id)}
                   >
                     <span className={styles.choiceTop}>
                       <span className={styles.logoTile}>
                         <img
-                          className={`${styles.logo} ${
-                            presetLogos[id].mark ? styles.logoMark : ""
-                          }`}
+                          className={cx(
+                            styles.logo,
+                            presetLogos[id].mark && styles.logoMark,
+                          )}
                           src={presetLogos[id].src}
                           alt=""
                         />
@@ -687,14 +687,15 @@ export function DecisionSettingsPanel({
                       </span>
                       <span className={styles.badgeRow}>
                         <span className={styles.badgePair}>
-                          <span
-                            className={`${styles.hostFlag} ${copy.hostTone}`}
-                          >
+                          <span className={cx(styles.hostFlag, copy.hostTone)}>
                             {copy.host}
                           </span>
                           {id === "laya" && layaReady ? (
                             <span
-                              className={`${styles.hostFlag} ${styles.serviceReady}`}
+                              className={cx(
+                                styles.hostFlag,
+                                styles.serviceReady,
+                              )}
                             >
                               {t("models.decisionServiceReady")}
                             </span>
@@ -702,7 +703,10 @@ export function DecisionSettingsPanel({
                         </span>
                         {configured && !selected ? (
                           <span
-                            className={`${styles.hostFlag} ${styles.serviceConfigured}`}
+                            className={cx(
+                              styles.hostFlag,
+                              styles.serviceConfigured,
+                            )}
                           >
                             {t("models.decisionConfiguredInactive")}
                           </span>
@@ -764,7 +768,7 @@ export function DecisionSettingsPanel({
                 return (
                   <div
                     key={name}
-                    className={`${styles.task} ${checked ? styles.taskOn : ""}`}
+                    className={cx(styles.task, checked && styles.taskOn)}
                     role="checkbox"
                     aria-checked={checked}
                     onClick={() => form.setFieldValue(name, !checked)}

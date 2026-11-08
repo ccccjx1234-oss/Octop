@@ -5,6 +5,7 @@ import type { TFunction } from "i18next";
 import AvatarDropdown from "../components/AvatarDropdown";
 import AppVersionBadge from "../components/AppVersionBadge";
 import { ArrowRightLeft, ChevronDown, X } from "lucide-react";
+import cx from "classnames";
 import { useTheme } from "../context/ThemeContext";
 import { useLayoutMode } from "../context/LayoutModeContext";
 import { useUserRole } from "../hooks/useUserRole";
@@ -352,9 +353,10 @@ function NavList({
               <ChevronDown
                 size={12}
                 strokeWidth={2}
-                className={`${styles.navGroupChevron} ${
-                  groupCollapsed ? styles.navGroupChevronFolded : ""
-                }`}
+                className={cx(
+                  styles.navGroupChevron,
+                  groupCollapsed && styles.navGroupChevronFolded,
+                )}
                 aria-hidden
               />
             </button>
@@ -798,7 +800,7 @@ export default function Sidebar({
       }}
     >
       <div
-        className={`${styles.sidebarBrand} ${DESKTOP_DRAG_REGION_CLASS}`}
+        className={cx(styles.sidebarBrand, DESKTOP_DRAG_REGION_CLASS)}
         style={{
           display: "flex",
           alignItems: "center",

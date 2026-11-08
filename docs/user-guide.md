@@ -67,16 +67,23 @@
 ### 2.2 源码安装（推荐）
 
 ```bash
-git clone <仓库地址> octop
-cd octop
-uv sync
-uv run octop init
-uv run octop run --host 0.0.0.0 --port 8088
+curl -fsSL https://download.octop.cloud/octop/scripts/install.sh | bash
 ```
 
 首次启动会引导创建管理员账号；运行数据保存在 `~/.octop/`。
 
-前端已随仓库提供构建产物。修改 `dashboard/` 后重新构建：
+```powershell
+irm https://download.octop.cloud/octop/scripts/install.ps1 | iex
+```
+
+**Windows（cmd）** —— 先下载再运行：
+
+```bat
+curl -fsSL https://download.octop.cloud/octop/scripts/install.bat -o install.bat
+install.bat
+```
+
+安装完成后，**打开一个新终端** 或重新加载 shell 配置，使 PATH 生效：
 
 ```bash
 make build-frontend
@@ -284,7 +291,7 @@ octop provider --help     # 供应商增删改查帮助
 
 ### 5.3 创建 Agent（专家库 / MBTI 人格）
 
-- 进入 **Agent → 专家** 页面，从专家库模板中选择专业角色（如写作、编程、数据分析），一键创建。
+- 进入 **专家** 页面，从专家市场选择模板（门户专家或本实例用户发布的模板）一键创建，也可以新建空白专家。
 - 选择 **MBTI 人格** 模板为 Agent 赋予性格（也可做人格测试自动生成）。
 - 为该 Agent 指定 **供应商与模型**、工作区后端。
 
@@ -387,6 +394,12 @@ octop provider --help     # 供应商增删改查帮助
 
 **Q：如何修改监听地址让局域网访问？**
 - 启动时：`octop run --host 0.0.0.0 --port 8088`；或设置环境变量 `OCTOP_BIND_HOST=0.0.0.0`、`OCTOP_PORT=8088`。
+
+**Q：局域网访问不了插件市场和专家市场？**
+- 这两处默认请求公网的 `octop.cloud`。在内网自建兼容目录的步骤见 [内网自建市场](private-market.md)。
+
+**Q：局域网访问不了技能市场？**
+- 技能页默认请求 `https://api.skillhub.cn`。在内网按同一接口自建，并设置 `SKILL_MARKET_ORIGIN`，见 [技能市场](skill-market.md)。技能包页「从技能市场导入」读取的技能集用 `SKILLSET_ORIGIN`，同一篇文档里有接口说明。
 
 **Q：数据存放在哪里？**
 - 全部在 `~/.octop/`：
