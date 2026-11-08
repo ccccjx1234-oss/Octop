@@ -35,4 +35,5 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "bridge": (".commands.bridge", "bridge", "Manage remote 会火 bridge peers."),
     "acp": (".commands.acp", "acp_cmd", "Run 会火 agent as ACP server (stdio)."),
     "plugin": (".commands.plugin", "plugin", "Install and manage plugins."),
+    "cloud": (".commands.cloud", "cloud", "Tencent Cloud credential bridge (tccli import)."),
 }
