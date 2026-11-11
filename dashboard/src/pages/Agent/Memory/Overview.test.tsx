@@ -78,13 +78,13 @@ describe("<Overview />", () => {
     expect(await screen.findByText("记忆已关闭")).toBeInTheDocument();
   });
 
-  it("keeps memory enabled for responses from an older API process", async () => {
+  it("treats a missing memory flag as disabled", async () => {
     stubOverview();
     const { memory_enabled: _legacyMissingField, ...legacyConfig } =
       memoryConfig;
     api.getExtractConfig.mockResolvedValue(legacyConfig);
     render(<Overview agentId="ZYWZTD" />);
-    expect(await screen.findByText("记忆运行中")).toBeInTheDocument();
+    expect(await screen.findByText("记忆已关闭")).toBeInTheDocument();
   });
 
   it("supports pipeline and settings navigation", async () => {

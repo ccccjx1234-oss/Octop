@@ -86,9 +86,19 @@ export function useMemoryMaintenance(
           setStatus(next);
           setConnectionLost(false);
         }
-      } catch {
-        // Keep the last known state; a later single-flight poll can recover.
-        if (!stop) setConnectionLost(true);
+      } catch (error) {
+        // 403/404 is not a dropped connection. Shared viewers and missing
+        // agents must not flip the banner or keep polling.
+        const message = error instanceof Error ? error.message : "";
+        const denied = message.includes("403") || message.includes("404");
+        if (!stop) {
+          if (denied) {
+            setConnectionLost(false);
+            stop = true;
+          } else {
+            setConnectionLost(true);
+          }
+        }
       } finally {
         if (!stop) timer = window.setTimeout(pull, nextDelay);
       }

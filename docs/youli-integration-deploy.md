@@ -93,3 +93,17 @@ cd dashboard && VITE_BASE_PATH=/aiwork/ npm run build
 产物写入 `src/octop/dashboard`，同步到上述目录后刷新页面；发布前保留
 `aiwork.bak.*` 目录用于回滚。
 
+### 登录路由与静态页面 403
+
+会火专用 Nginx 配置源文件为 `deploy/aiwork/aiwork-locations.conf`，服务器对应
+`/root/mcn/docker/nginx-edge/include/aiwork-locations.conf`。
+`/aiwork/login` 与 `/aiwork/login/` 均精确匹配并直接读取 `/aiwork/index.html`，避免
+历史 `login/youli/complete/` 回调目录触发目录跳转或目录首页 403。会火静态页面的
+403 通过命名 location 返回 302，跳至 `/aiwork/login`；登录页精确 location 不设置
+该错误跳转，避免循环。API 使用原代理 location，权限响应保持原语义。
+
+修改前备份配置，先执行 `docker exec mcn-edge-nginx nginx -t`，成功后执行
+`docker exec mcn-edge-nginx nginx -s reload`。定向核对两个登录地址返回同一 HTML、
+静态目录 403 跳回登录页，以及原回调和只读状态接口保持原响应。回滚时恢复配置
+备份，再校验并热加载。
+

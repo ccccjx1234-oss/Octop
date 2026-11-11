@@ -11,9 +11,19 @@ import hashlib
 import json
 import os
 import time
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
+from octop.infra.auth.youli.delivery_export import (
+    EXPORT_DESCRIPTION,
+    GET_DOWNLOAD_TASK_DESCRIPTION,
+    LIST_DELIVERY_PROJECTS_DESCRIPTION,
+    LIST_EXPORT_TEMPLATES_DESCRIPTION,
+    export_delivery_result,
+    get_download_task,
+    list_delivery_projects,
+    list_export_templates,
+)
 from octop.infra.auth.youli.mcn_client import McnClient, McnClientError
 
 _MAX_OUTPUT_CHARS = 8000
@@ -34,7 +44,7 @@ def _line_quantity(spec: dict[str, Any]) -> int:
     raw = spec.get("quantity")
     if raw in (None, ""):
         raw = spec.get("count") if spec.get("count") not in (None, "") else 1
-    quantity = int(raw)
+    quantity = int(str(raw))
     if quantity < 1 or quantity > 9999:
         raise ValueError("quantity")
     return quantity
@@ -74,7 +84,7 @@ def _turn_context() -> tuple[str, int | None]:
     if raw_user in (None, ""):
         return sid, None
     try:
-        return sid, int(raw_user)
+        return sid, int(str(raw_user))
     except (TypeError, ValueError):
         return sid, None
 
@@ -86,9 +96,7 @@ def _owner_fallback_allowed(creds: dict[str, Any], sid: str, turn_user: int | No
         return not sid
     if turn_user is not None and int(turn_user) != int(owner):
         return False
-    if sid and turn_user is None:
-        return False
-    return True
+    return not (sid and turn_user is None)
 
 
 def _json(data: Any) -> str:
@@ -324,7 +332,7 @@ def _list_company_entities(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _list_opportunities(client: McnClient, args: dict[str, Any]) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "page": {
             "pageNum": max(1, int(args.get("page") or 1)),
             "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
@@ -439,91 +447,306 @@ def _save_quote(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _create_package_quote(client: McnClient, args: dict[str, Any]) -> str:
+    payload = _package_quote_payload(client, args)
     if not bool(args.get("confirm")):
-        return "未保存：请先把账号、规格、价格和合计给用户核对，确认后再以 confirm=true 调用。"
-    specs = args.get("account_specs") or []
-    if not isinstance(specs, list) or not specs:
-        return "未保存：至少选择一个账号规格。"
-    items: list[dict[str, Any]] = []
-    total = Decimal("0.00")
-    for spec in specs:
-        if not isinstance(spec, dict):
-            continue
-        try:
-            quantity = _line_quantity(spec)
-            unit = _money(spec.get("price"))
-        except (InvalidOperation, ValueError, ArithmeticError):
-            return "未保存：账号规格的价格或数量不正确。"
-        line = (unit * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        total += line
-        unit_number = _money_number(unit)
-        line_number = _money_number(line)
-        item: dict[str, Any] = {
-            "type": 3,
-            "modeOperation": int(spec.get("mode_operation") or 1),
-            "skuId": str(spec.get("sku_id")),
-            "accountId": str(spec.get("account_id")),
-            "accountName": spec.get("account_name") or "",
-            "quantity": quantity,
-            "price": unit_number,
-            "originalPrice": unit_number,
-            "originalMoney": line_number,
-            "couponAfterMoney": line_number,
-            "factMoney": line_number,
-            "noCalculate": 0,
-        }
-        supplier_id = str(spec.get("supplier_id") or "").strip()
-        if supplier_id:
-            item["supplierId"] = supplier_id
-            item["dynamicItemObj"] = json.dumps(
-                {"formLabelAlign": {"supplier": supplier_id}}, ensure_ascii=False
-            )
-        items.append(item)
-    if not items:
-        return "未保存：账号规格格式不正确。"
-    payload = {
-        "offerOrderName": args.get("name"),
-        "productId": str(args.get("product_id") or ""),
-        "customerId": str(args.get("customer_id") or ""),
-        "priceVersion": str(args.get("price_version_id") or ""),
-        "couponVersion": str(args.get("coupon_version_id") or ""),
-        "orderMoney": _money_number(total),
-        "factOrderMoney": _money_number(total),
-        "itemRoList": items,
-    }
-    opportunity_id = str(args.get("customer_opportunity_id") or "").strip()
-    if opportunity_id:
-        payload["customerOpportunityId"] = opportunity_id
+        return _json(
+            {
+                "saved": False,
+                "draft": {k: v for k, v in payload.items() if k != "itemRoList"},
+                "items": [
+                    {
+                        "accountName": i["accountName"],
+                        "specName": json.loads(i["dynamicItemObj"])["formLabelAlign_name"],
+                        "platform": json.loads(i["dynamicItemObj"])["platform"],
+                        "quantity": i["quantity"],
+                        "price": i["price"],
+                        "amount": i["factMoney"],
+                    }
+                    for i in payload["itemRoList"]
+                ],
+                "note": "默认字段已按页面规则带出，优惠已试算；只需向用户汇总客户、账号规格、数量和应付金额确认一次。",
+            }
+        )
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()
     cached = _recall(client, digest)
     if cached is not None:
         return f"重复提交已忽略，上次结果：{cached}"
+    expected_amount = args.get("expected_amount")
+    if expected_amount is not None and _money(expected_amount) != _money(payload["factOrderMoney"]):
+        raise McnClientError("试算金额与用户确认金额不同，请重新展示草稿确认，未保存")
     saved = client.post("/api/mcn/offerOrder/save", payload)
-    quotes = client.post(
-        "/api/mcn/offerOrder/list",
-        {"page": {"pageNum": 1, "pageSize": 5}, "offerOrderName": args.get("name")},
+    # 保存成功就记住结果；回读失败不能让模型再次写入一张相同报价。
+    result = _json({"saved": saved, "amount": payload["factOrderMoney"]})
+    _remember(client, digest, result)
+    try:
+        detail = client.get("/api/mcn/offerOrder/detail", {"id": saved})
+    except McnClientError:
+        return _json({"saved": saved, "verification": "回读失败，请按此 ID 查询，勿重复创建"})
+    read_items = detail.get("offerOrderItemVos") or []
+    verified = (
+        str(detail.get("projectType")) == str(payload["projectType"])
+        and _money(detail.get("factOrderMoney")) == _money(payload["factOrderMoney"])
+        and len(read_items) == len(payload["itemRoList"])
+        and all(
+            str(actual.get("skuId")) == expected["skuId"]
+            and actual.get("type") == expected["type"]
+            and actual.get("dynamicItemObj") == expected["dynamicItemObj"]
+            and actual.get("quantity") == expected["quantity"]
+            and _money(actual.get("factMoney")) == _money(expected["factMoney"])
+            for actual, expected in zip(read_items, payload["itemRoList"], strict=True)
+        )
     )
     result = _json(
         {
             "saved": saved,
-            "quotes": _slim(
-                quotes,
-                (
+            "quote": {
+                k: detail.get(k)
+                for k in (
                     "id",
                     "offerOrderNo",
                     "offerOrderName",
-                    "customerName",
+                    "projectType",
                     "orderMoney",
                     "factOrderMoney",
-                    "status",
-                ),
-            ),
+                )
+            },
+            "itemCount": len(detail.get("offerOrderItemVos") or []),
+            "verification": "已核对项目类型、账号规格、数量、回显数据和金额"
+            if verified
+            else "已保存，但回读字段不一致，需核查；勿重复创建",
         }
     )
     _remember(client, digest, result)
     return result
+
+
+def _quote_options(client: McnClient, path: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
+    """完整查找页面候选项，避免第一页没有默认版本就要求用户手选。"""
+    rows: list[dict[str, Any]] = []
+    for page in range(1, 21):
+        batch = client.post(path, {**filters, "page": {"pageNum": page, "pageSize": 100}})
+        if not isinstance(batch, list):
+            raise McnClientError("报价候选数据格式不正确，未保存")
+        rows.extend(batch)
+        if len(batch) < 100:
+            return rows
+    raise McnClientError("报价候选数据超过查询上限，请缩小范围，未保存")
+
+
+def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str, Any]:
+    if any(not str(args.get(k) or "").strip() for k in ("name", "product_id", "customer_id")):
+        raise McnClientError("报价名称、产品和客户不能为空，未保存")
+    specs = args.get("account_specs") or []
+    if not isinstance(specs, list) or not specs or len(specs) > 50:
+        raise McnClientError("请选择 1 至 50 行账号规格，未保存")
+    # 在查询前校验，避免不完整行被静默跳过后保存成另一张报价。
+    for spec in specs:
+        if not isinstance(spec, dict) or not spec.get("account_id") or not spec.get("sku_id"):
+            raise McnClientError("每行必须包含账号和规格 ID，未保存")
+        try:
+            quantity = _line_quantity(spec)
+            raw_quantity = spec.get("quantity", spec.get("count"))
+            if raw_quantity not in (None, "") and Decimal(str(raw_quantity)) != quantity:
+                raise ValueError("quantity")
+            price = _money(spec.get("price"))
+            if not price.is_finite() or price < 0:
+                raise ValueError("price")
+        except (InvalidOperation, ValueError, TypeError, ArithmeticError) as exc:
+            raise McnClientError("账号规格的价格或数量不正确，未保存") from exc
+
+    product_id = str(args.get("product_id") or "")
+    products = _quote_options(client, "/api/mcn/product/list", {})
+    product = next((p for p in products if str(p.get("id")) == product_id), None)
+    if not product or product.get("status") == 0:
+        raise McnClientError("产品不存在或已停用，未保存")
+    attribute = int(product.get("attribute") or -1)
+    if attribute in (2, 5, 8):
+        raise McnClientError("此工具仅支持账号规格报价，请使用对应产品的报价流程，未保存")
+
+    project_type = args.get("project_type")
+    if project_type in (None, "") and int(product.get("productType") or 0) == 1:
+        groups = client.post(
+            "/api/mcn/enum/data/dictionary/getEnumList", {"enumKeys": ["project_type"]}
+        )
+        project_type = next(
+            (
+                item.get("enumValue")
+                for group in groups
+                if group.get("enumKey") == "project_type"
+                for item in group.get("enumDataDictionaryVos") or []
+                if item.get("description") == "散投"
+            ),
+            None,
+        )
+    if project_type in (None, ""):
+        raise McnClientError("缺少项目类型；项目产品请明确业务项目类型，未保存")
+
+    opportunity_id = str(args.get("customer_opportunity_id") or "").strip()
+    contract_id = str(args.get("contract_id") or "").strip()
+    if opportunity_id and not contract_id:
+        contracts = client.post(
+            "/api/mcn/contract/list",
+            {
+                "page": {"pageNum": 1, "pageSize": 1},
+                "customerOpportunityId": opportunity_id,
+                "validityData": 1,
+                "auditStatusList": [1],
+            },
+        )
+        if contracts:
+            contract_id = str(contracts[0]["id"])
+    protection = (
+        client.post(f"/api/mcn/contract/getContractProtectionPrice/bind/{contract_id}", {})
+        if contract_id
+        else {}
+    )
+    versions: dict[str, str] = {}
+    for key, path, protected_key in (
+        ("price_version_id", "/api/mcn/account/quote/version/list", "accountQuoteVersionDos"),
+        ("coupon_version_id", "/api/mcn/coupon/version/list", "couponVersionDos"),
+    ):
+        selected = str(args.get(key) or "").strip()
+        if not selected:
+            options = protection.get(protected_key) or _quote_options(
+                client,
+                path,
+                {
+                    "validityData": 1,
+                    **({"searchSource": 2} if key == "coupon_version_id" else {}),
+                },
+            )
+            default = next((v for v in options if v.get("isDefault") == 1), None)
+            chosen = options[0] if protection.get(protected_key) else default
+            if not chosen and key == "price_version_id" and options:
+                chosen = options[0]
+            if not chosen:
+                raise McnClientError("没有可用默认优惠版本，请用户选择优惠政策名称，未保存")
+            selected = str(chosen["id"])
+        versions[key] = selected
+
+    candidates = client.post(
+        "/api/mcn/account/quotation/queryByProductSpecList",
+        {
+            "productId": product_id,
+            "accountIds": list(dict.fromkeys(str(s["account_id"]) for s in specs)),
+            "versionId": versions["price_version_id"],
+        },
+    )
+    items: list[dict[str, Any]] = []
+    for spec in specs:
+        matches = [
+            row
+            for row in candidates
+            if str(row.get("accountId")) == str(spec["account_id"])
+            and str(row.get("id")) == str(spec["sku_id"])
+            and (
+                not spec.get("supplier_id")
+                or str(row.get("supplierId")) == str(spec["supplier_id"])
+            )
+        ]
+        if len(matches) != 1 or matches[0].get("status") == 0:
+            raise McnClientError("账号规格不属于所选产品/价格版本、已停用或供应商不明确，未保存")
+        row = matches[0]
+        quantity = _line_quantity(spec)
+        unit = _money(spec["price"] if spec.get("price") not in (None, "") else row.get("price"))
+        if (
+            not unit.is_finite()
+            or unit < 0
+            or (spec.get("price") in (None, "") and row.get("price") is None)
+        ):
+            raise McnClientError("规格没有可用价格，请明确报价，未保存")
+        line = (unit * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        unit_number = _money_number(unit)
+        line_number = _money_number(line)
+        form = dict(row.get("formLabelAlign") or {})
+        form.update(
+            {
+                k: str(row[k])
+                for k in ("ad_category", "publish_category", "publish_type")
+                if row.get(k) is not None
+            }
+        )
+        supplier_id = str(row.get("supplierId") or "")
+        if supplier_id:
+            form["supplier"] = supplier_id
+        dynamic = {
+            "formLabelAlign": form,
+            "formLabelAlign_name": row.get("specName") or "",
+            "accountName": row.get("accountName"),
+            "platform": row.get("platform"),
+            "platformsList": row.get("platformsList"),
+            "linkUrl": row.get("linkUrl"),
+            "supplierId": supplier_id,
+            "spanMethod": [],
+        }
+        item: dict[str, Any] = {
+            "type": 3 if attribute == 7 else 0,
+            "modeOperation": row.get("modeOperation") or 1,
+            "skuId": str(spec.get("sku_id")),
+            "accountId": str(spec.get("account_id")),
+            "accountName": row.get("accountName") or "",
+            "quantity": quantity,
+            "price": unit_number,
+            "originalPrice": unit_number,
+            "originalMoney": line_number,
+            "couponAfterMoney": line_number,
+            "factMoney": line_number,
+            "noCalculate": 1 if attribute == 7 else 0,
+            "advertisingCategoryId": [],
+            "dynamicItemObj": json.dumps(dynamic, ensure_ascii=False),
+            "costPrice": row.get("costPrice"),
+            "costPriceExcludingTax": row.get("costPriceExcludingTax"),
+            "taxRate": row.get("taxRate"),
+        }
+        if supplier_id:
+            item["supplierId"] = supplier_id
+        items.append(item)
+    payload = {
+        "offerOrderName": args.get("name"),
+        "productId": str(args.get("product_id") or ""),
+        "customerId": str(args.get("customer_id") or ""),
+        "priceVersion": versions["price_version_id"],
+        "couponVersion": versions["coupon_version_id"],
+        "projectType": int(str(project_type)),
+        "orderType": int(args.get("order_type") or 1),
+        "itemRoList": items,
+    }
+    if opportunity_id:
+        payload["customerOpportunityId"] = opportunity_id
+    if contract_id:
+        payload["contractId"] = contract_id
+    calculated = client.post(
+        "/api/mcn/offerOrder/calculateCoupon",
+        {
+            "productId": product_id,
+            "contractId": contract_id or None,
+            "customerOpportunityId": opportunity_id or None,
+            "couponVersion": payload["couponVersion"],
+            "projectType": payload["projectType"],
+            "orderType": payload["orderType"],
+            "orderItems": items,
+        },
+    )
+    calculated_items = calculated.get("orderItems") or []
+    if len(calculated_items) != len(items):
+        raise McnClientError("优惠试算明细不完整，未保存")
+    total = Decimal("0.00")
+    for item, result in zip(items, calculated_items, strict=True):
+        if str(result.get("skuId")) != item["skuId"] or result.get("couponAfterMoney") is None:
+            raise McnClientError("优惠试算规格或金额不一致，未保存")
+        amount = _money(result["couponAfterMoney"])
+        if not amount.is_finite() or amount < 0:
+            raise McnClientError("优惠试算金额不正确，未保存")
+        item["couponAfterMoney"] = item["factMoney"] = _money_number(amount)
+        item["couponJson"] = json.dumps(result.get("couponDetailVos") or [], ensure_ascii=False)
+        dynamic = json.loads(item["dynamicItemObj"])
+        dynamic["couponNameList"] = result.get("couponNameList") or []
+        item["dynamicItemObj"] = json.dumps(dynamic, ensure_ascii=False)
+        total += amount
+    payload["orderMoney"] = payload["factOrderMoney"] = _money_number(total)
+    return payload
 
 
 def _create_order_from_quote(client: McnClient, args: dict[str, Any]) -> str:
@@ -542,7 +765,7 @@ def _create_order_from_quote(client: McnClient, args: dict[str, Any]) -> str:
     items = detail.get("offerOrderItemVos") or []
     if not items:
         return "下单失败：报价单没有明细"
-    payload = {
+    payload: dict[str, Any] = {
         "submitMethod": 2,
         "offerOrderId": quote_id,
         "orderRo": {
@@ -574,6 +797,10 @@ def _create_order_from_quote(client: McnClient, args: dict[str, Any]) -> str:
         "orderMoney": detail.get("orderMoney"),
         "factOrderMoney": detail.get("factOrderMoney"),
         "orderType": detail.get("orderType") or 1,
+        "projectType": detail.get("projectType"),
+        "customerOpportunityId": detail.get("customerOpportunityId"),
+        "contractId": detail.get("contractId"),
+        **{key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")},
         "itemRoList": [_order_item(item) for item in items],
     }
     payload["orderExtraChargeRoList"] = []
@@ -640,6 +867,10 @@ def _create_combined_order(client: McnClient, args: dict[str, Any]) -> str:
                 "orderMoney": amount,
                 "factOrderMoney": amount,
                 "orderType": detail.get("orderType") or 1,
+                "projectType": detail.get("projectType"),
+                "customerOpportunityId": detail.get("customerOpportunityId"),
+                "contractId": detail.get("contractId"),
+                **{key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")},
                 "itemRoList": mapped_items,
             },
             "orderExtraChargeRoList": [],
@@ -708,34 +939,19 @@ def _update_publish_link(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _export_delivery(client: McnClient, args: dict[str, Any]) -> str:
-    if not bool(args.get("confirm")):
-        return "未导出：请先和用户确认导出维度和范围，确认后再以 confirm=true 调用。"
-    mode = str(args.get("mode") or "project").strip()
-    if mode not in {"project", "link"}:
-        return "导出失败：mode 只能是 project 或 link。"
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 20}}
-    project_name = str(args.get("project_name") or "").strip()
-    if project_name:
-        payload["projectName"] = project_name
-    opportunity_id = str(args.get("customer_opportunity_id") or "").strip()
-    if opportunity_id:
-        payload["customerOpportunityIds"] = [opportunity_id]
-    template_id = str(args.get("export_template_id") or "").strip()
-    if template_id:
-        payload["exportTemplateId"] = template_id
-    path = (
-        "/api/mcn/deliveryDashboard/project/export"
-        if mode == "project"
-        else "/api/mcn/deliveryDashboard/link/export"
-    )
-    result = client.post(path, payload)
-    return _json(
-        {
-            "mode": mode,
-            "result": result,
-            "note": "导出任务已创建，请在交付看板的下载中心获取文件。",
-        }
-    )
+    return export_delivery_result(client, args)
+
+
+def _list_delivery_projects(client: McnClient, args: dict[str, Any]) -> str:
+    return list_delivery_projects(client, args)
+
+
+def _list_export_templates(client: McnClient, args: dict[str, Any]) -> str:
+    return list_export_templates(client, args)
+
+
+def _get_download_task(client: McnClient, args: dict[str, Any]) -> str:
+    return get_download_task(client, args)
 
 
 def _create_project(client: McnClient, args: dict[str, Any]) -> str:
@@ -879,6 +1095,9 @@ _HANDLERS = {
     "youli_create_combined_order": ("组合下单", _create_combined_order),
     "youli_list_service_items": ("查询服务项目", _list_service_items),
     "youli_update_publish_link": ("填写发布链接", _update_publish_link),
+    "youli_list_delivery_projects": ("查询交付项目", _list_delivery_projects),
+    "youli_list_export_templates": ("查询导出模板", _list_export_templates),
+    "youli_get_download_task": ("查询导出文件", _get_download_task),
     "youli_export_delivery": ("导出交付数据", _export_delivery),
     "youli_create_project": ("创建项目", _create_project),
     "youli_create_sub_project": ("创建项目", _create_sub_project),
@@ -1038,14 +1257,18 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_create_package_quote",
-        "description": "创建拉包报价单：先选账号，再按账号+规格+价格逐行保存（写操作，需用户确认）。",
+        "description": "创建账号报价：先用 confirm=false 生成只读草稿，自动带出散投项目类型、常规单、商机首个有效合同、合同保价或默认价格/优惠版本、账号规格与价格，并调用页面同一优惠试算。不要向用户索要 ID，不要逐个确认默认字段；只追问账号平台/规格等业务歧义。汇总草稿金额一次确认后 confirm=true 保存；不需要再次确认用户已选过的规格。接口为空只说明当前查询无结果，不可断言接口坏了或系统没有其他记录。",
         "inputSchema": _schema(
             {
                 "name": {"type": "string", "description": "报价单名称"},
                 "product_id": {"type": "string"},
                 "customer_id": {"type": "string"},
-                "price_version_id": {"type": "string"},
-                "coupon_version_id": {"type": "string"},
+                "price_version_id": {"type": "string", "description": "用户指定时传；省略则自动按页面规则选择"},
+                "coupon_version_id": {"type": "string", "description": "用户指定时传；省略则自动按页面规则选择"},
+                "project_type": {"type": "integer", "description": "散投自动带出；项目产品需明确业务类型"},
+                "order_type": {"type": "integer", "description": "默认常规单 1"},
+                "contract_id": {"type": "string", "description": "可选，默认商机下首个有效已审核合同"},
+                "expected_amount": {"type": "number", "description": "confirm=true 时传入用户已确认的草稿应付金额；金额变化会阻止保存"},
                 "customer_opportunity_id": {
                     "type": "string",
                     "description": "客户商机 ID，可空；传了报价和后续订单才能归到项目",
@@ -1053,7 +1276,7 @@ TOOLS: list[dict[str, Any]] = [
                 "account_specs": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "每项包含 account_id、account_name、sku_id、price、quantity（可空，默认 1）、mode_operation；渠道账号再传 supplier_id 以便组合订单按供应商拆单",
+                    "description": "每项包含 account_id、sku_id；price 可省略以取规格价格，quantity 默认 1。账号名、规格名、平台、运营方式自动查询；渠道存在多个供应商时指定 supplier_id。",
                 },
                 "confirm": {"type": "boolean"},
             },
@@ -1061,8 +1284,6 @@ TOOLS: list[dict[str, Any]] = [
                 "name",
                 "product_id",
                 "customer_id",
-                "price_version_id",
-                "coupon_version_id",
                 "account_specs",
                 "confirm",
             ],
@@ -1119,16 +1340,63 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_export_delivery",
-        "description": "按项目或链接创建交付数据导出任务（写操作，需用户确认）。",
+        "description": EXPORT_DESCRIPTION,
         "inputSchema": _schema(
             {
-                "mode": {"type": "string", "description": "project 或 link"},
+                "mode": {
+                    "type": "string",
+                    "description": "project 按项目，link 按每条发布链接。不要把英文值问给用户",
+                },
                 "project_name": {"type": "string"},
                 "customer_opportunity_id": {"type": "string"},
-                "export_template_id": {"type": "string"},
+                "export_template_id": {
+                    "type": "string",
+                    "description": "仅按链接导出且用户指定了模板名称时传入。不要问用户要 ID",
+                },
                 "confirm": {"type": "boolean"},
             },
             ["mode", "confirm"],
+        ),
+    },
+    {
+        "name": "youli_list_delivery_projects",
+        "description": LIST_DELIVERY_PROJECTS_DESCRIPTION,
+        "inputSchema": _schema(
+            {
+                "keyword": {"type": "string", "description": "用户说的或截图上的项目名，可空"},
+                "name_field": {
+                    "type": "string",
+                    "description": "project 查娱乐/品牌名，brand 查订单项目名",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "youli_list_export_templates",
+        "description": LIST_EXPORT_TEMPLATES_DESCRIPTION,
+        "inputSchema": _schema(
+            {
+                "template_name": {
+                    "type": "string",
+                    "description": "模板名称，可空表示列出启用的按链接模板",
+                }
+            },
+            [],
+        ),
+    },
+    {
+        "name": "youli_get_download_task",
+        "description": GET_DOWNLOAD_TASK_DESCRIPTION,
+        "inputSchema": _schema(
+            {
+                "task_id": {"type": "string", "description": "导出返回的任务 ID"},
+                "file_prefix": {
+                    "type": "string",
+                    "description": "没有任务 ID 时使用导出返回的 file_prefix",
+                },
+            },
+            [],
         ),
     },
     {

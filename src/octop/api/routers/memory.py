@@ -51,12 +51,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_permission("memory"))])
 
-# Defaults mirror ``HarnessAgentConfig`` (octop_harness.config). Kept in sync
-# manually — the dashboard writes these into the agent's ``config_json`` under
-# the ``memory`` section, and ``AgentManager._build_harness_config`` reads them
-# back when constructing the agent.
+# Defaults mirror ``HarnessAgentConfig`` (octop_harness.config), except memory
+# itself: an agent with no stored choice stays off so a shared expert does not
+# recall another user's facts. The dashboard writes these into ``config_json``
+# under ``memory``, and ``AgentManager._build_harness_config`` reads them back.
 _EXTRACT_DEFAULTS: dict[str, Any] = {
-    "memory_enabled": True,
+    "memory_enabled": False,
     "extract_on_session_end": True,
     "extract_trigger_mode": "idle",
     "extract_idle_seconds": 300.0,

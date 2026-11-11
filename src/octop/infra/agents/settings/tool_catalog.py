@@ -200,7 +200,7 @@ def builtin_tool_available(
         mem = agent_cfg.get("memory")
         if isinstance(mem, dict) and isinstance(mem.get("memory_enabled"), bool):
             return bool(mem["memory_enabled"])
-        return True
+        return False
     if name in _MEDIA_TOOLS:
         media = agent_cfg.get("media_generation")
         if media is False:

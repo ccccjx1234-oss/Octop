@@ -57,6 +57,7 @@ import {
   shouldForceSealStream,
   shouldResumeStreamAfterClose,
 } from "./wsResumeGate";
+import { SILENT_TURN_MESSAGE, turnEndedWithoutReply } from "./silentTurn";
 
 function speakerMatchesFinalize(
   messageSpeaker: string | undefined,
@@ -691,6 +692,7 @@ function armStreamWatchdog(sessionId: string): void {
       state.streamId = "";
       state.streamBlockType = "";
       sealInFlightAssistantMessages(state);
+      noteSilentTurn(state);
       clearStreamActivity(sessionId);
       notify(state);
       emitStreamEvent({ kind: "streamEnd", sessionId });
@@ -1309,6 +1311,17 @@ function handleHarnessChunk(
   const speaker = chunkSpeakerId(chunk, sessionHostAgentId(state, sessionId));
   if (sessionId && (state.isStreaming || speaker)) {
     touchStreamActivity(sessionId);
+  }
+  if (
+    chunk.type === "token" ||
+    chunk.type === "reasoning" ||
+    chunk.type === "tool_call_chunk" ||
+    chunk.type === "tool_result" ||
+    chunk.type === "error" ||
+    chunk.type === "hitl_required" ||
+    chunk.type === "attachment"
+  ) {
+    dropSilentTurnNotice(state);
   }
   switch (chunk.type) {
     case "token": {
@@ -2525,6 +2538,28 @@ function appendErrorBubble(
   ];
 }
 
+/** A finished turn the user can see only as their own message. */
+function noteSilentTurn(state: SessionStreamState): void {
+  if (!turnEndedWithoutReply(state.messages)) return;
+  appendErrorBubble(state, SILENT_TURN_MESSAGE, "empty_reply");
+}
+
+function dropSilentTurnNotice(state: SessionStreamState): void {
+  const last = state.messages[state.messages.length - 1];
+  if (last?.role === "assistant" && last.errorInfo?.code === "empty_reply") {
+    state.messages = state.messages.slice(0, -1);
+  }
+}
+
+/** After history reload, explain a finished turn that never produced a reply. */
+export function revealSilentTurn(sessionId: string): void {
+  const state = sessionStates.get(sessionId);
+  if (!state || state.isStreaming) return;
+  const before = state.messages.length;
+  noteSilentTurn(state);
+  if (state.messages.length !== before) notify(state);
+}
+
 // ── Live WebSocket (send + weak stream resume) ─────────────────────────────
 
 /**
@@ -2593,7 +2628,7 @@ export async function attachThread(
   state.abortController = controller;
 
   let finished = false;
-  const finish = (mode: "all" | "host" = "all") => {
+  const finish = (mode: "all" | "host" = "all", noteSilence = true) => {
     if (finished) return;
     finished = true;
     clearStreamingFlags(state);
@@ -2609,6 +2644,7 @@ export async function attachThread(
       finalizeHostTurn(state, sessionId);
     } else {
       sealInFlightAssistantMessages(state);
+      if (noteSilence) noteSilentTurn(state);
     }
     notify(state);
     emitStreamEvent({ kind: "streamEnd", sessionId });
@@ -2632,7 +2668,7 @@ export async function attachThread(
       } catch {
         // ignore
       }
-      finish();
+      finish("all", false);
     };
     controller.signal.addEventListener("abort", onAbort, { once: true });
 
@@ -2825,7 +2861,7 @@ async function sendTurnWebSocket(
   text: string,
   messageContent: string | Array<Record<string, unknown>>,
   controller: AbortController,
-  finish: (mode?: "all" | "host") => void,
+  finish: (mode?: "all" | "host", noteSilence?: boolean) => void,
   modelRef?: string | null,
   threadId?: string | null,
   mcpServers?: string[] | null,
@@ -2879,7 +2915,7 @@ async function sendTurnWebSocket(
       } catch {
         // ignore
       }
-      finish();
+      finish("all", false);
       settle(true);
     };
     controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -3142,7 +3178,7 @@ export async function sendTurn(
   const messageContent = buildUserMessageContent(text, attachments);
 
   let finished = false;
-  const finish = (mode: "all" | "host" = "all") => {
+  const finish = (mode: "all" | "host" = "all", noteSilence = true) => {
     if (finished) return;
     finished = true;
     clearStreamingFlags(state);
@@ -3156,6 +3192,7 @@ export async function sendTurn(
       finalizeHostTurn(state, sessionId);
     } else {
       sealInFlightAssistantMessages(state);
+      if (noteSilence) noteSilentTurn(state);
     }
     notify(state);
     emitStreamEvent({ kind: "streamEnd", sessionId });
@@ -3325,6 +3362,7 @@ export async function resumeHitl(
     state.streamId = "";
     state.streamBlockType = "";
     sealInFlightAssistantMessages(state);
+    noteSilentTurn(state);
     notify(state);
     emitStreamEvent({ kind: "streamEnd", sessionId });
     // History reload now would replace the live member bubbles with a room

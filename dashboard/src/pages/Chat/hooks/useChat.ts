@@ -669,6 +669,10 @@ function isDisplayableHistoryMessage(message: ChatMessage): boolean {
   return message.content.trim().length > 0;
 }
 
+function withoutSilentTurnNotice(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter((message) => message.errorInfo?.code !== "empty_reply");
+}
+
 export function convertHistoryMessages(
   messages: Array<{
     role: string;
@@ -1001,7 +1005,10 @@ export function useChat(
         const keptOlder = firstOverlap > 0;
         chatStore.setHistoryPage(
           key,
-          mergeHistoryWithLocalTail(loaded.messages, current.messages),
+          mergeHistoryWithLocalTail(
+            loaded.messages,
+            withoutSilentTurnNotice(current.messages),
+          ),
           {
             hasMore: keptOlder ? current.historyHasMore : loaded.hasMore,
             nextOffset: keptOlder
@@ -1012,6 +1019,10 @@ export function useChat(
               : loaded.nextCursor,
           },
         );
+        if (
+          !loaded.turnActive &&
+          chatStore.getSnapshot(key).messages.at(-1)?.id === loaded.messages.at(-1)?.id
+        ) chatStore.revealSilentTurn(key);
         setHistoryError(false);
         attachAfterHistory(key, targetThreadId);
       } catch {
@@ -1115,6 +1126,7 @@ export function useChat(
           hasMore,
           nextOffset,
           nextCursor,
+          turnActive,
         } = await loadThreadHistory(agentId, key, { offset: 0 });
         // Stale after a concurrent loadHistory / newer refresh — drop apply only.
         if (loadGenRef.current !== gen) return;
@@ -1130,13 +1142,20 @@ export function useChat(
         const keptOlder = firstOverlap > 0;
         chatStore.setHistoryPage(
           key,
-          mergeHistoryWithLocalTail(latest, current.messages),
+          mergeHistoryWithLocalTail(
+            latest,
+            withoutSilentTurnNotice(current.messages),
+          ),
           {
             hasMore: keptOlder ? current.historyHasMore : hasMore,
             nextOffset: keptOlder ? current.historyNextOffset : nextOffset,
             nextCursor: keptOlder ? current.historyNextCursor : nextCursor,
           },
         );
+        if (
+          !turnActive &&
+          chatStore.getSnapshot(key).messages.at(-1)?.id === latest.at(-1)?.id
+        ) chatStore.revealSilentTurn(key);
         setHistoryError(false);
       } catch {
         if (loadGenRef.current === gen) {

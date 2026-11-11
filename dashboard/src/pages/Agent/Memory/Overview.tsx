@@ -89,7 +89,7 @@ export default function Overview({
   const [state, setState] = useState<PageState>(INITIAL_STATE);
   // Older running API processes do not return this newly-added field.  Match
   // the backend default and only show the disabled state for an explicit false.
-  const memoryEnabled = state.config?.memory_enabled !== false;
+  const memoryEnabled = state.config?.memory_enabled === true;
 
   const loadAll = useCallback(async () => {
     if (!agentId) return;

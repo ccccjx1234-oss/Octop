@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from octop.infra.connectors.gateway.adapters import mcn
@@ -11,6 +12,24 @@ class FakeClient:
 
     def post(self, path: str, payload: Any = None) -> Any:
         self.calls.append((path, payload))
+        if path.endswith("/product/list"):
+            return [{"id": "p1", "productType": 1, "attribute": -1},
+                    {"id": "1", "productType": 1, "attribute": -1}]
+        if path.endswith("/getEnumList"):
+            return [{"enumKey": "project_type", "enumDataDictionaryVos": [
+                {"enumValue": 6, "description": "散投"}]}]
+        if path.endswith("/queryByProductSpecList"):
+            pairs = [("a1", "s1"), ("a2", "s2"), ("10", "100"), ("11", "101")]
+            return [{"accountId": a, "id": s, "accountName": "会火" + a,
+                     "specName": "娱乐/视频<60s", "ad_category": "4", "publish_category": "10",
+                     "modeOperation": 2 if a == "a1" else 1,
+                     "supplierId": "sup1" if a == "a1" else None,
+                     "platform": 1, "linkUrl": "/douyin.png", "price": 7500}
+                    for a, s in pairs]
+        if path.endswith("/calculateCoupon"):
+            return {"orderItems": [{**i, "couponDetailVos": []} for i in payload["orderItems"]]}
+        if path.endswith("/offerOrder/save"):
+            return "q1"
         if path.endswith("/offerOrder/list"):
             return [{"id": "q1", "offerOrderNo": "BJ1"}]
         if path.endswith("/offer/order/detail"):
@@ -19,7 +38,7 @@ class FakeClient:
 
     def get(self, path: str, params: Any = None) -> Any:
         self.calls.append((path, params))
-        return {"id": "q1", "factOrderMoney": 100}
+        return {"id": "q1", "offerOrderNo": "BJ1", "factOrderMoney": 100}
 
 
 def _use(monkeypatch, fake: FakeClient) -> None:
@@ -62,7 +81,7 @@ def test_package_quote_prices_quantity(monkeypatch) -> None:
             "confirm": True,
         },
     )
-    payload = fake.calls[0][1]
+    payload = next(p for path, p in fake.calls if path.endswith("/offerOrder/save"))
     assert payload["orderMoney"] == 0.5
     assert payload["factOrderMoney"] == 0.5
     assert payload["itemRoList"][0]["quantity"] == 3
@@ -252,12 +271,21 @@ def test_package_quote_builds_rows(monkeypatch) -> None:
         },
     )
     assert "offerOrderNo" in result
-    assert fake.calls[0][0] == "/api/mcn/offerOrder/save"
-    payload = fake.calls[0][1]
+    payload = next(p for path, p in fake.calls if path.endswith("/offerOrder/save"))
     assert payload["orderMoney"] == 11500
     assert [item["price"] for item in payload["itemRoList"]] == [7500.0, 4000.0]
     assert payload["itemRoList"][0]["supplierId"] == "sup1"
     assert '"supplier": "sup1"' in payload["itemRoList"][0]["dynamicItemObj"]
+    assert payload["projectType"] == 6
+    assert payload["orderType"] == 1
+    assert [item["type"] for item in payload["itemRoList"]] == [0, 0]
+    assert payload["itemRoList"][0]["modeOperation"] == 2
+    for item in payload["itemRoList"]:
+        display = json.loads(item["dynamicItemObj"])
+        assert display["accountName"]
+        assert display["formLabelAlign_name"] == "娱乐/视频<60s"
+        assert display["formLabelAlign"]["ad_category"] == "4"
+        assert display["spanMethod"] == []
 
 
 def test_order_items_get_fresh_ids(monkeypatch) -> None:
@@ -274,15 +302,190 @@ def test_order_items_get_fresh_ids(monkeypatch) -> None:
             "couponVersion": "v2",
             "orderMoney": 100,
             "factOrderMoney": 100,
+            "projectType": 6,
+            "customerOpportunityId": "opp1",
+            "contractId": "contract1",
+            "signerId": "employee1",
             "offerOrderItemVos": [
                 {"id": "item-1", "factMoney": 100, "originalPrice": 100, "quantity": 1}
             ],
         }
 
     monkeypatch.setattr(fake, "get", detail)
-    mcn.call_tool({"token": "t"}, "youli_create_order_from_quote", {"quote_id": "q1", "confirm": True})
+    mcn.call_tool(
+        {"token": "t"}, "youli_create_order_from_quote", {"quote_id": "q1", "confirm": True}
+    )
     save = [call for call in fake.calls if call[0] == "/api/mcn/order/temporaryStorage"][0]
     assert save[1]["offerOrderSaveRo"]["itemRoList"][0]["itemId"] is None
+    assert save[1]["offerOrderSaveRo"]["projectType"] == 6
+    assert save[1]["offerOrderSaveRo"]["customerOpportunityId"] == "opp1"
+    assert save[1]["offerOrderSaveRo"]["contractId"] == "contract1"
+    assert save[1]["offerOrderSaveRo"]["signerId"] == "employee1"
+
+
+def _quote_args(**updates: Any) -> dict[str, Any]:
+    return {
+        "name": "q",
+        "product_id": "p1",
+        "customer_id": "c1",
+        "price_version_id": "v1",
+        "coupon_version_id": "v2",
+        "account_specs": [{"account_id": "a2", "sku_id": "s2", "price": 100}],
+        "confirm": True,
+        **updates,
+    }
+
+
+def test_package_quote_preview_uses_page_defaults_and_calculated_price(monkeypatch) -> None:
+    class DefaultsClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            if path.endswith("/version/list"):
+                self.calls.append((path, payload))
+                if payload["page"]["pageNum"] == 1:
+                    return [{"id": str(i), "isDefault": 0} for i in range(100)]
+                return [{"id": "default-version", "isDefault": 1}]
+            result = super().post(path, payload)
+            if path.endswith("/calculateCoupon"):
+                result["orderItems"][0]["couponAfterMoney"] = 6000
+                result["orderItems"][0]["couponDetailVos"] = [{"name": "test discount"}]
+            return result
+
+    fake = DefaultsClient()
+    _use(monkeypatch, fake)
+    args = _quote_args(
+        confirm=False,
+        price_version_id="",
+        coupon_version_id="",
+        account_specs=[{"account_id": "a2", "sku_id": "s2"}],
+    )
+    preview = json.loads(mcn.call_tool({}, "youli_create_package_quote", args))
+    assert preview["saved"] is False
+    assert preview["draft"]["priceVersion"] == "default-version"
+    assert preview["draft"]["couponVersion"] == "default-version"
+    assert preview["draft"]["factOrderMoney"] == 6000
+    assert preview["items"][0]["price"] == 7500
+    assert not any(path.endswith("/save") for path, _ in fake.calls)
+
+
+def test_package_quote_missing_spec_cannot_save(monkeypatch) -> None:
+    fake = FakeClient()
+    _use(monkeypatch, fake)
+    result = mcn.call_tool(
+        {},
+        "youli_create_package_quote",
+        _quote_args(account_specs=[{"account_id": "a2", "sku_id": "unknown", "price": 100}]),
+    )
+    assert "未保存" in result
+    assert not any(path.endswith("/save") for path, _ in fake.calls)
+
+
+def test_package_quote_remembers_save_even_when_readback_fails(monkeypatch) -> None:
+    class ReadbackFailure(FakeClient):
+        def get(self, path: str, params: Any = None) -> Any:
+            raise mcn.McnClientError("timeout")
+
+    fake = ReadbackFailure()
+    _use(monkeypatch, fake)
+    first = mcn.call_tool({}, "youli_create_package_quote", _quote_args())
+    second = mcn.call_tool({}, "youli_create_package_quote", _quote_args())
+    assert json.loads(first)["saved"] == "q1"
+    assert "重复提交" in second
+    assert sum(path.endswith("/save") for path, _ in fake.calls) == 1
+
+
+def test_package_quote_uses_contract_protected_versions(monkeypatch) -> None:
+    class ContractClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            if path.endswith("/contract/list"):
+                self.calls.append((path, payload))
+                return [{"id": "contract1"}]
+            if "/getContractProtectionPrice/bind/" in path:
+                self.calls.append((path, payload))
+                return {
+                    "accountQuoteVersionDos": [{"id": "protected-price"}],
+                    "couponVersionDos": [{"id": "protected-coupon"}],
+                }
+            return super().post(path, payload)
+
+    fake = ContractClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool(
+        {},
+        "youli_create_package_quote",
+        _quote_args(customer_opportunity_id="opp1", price_version_id="", coupon_version_id=""),
+    )
+    payload = next(p for path, p in fake.calls if path.endswith("/save"))
+    assert payload["contractId"] == "contract1"
+    assert payload["priceVersion"] == "protected-price"
+    assert payload["couponVersion"] == "protected-coupon"
+
+
+def test_package_quote_changed_confirmed_amount_cannot_save(monkeypatch) -> None:
+    fake = FakeClient()
+    _use(monkeypatch, fake)
+    result = mcn.call_tool({}, "youli_create_package_quote", _quote_args(expected_amount=99))
+    assert "用户确认金额不同" in result
+    assert not any(path.endswith("/save") for path, _ in fake.calls)
+
+
+def test_package_quote_saves_calculated_discount(monkeypatch) -> None:
+    class DiscountClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            result = super().post(path, payload)
+            if path.endswith("/calculateCoupon"):
+                result["orderItems"][0]["couponAfterMoney"] = 80
+                result["orderItems"][0]["couponDetailVos"] = [{"couponMoney": 20}]
+                result["orderItems"][0]["couponNameList"] = ["折扣"]
+            return result
+
+    fake = DiscountClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool({}, "youli_create_package_quote", _quote_args(expected_amount=80))
+    payload = next(p for path, p in fake.calls if path.endswith("/save"))
+    assert payload["orderMoney"] == payload["factOrderMoney"] == 80
+    item = payload["itemRoList"][0]
+    assert item["originalMoney"] == 100
+    assert item["couponAfterMoney"] == item["factMoney"] == 80
+    assert json.loads(item["couponJson"]) == [{"couponMoney": 20}]
+    assert json.loads(item["dynamicItemObj"])["couponNameList"] == ["折扣"]
+
+
+def test_package_quote_readback_checks_display_and_amount(monkeypatch) -> None:
+    class ReadbackClient(FakeClient):
+        def get(self, path: str, params: Any = None) -> Any:
+            self.calls.append((path, params))
+            payload = next(p for path, p in self.calls if path.endswith("/save"))
+            return {
+                "id": "q1",
+                "projectType": payload["projectType"],
+                "factOrderMoney": payload["factOrderMoney"],
+                "offerOrderItemVos": payload["itemRoList"],
+            }
+
+    fake = ReadbackClient()
+    _use(monkeypatch, fake)
+    result = json.loads(mcn.call_tool({}, "youli_create_package_quote", _quote_args()))
+    assert "已核对项目类型" in result["verification"]
+    monkeypatch.setattr(fake, "get", lambda *args: {"id": "q1", "offerOrderItemVos": []})
+    mcn._SAVED_QUOTES.clear()
+    result = json.loads(mcn.call_tool({}, "youli_create_package_quote", _quote_args()))
+    assert "回读字段不一致" in result["verification"]
+
+
+def test_package_quote_custom_account_keeps_custom_type(monkeypatch) -> None:
+    class CustomClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            result = super().post(path, payload)
+            if path.endswith("/product/list"):
+                result[0]["attribute"] = 7
+            return result
+
+    fake = CustomClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool({}, "youli_create_package_quote", _quote_args())
+    payload = next(p for path, p in fake.calls if path.endswith("/save"))
+    assert payload["itemRoList"][0]["type"] == 3
+    assert payload["itemRoList"][0]["noCalculate"] == 1
 
 
 def test_company_entities_use_public_list(monkeypatch) -> None:

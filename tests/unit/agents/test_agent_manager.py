@@ -663,6 +663,7 @@ def test_memory_extract_settings_forwards_aux_model_to_both_tiers() -> None:
         is_ref_usable=lambda ref: ref == "hai/MiniMax-M2.7",
     )
     assert settings == {
+        "memory_enabled": False,
         "memory_aux_light_model": "hai/MiniMax-M2.7",
         "memory_aux_heavy_model": "hai/MiniMax-M2.7",
     }
@@ -675,7 +676,8 @@ def test_memory_extract_settings_drops_stale_aux_model(
         {"memory": {"aux_model": "gone/model"}},
         is_ref_usable=lambda _ref: False,
     )
-    assert settings == {}
+    assert settings["memory_enabled"] is False
+    assert "memory_aux_light_model" not in settings
     assert "no longer usable" in caplog.text
 
 
@@ -685,7 +687,7 @@ def test_memory_extract_settings_skips_aux_model_on_legacy_harness() -> None:
         supported_fields=frozenset({"memory_enabled"}),
         is_ref_usable=lambda _ref: True,
     )
-    assert settings == {}
+    assert settings == {"memory_enabled": False}
 
 
 def test_memory_extract_settings_forwards_aux_call_options() -> None:
@@ -749,7 +751,7 @@ def test_memory_extract_settings_skips_aux_call_options_on_legacy_harness() -> N
         },
         supported_fields=frozenset({"memory_enabled"}),
     )
-    assert settings == {}
+    assert settings == {"memory_enabled": False}
 
 
 def test_memory_extract_budget_reaches_actual_extractor(tmp_path: Path) -> None:
@@ -760,7 +762,7 @@ def test_memory_extract_budget_reaches_actual_extractor(tmp_path: Path) -> None:
     from octop_memory.pipeline.extractor import CandidateExtractor
 
     settings = _memory_extract_settings(
-        {"memory": {"extract_max_tokens": 1024, "extract_light_timeout_s": 45}},
+        {"memory": {"memory_enabled": True, "extract_max_tokens": 1024, "extract_light_timeout_s": 45}},
         supported_fields=frozenset(field.name for field in fields(HarnessAgentConfig)),
     )
     model = MagicMock()
@@ -2850,7 +2852,7 @@ async def test_restore_respects_runtime_capability_and_expert_scope(
     rows = []
     try:
         for name in ("restore-one", "restore-other"):
-            rows.append(await manager.create(AgentCreateSpec(name=name)))
+            rows.append(await manager.create(AgentCreateSpec(name=name, config={"memory": {"memory_enabled": True}})))
         first, other = [manager.get_agent(row.agent_id) for row in rows]
         old_memory = first._memory_runtime.memory
         assert old_memory is not None

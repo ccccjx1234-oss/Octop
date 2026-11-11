@@ -605,12 +605,23 @@ async def agent_status(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    """Runtime state plus attached IM channels and cron jobs for the agent."""
+    """Runtime state. Owners also see channels and cron; shared viewers get state only."""
     assert server.app_runtime is not None
     row = server.app_runtime.agent_registry.get_row(agent_id)
     if row is None:
         raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
-    _assert_agent_owner(row, user)
+    repos = getattr(getattr(server, "services", None), "repos", None)
+    from octop.api.common.agent import assert_agent_access_row, user_owns_agent
+
+    assert_agent_access_row(row, user, repos=repos)
+    if not user.is_admin and not user_owns_agent(row, user):
+        return {
+            "state": row.last_state or "unknown",
+            "last_error": None,
+            "channels": [],
+            "cron_jobs": [],
+            "memory_maintenance": None,
+        }
     channels = server.app_runtime.gateway.list_channels(agent_id)
     cron_jobs = server.app_runtime.cron_manager.list_by_agent(agent_id)
     return {

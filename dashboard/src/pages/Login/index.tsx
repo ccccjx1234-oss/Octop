@@ -1,9 +1,18 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Input, Button, Checkbox } from "antd";
+import { Input, Button, Checkbox, Modal } from "antd";
 import { message } from "@/utils/antdMessage";
 
-import { KeyRound, Lock, User } from "lucide-react";
+import {
+  BookOpen,
+  Bot,
+  Clock,
+  KeyRound,
+  Lock,
+  Plug,
+  ShieldCheck,
+  User,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   clearAuthToken,
@@ -20,6 +29,7 @@ import { publicUrl } from "../../utils/publicUrl";
 import { refreshServerLabels } from "../../i18n";
 import { applyUserLocale, applyGuestLocale } from "../../utils/locale";
 import { useTheme } from "../../context/ThemeContext";
+import ThemeSwitcher from "../../components/ThemeSwitcher";
 import {
   isSsoPopup,
   isSsoPopupMessage,
@@ -33,6 +43,7 @@ import googleIcon from "../../assets/providers/google.svg";
 import CaptchaField, { type CaptchaFieldHandle } from "./CaptchaField";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import { type PublicCaptchaConfig } from "./captchaAdapters";
+import styles from "./index.module.less";
 
 function providerLabel(
   provider: OauthProviderStatus,
@@ -73,7 +84,12 @@ function providerIcon(provider: OauthProviderStatus): ReactNode {
   return <KeyRound size={18} />;
 }
 
-export default function LoginPage() {
+export default function LoginPage({
+  mode = "manage",
+}: {
+  mode?: "staff" | "manage";
+}) {
+  const isStaff = mode === "staff";
   const { t } = useTranslation();
   const { isDark } = useTheme();
   const navigate = useNavigate();
@@ -108,6 +124,9 @@ export default function LoginPage() {
           navigate("/setup", { replace: true });
           return;
         }
+        // Employee passwords are checked by MCN; its endpoint does not use
+        // the local-account captcha or the platform's OAuth/LDAP providers.
+        if (isStaff) return;
         // Only probe OIDC / captcha after setup is done — otherwise lockdown 503s.
         authApi
           .getOauthStatus()
@@ -140,7 +159,7 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, isStaff]);
 
   useEffect(() => {
     const code = searchParams.get("oidc_error");
@@ -151,7 +170,7 @@ export default function LoginPage() {
         defaultValue: t("login.oidcError.generic"),
       }),
     );
-    navigate("/login", { replace: true });
+    navigate("/manageLogin", { replace: true });
   }, [navigate, searchParams, t]);
 
   useEffect(() => {
@@ -219,18 +238,30 @@ export default function LoginPage() {
   };
 
   const handleLogin = async () => {
-    if (!username || !password || !captchaReady) return;
+    if (
+      loading ||
+      !username.trim() ||
+      !password ||
+      (!isStaff && !captchaReady)
+    ) {
+      return;
+    }
     setLoading(true);
     try {
-      const token = await captchaRef.current?.getToken();
-      const res = await authApi.login(username, password, token);
+      const res = isStaff
+        ? await authApi.staffLogin(username.trim(), password)
+        : await authApi.login(
+            username,
+            password,
+            await captchaRef.current?.getToken(),
+          );
       setAuthToken(res.access_token, remember);
       await applyUserLocale(res.user.locale);
       void refreshServerLabels(res.user.locale);
       navigate("/chat", { replace: true });
     } catch (err) {
       message.error(apiErrorMessage(err, t("login.failed"), t));
-      resetCaptcha();
+      if (!isStaff) resetCaptcha();
     } finally {
       setLoading(false);
     }
@@ -240,224 +271,290 @@ export default function LoginPage() {
     return null;
   }
 
+  const wordmarkSrc = publicUrl(
+    isDark ? "logo_horizontal_white.png" : "logo_horizontal_dark.png",
+  );
+  const features = [
+    { key: "Experts", Icon: Bot },
+    { key: "Knowledge", Icon: BookOpen },
+    { key: "Connectors", Icon: Plug },
+    { key: "Automation", Icon: Clock },
+  ];
+
   return (
-    <div
-      style={{
-        minHeight: "100dvh",
-        boxSizing: "border-box",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding:
-          "max(24px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px))",
-        background: "var(--fn-bg-layout)",
-        transition: "background var(--fn-transition)",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 360,
-          padding: "48px 32px 40px",
-          background: "var(--fn-bg-elevated)",
-          borderRadius: 16,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.08)",
-          border: "1px solid var(--fn-border-primary)",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 20,
-          margin: "0 16px",
-        }}
-      >
-        <img
-          src={
-            isDark
-              ? publicUrl("logo_horizontal_white.png")
-              : publicUrl("logo_horizontal_dark.png")
-          }
-          alt="Octop"
-          style={{
-            height: 48,
-            width: "auto",
-            maxWidth: 260,
-            objectFit: "contain",
-            display: "block",
-          }}
-        />
-
-        <h2
-          style={{
-            fontSize: 20,
-            fontWeight: 600,
-            color: "var(--fn-text-primary)",
-            margin: 0,
-            textAlign: "center",
-          }}
-        >
-          {t("login.title")}
-        </h2>
-
-        <Input
-          prefix={
-            <User size={16} style={{ color: "var(--fn-text-quaternary)" }} />
-          }
-          placeholder={t("login.username")}
-          size="large"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoFocus
-          style={{ borderRadius: 10 }}
-        />
-
-        <Input.Password
-          prefix={
-            <Lock size={16} style={{ color: "var(--fn-text-quaternary)" }} />
-          }
-          placeholder={t("login.password")}
-          size="large"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onPressEnter={handleLogin}
-          style={{ borderRadius: 10 }}
-        />
-
-        {ldap?.enabled && (
-          <p
-            style={{
-              margin: 0,
-              marginTop: -8,
-              width: "100%",
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--fn-text-tertiary)",
-              textAlign: "center",
-            }}
-          >
-            {t("login.ldapHint", {
-              name: ldap.display_name.trim() || t("adminSso.ldap.kind"),
-            })}
-          </p>
-        )}
-
-        <CaptchaField
-          ref={captchaRef}
-          config={captcha}
-          resetKey={captchaResetKey}
-          slideHint={t("login.slideHint")}
-          slideVerifiedLabel={t("login.slideVerified")}
-          unsupportedLabel={t("login.unsupportedCaptcha")}
-          onReadyChange={setCaptchaReady}
-        />
-
-        <Button
-          type="primary"
-          size="large"
-          block
-          loading={loading}
-          onClick={handleLogin}
-          disabled={!username || !password || !captchaReady}
-          style={{ borderRadius: 10, height: 44, fontWeight: 500 }}
-        >
-          {t("login.submit")}
-        </Button>
-
-        <div
-          style={{
-            width: "100%",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              width: "100%",
-            }}
-          >
-            <Checkbox
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-              style={{
-                margin: 0,
-                fontSize: 13,
-                color: "var(--fn-text-tertiary)",
-              }}
-            >
-              {t("login.remember")}
-            </Checkbox>
-            <button
-              type="button"
-              data-testid="login-forgot-password-toggle"
-              onClick={() => setShowForgotHelp(true)}
-              style={{
-                margin: 0,
-                padding: 0,
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-                fontSize: 13,
-                lineHeight: 1.5,
-                color: "var(--fn-text-tertiary)",
-                flexShrink: 0,
-              }}
-            >
-              {t("login.forgotPassword", "Forgot password?")}
-            </button>
-          </div>
-          <ForgotPasswordModal
-            open={showForgotHelp}
-            onClose={() => setShowForgotHelp(false)}
+    <div className={styles.shell}>
+      <div className={styles.themeCorner}>
+        <ThemeSwitcher compact />
+      </div>
+      <div className={styles.panel}>
+        <aside className={styles.brandPane}>
+          <img
+            className={styles.watermark}
+            src={publicUrl("logo_vertical_white.svg")}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
           />
-        </div>
+          <div className={styles.brandContent}>
+            <div className={styles.brandTop}>
+              <img
+                className={styles.brandWordmark}
+                src={wordmarkSrc}
+                alt="会火"
+              />
+            </div>
+            <h1 className={styles.brandTitle}>{t("login.platformName")}</h1>
+            <p className={styles.brandDesc}>{t("login.brandDesc")}</p>
+            <div className={styles.featureList}>
+              {features.map(({ key, Icon }) => (
+                <div key={key} className={styles.featureCard}>
+                  <span className={styles.featureIcon} aria-hidden="true">
+                    <Icon size={17} strokeWidth={1.8} />
+                  </span>
+                  <div>
+                    <div className={styles.featureTitle}>
+                      {t(`login.feature${key}`)}
+                    </div>
+                    <div className={styles.featureDesc}>
+                      {t(`login.feature${key}Desc`)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className={styles.brandFoot}>
+            <ShieldCheck size={14} strokeWidth={1.8} aria-hidden="true" />
+            <span>{t("login.brandFoot")}</span>
+          </div>
+        </aside>
 
-        {providers.length > 0 && (
-          <>
+        <section className={styles.formPane}>
+          <div className={styles.form}>
+            <div className={styles.mobileBrand}>
+              <img
+                className={styles.mobileWordmark}
+                src={wordmarkSrc}
+                alt="会火"
+              />
+              <div className={styles.mobilePlatform}>
+                {t("login.platformName")}
+              </div>
+              <div className={styles.mobilePills}>
+                {features.map(({ key }) => (
+                  <span key={key} className={styles.mobilePill}>
+                    {t(`login.feature${key}`)}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.formHead}>
+              <h2 className={styles.formTitle}>
+                {t(isStaff ? "login.staffTitle" : "login.manageTitle")}
+              </h2>
+              <p className={styles.formSubtitle}>
+                {t(isStaff ? "login.staffSubtitle" : "login.manageSubtitle")}
+              </p>
+            </div>
+
+            <Input
+              prefix={
+                <User
+                  size={16}
+                  style={{ color: "var(--fn-text-quaternary)" }}
+                />
+              }
+              placeholder={t(
+                isStaff ? "login.staffUsername" : "login.username",
+              )}
+              size="large"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              inputMode={isStaff ? "tel" : undefined}
+              onPressEnter={handleLogin}
+              autoFocus
+              style={{ borderRadius: 10 }}
+            />
+
+            <Input.Password
+              prefix={
+                <Lock
+                  size={16}
+                  style={{ color: "var(--fn-text-quaternary)" }}
+                />
+              }
+              placeholder={t("login.password")}
+              size="large"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              onPressEnter={handleLogin}
+              style={{ borderRadius: 10 }}
+            />
+
+            {!isStaff && ldap?.enabled && (
+              <p
+                style={{
+                  margin: 0,
+                  marginTop: -8,
+                  width: "100%",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--fn-text-tertiary)",
+                  textAlign: "center",
+                }}
+              >
+                {t("login.ldapHint", {
+                  name: ldap.display_name.trim() || t("adminSso.ldap.kind"),
+                })}
+              </p>
+            )}
+
+            {!isStaff && (
+              <CaptchaField
+                ref={captchaRef}
+                config={captcha}
+                resetKey={captchaResetKey}
+                slideHint={t("login.slideHint")}
+                slideVerifiedLabel={t("login.slideVerified")}
+                unsupportedLabel={t("login.unsupportedCaptcha")}
+                onReadyChange={setCaptchaReady}
+              />
+            )}
+
+            <Button
+              type="primary"
+              size="large"
+              block
+              loading={loading}
+              onClick={handleLogin}
+              disabled={
+                !username.trim() || !password || (!isStaff && !captchaReady)
+              }
+              style={{ borderRadius: 10, height: 44, fontWeight: 500 }}
+            >
+              {t("login.submit")}
+            </Button>
+
             <div
               style={{
                 width: "100%",
                 display: "flex",
-                alignItems: "center",
-                gap: 12,
-                color: "var(--fn-text-tertiary)",
-                fontSize: 13,
+                flexDirection: "column",
+                gap: 8,
               }}
             >
-              <span
+              <div
                 style={{
-                  flex: 1,
-                  height: 1,
-                  background: "var(--fn-border-primary)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  width: "100%",
                 }}
-              />
-              {t("login.or")}
-              <span
-                style={{
-                  flex: 1,
-                  height: 1,
-                  background: "var(--fn-border-primary)",
-                }}
-              />
-            </div>
-            {providers.map((provider) => (
-              <Button
-                key={provider.kind}
-                size="large"
-                block
-                icon={providerIcon(provider)}
-                loading={ssoLoadingKind === provider.kind}
-                onClick={() => void onSso(provider.kind)}
-                style={{ borderRadius: 10, height: 44, fontWeight: 500 }}
               >
-                {t("login.oidcWith", { name: providerLabel(provider, t) })}
-              </Button>
-            ))}
-          </>
-        )}
+                <Checkbox
+                  checked={remember}
+                  onChange={(e) => setRemember(e.target.checked)}
+                  style={{
+                    margin: 0,
+                    fontSize: 13,
+                    color: "var(--fn-text-tertiary)",
+                  }}
+                >
+                  {t("login.remember")}
+                </Checkbox>
+                <button
+                  type="button"
+                  data-testid="login-forgot-password-toggle"
+                  onClick={() => setShowForgotHelp(true)}
+                  style={{
+                    margin: 0,
+                    padding: 0,
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    color: "var(--fn-text-tertiary)",
+                    flexShrink: 0,
+                  }}
+                >
+                  {t("login.forgotPassword", "Forgot password?")}
+                </button>
+              </div>
+              {isStaff ? (
+                <Modal
+                  open={showForgotHelp}
+                  title={t("login.forgotPasswordTitle")}
+                  onCancel={() => setShowForgotHelp(false)}
+                  footer={
+                    <Button
+                      type="primary"
+                      onClick={() => setShowForgotHelp(false)}
+                    >
+                      {t("login.forgotPasswordOk")}
+                    </Button>
+                  }
+                  centered
+                >
+                  <p>{t("login.staffForgotPasswordHelp")}</p>
+                </Modal>
+              ) : (
+                <ForgotPasswordModal
+                  open={showForgotHelp}
+                  onClose={() => setShowForgotHelp(false)}
+                />
+              )}
+            </div>
+
+            {!isStaff && providers.length > 0 && (
+              <>
+                <div
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    color: "var(--fn-text-tertiary)",
+                    fontSize: 13,
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      height: 1,
+                      background: "var(--fn-border-primary)",
+                    }}
+                  />
+                  {t("login.or")}
+                  <span
+                    style={{
+                      flex: 1,
+                      height: 1,
+                      background: "var(--fn-border-primary)",
+                    }}
+                  />
+                </div>
+                {providers.map((provider) => (
+                  <Button
+                    key={provider.kind}
+                    size="large"
+                    block
+                    icon={providerIcon(provider)}
+                    loading={ssoLoadingKind === provider.kind}
+                    onClick={() => void onSso(provider.kind)}
+                    style={{ borderRadius: 10, height: 44, fontWeight: 500 }}
+                  >
+                    {t("login.oidcWith", { name: providerLabel(provider, t) })}
+                  </Button>
+                ))}
+              </>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

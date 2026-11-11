@@ -244,16 +244,17 @@ def _memory_extract_settings(
     """Extract the ``memory`` config section into HarnessAgentConfig kwargs.
 
     Mirrors the shape written by the dashboard's ``PUT .../memory/extract-config``
-    endpoint. Only recognized keys are forwarded; anything missing falls through
-    to HarnessAgentConfig's own defaults, so an agent with no ``memory`` section
-    behaves exactly as before.
+    endpoint. Only recognized keys are forwarded. Memory stays off unless the
+    agent config explicitly sets ``memory_enabled``; other missing keys still
+    fall through to HarnessAgentConfig.
     """
     mem = cfg.get("memory")
     if not isinstance(mem, dict):
-        return {}
+        mem = {}
     out: dict[str, Any] = _memory_aux_model_settings(mem, supported_fields, is_ref_usable)
-    if "memory_enabled" in supported_fields and isinstance(mem.get("memory_enabled"), bool):
-        out["memory_enabled"] = mem["memory_enabled"]
+    if "memory_enabled" in supported_fields:
+        enabled = mem.get("memory_enabled")
+        out["memory_enabled"] = enabled if isinstance(enabled, bool) else False
     if "memory_extract_on_session_end" in supported_fields and isinstance(
         mem.get("extract_on_session_end"), bool
     ):
