@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import time
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol, cast
 
 from langchain_core.tools import StructuredTool
 from langgraph.config import get_config
@@ -32,27 +29,6 @@ from octop.infra.auth.youli.delivery_export import (
 from octop.infra.auth.youli.mcn_client import McnClient, McnClientError
 
 _MAX_OUTPUT_CHARS = 8000
-_SAVED_QUOTES: dict[str, tuple[float, str]] = {}
-
-
-def _money(value: Any) -> Decimal:
-    return Decimal(str(value if value not in (None, "") else "0")).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
-
-
-def _money_number(value: Decimal) -> float:
-    return float(value)
-
-
-def _line_quantity(spec: dict[str, Any]) -> int:
-    raw = spec.get("quantity")
-    if raw in (None, ""):
-        raw = spec.get("count") if spec.get("count") not in (None, "") else 1
-    quantity = int(str(raw))
-    if quantity < 1 or quantity > 9999:
-        raise ValueError("quantity")
-    return quantity
 
 
 def _json(data: Any) -> str:
@@ -73,49 +49,6 @@ def _slim(data: Any, keys: tuple[str, ...]) -> Any:
     ]
 
 
-def _order_item(item: dict[str, Any]) -> dict[str, Any]:
-    """Map a quote-detail item into the order snapshot item shape."""
-    return {
-        # A fresh id per order: reusing the quote item id makes the amount
-        # recalculation share service items across orders and divide amounts.
-        "itemId": None,
-        "type": item.get("type"),
-        "skuId": item.get("skuId"),
-        "accountId": item.get("accountId"),
-        "accountName": item.get("accountName"),
-        "packageId": item.get("packageId"),
-        "count": item.get("count"),
-        "quantity": item.get("quantity"),
-        "price": item.get("originalPrice"),
-        "originalPrice": item.get("originalPrice"),
-        "originalMoney": item.get("originalMoney"),
-        "couponMoney": item.get("couponMoney"),
-        "couponAfterMoney": item.get("baseMoney"),
-        "factMoney": item.get("factMoney"),
-        "modeOperation": item.get("modeOperation"),
-        "noCalculate": item.get("noCalculate"),
-        "supplierId": item.get("supplierId"),
-        "isAuditExempt": item.get("isAuditExempt"),
-        "noteDescription": item.get("noteDescription"),
-    }
-
-
-def _item_supplier(item: dict[str, Any]) -> str | None:
-    """Read supplier id from the item field or its dynamic JSON."""
-    supplier = item.get("supplierId")
-    if supplier not in (None, ""):
-        return str(supplier)
-    raw = item.get("dynamicItemObj")
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        value = (parsed or {}).get("formLabelAlign", {}).get("supplier")
-        return str(value) if value not in (None, "") else None
-    except (ValueError, AttributeError):
-        return None
-
-
 def _current_sid() -> str | None:
     """Prefer the sid stamped into the run config; fall back to the request context."""
     try:
@@ -127,6 +60,29 @@ def _current_sid() -> str | None:
         return sid
     thread_sid = sid_for_thread(str(configurable.get("thread_id") or ""))
     return thread_sid or current_youli_sid()
+
+
+class _SharedWriteApi(Protocol):
+    """写操作签名；实现只有一份，见 connectors/gateway/adapters/mcn.py。"""
+
+    def save_quote(self, client: McnClient, args: dict[str, Any]) -> str: ...
+
+    def create_package_quote(self, client: McnClient, args: dict[str, Any]) -> str: ...
+
+    def create_order_from_quote(self, client: McnClient, args: dict[str, Any]) -> str: ...
+
+    def create_combined_order(self, client: McnClient, args: dict[str, Any]) -> str: ...
+
+
+def _shared_write_api() -> _SharedWriteApi:
+    """Quote and order writes live in the connector adapter; this entry forwards.
+
+    Imported lazily so the module graph stays acyclic and the legacy tool
+    entry cannot drift into a second implementation of the same write.
+    """
+    from octop.infra.connectors.gateway.adapters import mcn as adapter
+
+    return cast(_SharedWriteApi, adapter)
 
 
 def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
@@ -146,9 +102,6 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         if not client.enabled:
             raise McnClientError("MCN 业务接口未配置")
         return client
-
-    def _cache_key(raw: str) -> str:
-        return f"{_client().token_fingerprint}:{raw}"
 
     async def list_accounts(
         account_name: Annotated[
@@ -366,18 +319,10 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         ] = False,
     ) -> str:
         """保存报价单。写操作，必须先用 confirm=false 展示内容，用户确认后再保存。"""
-        if not confirm:
-            return "未保存：请先把报价单内容给用户核对，用户明确确认后再以 confirm=true 调用。"
         try:
-            digest = hashlib.sha256(
-                json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            ).hexdigest()
-            cached = _SAVED_QUOTES.get(_cache_key(digest))
-            if cached and time.time() - cached[0] < 600:
-                return f"重复提交已忽略，上次结果：{cached[1]}"
-            result = _json(_client().post("/api/mcn/offerOrder/save", payload))
-            _SAVED_QUOTES[_cache_key(digest)] = (time.time(), result)
-            return result
+            return _shared_write_api().save_quote(
+                _client(), {"payload": payload, "confirm": confirm}
+            )
         except McnClientError as exc:
             return f"保存报价单失败：{exc}"
 
@@ -385,240 +330,87 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         name: Annotated[str, Field(description="报价单名称")],
         product_id: Annotated[str, Field(description="产品 ID")],
         customer_id: Annotated[str, Field(description="客户 ID")],
-        price_version_id: Annotated[str, Field(description="价格版本 ID")],
-        coupon_version_id: Annotated[str, Field(description="优惠政策版本 ID")],
         account_specs: Annotated[
             list[dict[str, Any]],
             Field(
                 description=(
-                    "账号规格列表，每项包含 account_id、account_name、sku_id、price、"
-                    "mode_operation（可选，默认 1）"
+                    "账号规格列表，每项包含 account_id、sku_id；price 可省略以取规格价格，"
+                    "quantity 默认 1。账号名、规格名、平台、运营方式自动查询"
                 )
             ),
         ],
-        confirm: Annotated[
-            bool, Field(description="用户核对账号、规格、价格并明确确认后才传 true")
-        ] = False,
+        price_version_id: Annotated[
+            str, Field(description="用户指定时传；省略则按合同保价或默认版本自动选择")
+        ] = "",
+        coupon_version_id: Annotated[
+            str, Field(description="用户指定时传；省略则按合同保价或默认版本自动选择")
+        ] = "",
+        project_type: Annotated[
+            int | None, Field(description="散投自动带出；项目产品需明确业务类型")
+        ] = None,
+        order_type: Annotated[int, Field(description="订单类型，默认常规单 1")] = 1,
+        contract_id: Annotated[
+            str, Field(description="可空，默认商机下首个有效已审核合同")
+        ] = "",
+        customer_opportunity_id: Annotated[
+            str, Field(description="客户商机 ID，可空；传了报价和后续订单才能归到项目")
+        ] = "",
+        expected_amount: Annotated[
+            float | None, Field(description="用户已确认的草稿应付金额；金额变化会阻止保存")
+        ] = None,
+        confirm: Annotated[bool, Field(description="用户确认后才传 true")] = False,
     ) -> str:
-        """创建拉包报价单：先选账号，再按账号+规格+价格逐行保存。"""
-        if not confirm:
-            return "未保存：请先把账号、规格、价格和合计给用户核对，确认后再以 confirm=true 调用。"
-        if not account_specs:
-            return "未保存：至少选择一个账号规格。"
+        """创建账号报价单：与连接器工具共用同一份实现。"""
         try:
-            items: list[dict[str, Any]] = []
-            total = Decimal("0.00")
-            for spec in account_specs:
-                try:
-                    quantity = _line_quantity(spec)
-                    unit = _money(spec.get("price"))
-                except (InvalidOperation, ValueError, ArithmeticError):
-                    return "未保存：账号规格的价格或数量不正确。"
-                line = (unit * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                total += line
-                unit_number = _money_number(unit)
-                line_number = _money_number(line)
-                items.append(
-                    {
-                        "type": 3,
-                        "modeOperation": int(spec.get("mode_operation") or 1),
-                        "skuId": str(spec.get("sku_id")),
-                        "accountId": str(spec.get("account_id")),
-                        "accountName": spec.get("account_name") or "",
-                        "quantity": quantity,
-                        "price": unit_number,
-                        "originalPrice": unit_number,
-                        "originalMoney": line_number,
-                        "couponAfterMoney": line_number,
-                        "factMoney": line_number,
-                        "noCalculate": 0,
-                    }
-                )
-            payload = {
-                "offerOrderName": name,
-                "productId": str(product_id),
-                "customerId": str(customer_id),
-                "priceVersion": str(price_version_id),
-                "couponVersion": str(coupon_version_id),
-                "orderMoney": _money_number(total),
-                "factOrderMoney": _money_number(total),
-                "itemRoList": items,
-            }
-            digest = hashlib.sha256(
-                json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            ).hexdigest()
-            cached = _SAVED_QUOTES.get(_cache_key(digest))
-            if cached and time.time() - cached[0] < 600:
-                return f"重复提交已忽略，上次结果：{cached[1]}"
-            client = _client()
-            saved = client.post("/api/mcn/offerOrder/save", payload)
-            quotes = client.post(
-                "/api/mcn/offerOrder/list",
+            return _shared_write_api().create_package_quote(
+                _client(),
                 {
-                    "page": {"pageNum": 1, "pageSize": 5},
-                    "offerOrderName": name,
+                    "name": name,
+                    "product_id": product_id,
+                    "customer_id": customer_id,
+                    "price_version_id": price_version_id,
+                    "coupon_version_id": coupon_version_id,
+                    "project_type": project_type,
+                    "order_type": order_type,
+                    "contract_id": contract_id,
+                    "customer_opportunity_id": customer_opportunity_id,
+                    "expected_amount": expected_amount,
+                    "account_specs": account_specs,
+                    "confirm": confirm,
                 },
             )
-            result = _json(
-                {
-                    "saved": saved,
-                    "quotes": _slim(
-                        quotes,
-                        (
-                            "id",
-                            "offerOrderNo",
-                            "offerOrderName",
-                            "customerName",
-                            "orderMoney",
-                            "factOrderMoney",
-                            "status",
-                        ),
-                    ),
-                }
-            )
-            _SAVED_QUOTES[_cache_key(digest)] = (time.time(), result)
-            return result
         except McnClientError as exc:
             return f"创建拉包报价失败：{exc}"
 
     async def create_order_from_quote(
         quote_id: Annotated[str, Field(description="报价单 ID")],
-        confirm: Annotated[
-            bool, Field(description="用户核对报价和金额并明确确认后才传 true")
-        ] = False,
+        project_id: Annotated[str, Field(description="父项目 ID，可空")] = "",
+        sub_project_id: Annotated[str, Field(description="子项目 ID，可空")] = "",
+        confirm: Annotated[bool, Field(description="用户确认后才传 true")] = False,
     ) -> str:
-        """从报价单创建销售订单：保存并提交，服务项目按报价明细自动拆出。"""
-        if not confirm:
-            return "未下单：请先把报价单号、客户和金额给用户核对，用户确认后再以 confirm=true 调用。"
+        """从报价单创建销售订单：与连接器工具共用同一份实现。"""
         try:
-            client = _client()
-            cache_key = f"{client.token_fingerprint}:order:{quote_id}"
-            cached = _SAVED_QUOTES.get(cache_key)
-            if cached and time.time() - cached[0] < 600:
-                return f"重复提交已忽略，上次结果：{cached[1]}"
-            detail = client.get("/api/mcn/offerOrder/detail", {"id": str(quote_id)})
-            if not isinstance(detail, dict):
-                return "下单失败：报价单详情格式不正确"
-            items = detail.get("offerOrderItemVos") or []
-            if not items:
-                return "下单失败：报价单没有明细"
-            payload = {
-                "submitMethod": 2,
-                "offerOrderId": str(quote_id),
-                "orderRo": {
-                    "customerId": str(detail.get("customerId")),
-                    "customerOpportunityId": detail.get("customerOpportunityId"),
-                    "contractId": detail.get("contractId"),
-                    "productId": str(detail.get("productId")),
-                    "offerOrderId": str(quote_id),
-                    "orderType": detail.get("orderType") or 1,
-                    "commitType": 1,
-                    "priceVersionId": str(detail.get("priceVersion")),
-                    "couponVersionId": str(detail.get("couponVersion")),
-                    "projectType": detail.get("projectType"),
-                },
-                "offerOrderSaveRo": {
-                    "id": str(quote_id),
-                    "offerOrderName": detail.get("offerOrderName"),
-                    "productId": str(detail.get("productId")),
-                    "customerId": str(detail.get("customerId")),
-                    "priceVersion": str(detail.get("priceVersion")),
-                    "couponVersion": str(detail.get("couponVersion")),
-                    "orderMoney": detail.get("orderMoney"),
-                    "factOrderMoney": detail.get("factOrderMoney"),
-                    "orderType": detail.get("orderType") or 1,
-                    "itemRoList": [_order_item(item) for item in items],
-                },
-                "orderExtraChargeRoList": [],
-            }
-            result = client.post("/api/mcn/order/temporaryStorage", payload)
-            text_result = _json(
+            return _shared_write_api().create_order_from_quote(
+                _client(),
                 {
-                    "order": result,
-                    "quoteId": str(quote_id),
-                    "quoteNo": detail.get("offerOrderNo"),
-                    "customerId": str(detail.get("customerId")),
-                    "amount": detail.get("factOrderMoney"),
-                }
+                    "quote_id": quote_id,
+                    "project_id": project_id,
+                    "sub_project_id": sub_project_id,
+                    "confirm": confirm,
+                },
             )
-            _SAVED_QUOTES[cache_key] = (time.time(), text_result)
-            return text_result
         except McnClientError as exc:
             return f"下单失败：{exc}"
 
     async def create_combined_order(
         quote_id: Annotated[str, Field(description="报价单 ID")],
-        confirm: Annotated[
-            bool, Field(description="用户核对拆单结果并明确确认后才传 true")
-        ] = False,
+        confirm: Annotated[bool, Field(description="用户确认后才传 true")] = False,
     ) -> str:
-        """组合订单：把一张拉包报价按供应商拆成多张订单，返回每张订单。"""
-        if not confirm:
-            return "未下单：请先说明将按供应商拆成几张订单及金额，用户确认后再以 confirm=true 调用。"
+        """组合订单：按供应商拆单，与连接器工具共用同一份实现。"""
         try:
-            client = _client()
-            cache_key = f"{client.token_fingerprint}:combined:{quote_id}"
-            cached = _SAVED_QUOTES.get(cache_key)
-            if cached and time.time() - cached[0] < 600:
-                return f"重复提交已忽略，上次结果：{cached[1]}"
-            detail = client.get("/api/mcn/offerOrder/detail", {"id": str(quote_id)})
-            if not isinstance(detail, dict):
-                return "下单失败：报价单详情格式不正确"
-            items = detail.get("offerOrderItemVos") or []
-            if not items:
-                return "下单失败：报价单没有明细"
-            groups: dict[str, list[dict[str, Any]]] = {}
-            for item in items:
-                key = _item_supplier(item) or "unassigned"
-                groups.setdefault(key, []).append(item)
-            orders: list[dict[str, Any]] = []
-            for supplier, group in groups.items():
-                mapped_items = []
-                amount = 0.0
-                for item in group:
-                    mapped = _order_item(item)
-                    mapped_items.append(mapped)
-                    amount += float(item.get("factMoney") or 0)
-                payload = {
-                    "submitMethod": 2,
-                    "orderRo": {
-                        "customerId": str(detail.get("customerId")),
-                        "customerOpportunityId": detail.get("customerOpportunityId"),
-                        "contractId": detail.get("contractId"),
-                        "productId": str(detail.get("productId")),
-                        "orderType": detail.get("orderType") or 1,
-                        "commitType": 1,
-                        "priceVersionId": str(detail.get("priceVersion")),
-                        "couponVersionId": str(detail.get("couponVersion")),
-                        "projectType": detail.get("projectType"),
-                    },
-                    "offerOrderSaveRo": {
-                        "offerOrderName": detail.get("offerOrderName"),
-                        "productId": str(detail.get("productId")),
-                        "customerId": str(detail.get("customerId")),
-                        "priceVersion": str(detail.get("priceVersion")),
-                        "couponVersion": str(detail.get("couponVersion")),
-                        "orderMoney": amount,
-                        "factOrderMoney": amount,
-                        "orderType": detail.get("orderType") or 1,
-                        "itemRoList": mapped_items,
-                    },
-                    "orderExtraChargeRoList": [],
-                }
-                result = client.post("/api/mcn/order/temporaryStorage", payload)
-                orders.append(
-                    {"supplier": supplier, "amount": amount, "result": result}
-                )
-            text_result = _json(
-                {
-                    "quoteId": str(quote_id),
-                    "quoteNo": detail.get("offerOrderNo"),
-                    "groups": len(orders),
-                    "orders": orders,
-                }
+            return _shared_write_api().create_combined_order(
+                _client(), {"quote_id": quote_id, "confirm": confirm}
             )
-            _SAVED_QUOTES[cache_key] = (time.time(), text_result)
-            return text_result
         except McnClientError as exc:
             return f"组合下单失败：{exc}"
 
@@ -872,17 +664,21 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         StructuredTool.from_function(
             coroutine=create_package_quote,
             name="youli_create_package_quote",
-            description="创建拉包报价单：按账号+规格+价格保存（写操作，需用户确认）。",
+            description=(
+                "创建账号报价单：先用 confirm=false 生成只读草稿，自动带出散投项目类型、"
+                "常规单、合同或默认价格/优惠版本并试算优惠。不要向用户索要 ID，不要逐个"
+                "确认默认字段；汇总草稿金额一次确认后 confirm=true 保存。"
+            ),
         ),
         StructuredTool.from_function(
             coroutine=create_order_from_quote,
             name="youli_create_order_from_quote",
-            description="从报价单创建并提交销售订单（写操作，需用户确认）。",
+            description="从报价单创建并提交销售订单，保留项目类型和商机（写操作，需用户确认）。",
         ),
         StructuredTool.from_function(
             coroutine=create_combined_order,
             name="youli_create_combined_order",
-            description="组合订单：按供应商把一张报价拆成多张订单（写操作，需用户确认）。",
+            description="组合订单：按供应商把一张报价拆成多张订单，保留项目类型和商机（写操作，需用户确认）。",
         ),
         StructuredTool.from_function(
             coroutine=list_service_items,
