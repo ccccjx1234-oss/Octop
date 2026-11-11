@@ -79,6 +79,25 @@ Octop 必须与 `youli-crm`、`youli-mdm` 处于同一 Compose 网络，或使�
 
 ## 7. 前端静态资源
 
+### 阿里云测试容器版本与回滚
+
+Octop Compose 配置位于 `/opt/octop/docker-compose.yml`，业务数据挂载为
+`/opt/octop/data:/data/.octop`。报价、交付导出、默认关闭记忆和员工界面修复
+对应源码提交 `7aee66e6`，运行镜像为 `octop:release-7aee66e6`。
+该镜像基于当前测试容器快照构建，保留原运行依赖和已存在的记忆热修复，
+仅覆盖本次提交的后端文件；无需数据库迁移。
+
+发布文件、摘要及核验回执位于 `/opt/octop/releases/7aee66e6/`。
+前端保留原会火 HTML 品牌壳，更新 `/aiwork/` 构建的脚本和样式引用。
+静态资源备份为 `/root/mcn/docker/nginx-edge/www/aiwork.bak.release-7aee66e6`，
+回滚镜像为 `octop:rollback-before-7aee66e6`。
+
+后端回滚时将 Compose 的 image 改为该回滚镜像，再在 `/opt/octop` 执行
+`docker compose up -d --no-deps octop`，等待健康检查通过。前端回滚恢复备份中的
+`index.html`、`sw.js` 和被替换的同名静态资源；哈希资源可保留。
+本次验证包含容器 healthy、入口与资源 HTTP/MIME/摘要、真实员工报价只读试算，
+未执行账号密码登录或创建新业务单据，也未修改已有报价数据。
+
 `/aiwork/` 由 mcn-edge-nginx 直接读取宿主机目录
 `/root/mcn/docker/nginx-edge/www/aiwork`，不经过 Octop 容器。该目录当前是
 “会火”品牌构建，**不要用本仓库默认前端构建覆盖**；默认构建的品牌、文案和
