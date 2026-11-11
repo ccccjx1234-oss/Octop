@@ -622,3 +622,54 @@ def test_create_contract_requires_opportunity(monkeypatch) -> None:
     )
     assert "customer_opportunity_id" in result
     assert fake.calls == []
+
+def test_combined_order_groups_by_supplier(monkeypatch) -> None:
+    class CombinedClient(FakeClient):
+        def get(self, path: str, params: Any = None) -> Any:
+            self.calls.append((path, params))
+
+            def item(account: str, supplier: str, amount: float) -> dict[str, Any]:
+                return {
+                    "itemId": account,
+                    "type": 0,
+                    "skuId": "100",
+                    "accountId": account,
+                    "quantity": 1,
+                    "originalPrice": amount,
+                    "originalMoney": amount,
+                    "baseMoney": amount,
+                    "factMoney": amount,
+                    "modeOperation": 1,
+                    "dynamicItemObj": json.dumps(
+                        {"formLabelAlign": {"supplier": supplier}}
+                    ),
+                }
+
+            return {
+                "customerId": "2",
+                "productId": "1",
+                "priceVersion": "3",
+                "couponVersion": "4",
+                "orderType": 1,
+                "projectType": 6,
+                "customerOpportunityId": "opp1",
+                "offerOrderNo": "BJ9",
+                "offerOrderItemVos": [item("10", "501", 7500), item("11", "502", 4000)],
+            }
+
+    fake = CombinedClient()
+    _use(monkeypatch, fake)
+    result = json.loads(
+        mcn.call_tool(
+            {}, "youli_create_combined_order", {"quote_id": "9", "confirm": True}
+        )
+    )
+    posts = [p for path, p in fake.calls if path.endswith("/temporaryStorage")]
+    assert result["groups"] == 2
+    assert len(posts) == 2
+    assert sorted(p["offerOrderSaveRo"]["factOrderMoney"] for p in posts) == [4000.0, 7500.0]
+    assert all(len(p["offerOrderSaveRo"]["itemRoList"]) == 1 for p in posts)
+    assert all("offerOrderId" not in p for p in posts)
+    # 拆单后每张订单都保留项目类型和商机，后续才能按项目统计。
+    assert all(p["offerOrderSaveRo"]["projectType"] == 6 for p in posts)
+    assert all(p["offerOrderSaveRo"]["customerOpportunityId"] == "opp1" for p in posts)

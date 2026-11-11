@@ -10,6 +10,7 @@ from octop.config import YouliConfig
 from octop.infra.auth.youli import tools as youli_tools
 from octop.infra.auth.youli.context import set_current_youli_sid
 from octop.infra.auth.youli.mcn_client import McnClient
+from octop.infra.connectors.gateway.adapters import mcn as mcn_adapter
 
 
 class _SessionRepo:
@@ -35,10 +36,10 @@ def _tools(row: object | None):
 @pytest.fixture(autouse=True)
 def _reset_sid():
     set_current_youli_sid(None)
-    youli_tools._SAVED_QUOTES.clear()
+    mcn_adapter._SAVED_QUOTES.clear()
     yield
     set_current_youli_sid(None)
-    youli_tools._SAVED_QUOTES.clear()
+    mcn_adapter._SAVED_QUOTES.clear()
 
 
 @pytest.mark.asyncio
@@ -162,236 +163,65 @@ async def test_save_quote_is_idempotent(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_quote_idempotency_does_not_cross_employees(monkeypatch) -> None:
-    set_current_youli_sid("sid-1")
-    current = {"token": "employee-a"}
-    monkeypatch.setattr(youli_tools, "decrypt_secret", lambda repo, blob: current["token"])
-    calls: list = []
+async def test_write_tools_delegate_to_connector_adapter(monkeypatch) -> None:
+    """报价与下单只有一份实现，旧入口只转发参数，不再自行拼载荷。"""
+    from octop.infra.connectors.gateway.adapters import mcn as adapter
 
-    def fake_post(self, path, payload=None):
-        calls.append((self._token, path, payload))
-        return True
-
-    monkeypatch.setattr(McnClient, "post", fake_post)
-    tool = _tools(SimpleNamespace(token_blob=b"blob"))["youli_save_quote"]
-    payload = {"productId": "1"}
-
-    await tool.ainvoke({"payload": payload, "confirm": True})
-    current["token"] = "employee-b"
-    await tool.ainvoke({"payload": payload, "confirm": True})
-
-    assert [item[0] for item in calls] == ["employee-a", "employee-b"]
-
-
-@pytest.mark.asyncio
-async def test_create_package_quote_builds_rows(monkeypatch) -> None:
     set_current_youli_sid("sid-1")
     monkeypatch.setattr(youli_tools, "decrypt_secret", lambda repo, blob: "tok")
-    calls: list = []
+    seen: list = []
 
-    def fake_post(self, path, payload=None):
-        calls.append((path, payload))
-        if path.endswith("/list"):
-            return [{"id": "99", "offerOrderNo": "BJ1", "offerOrderName": "拉包测试"}]
-        return True
+    def delegate(name: str):
+        def fake(client, args):
+            seen.append((name, client, args))
+            return f"{name}-ok"
 
-    monkeypatch.setattr(McnClient, "post", fake_post)
+        return fake
 
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_create_package_quote"
-    ].ainvoke(
-        {
-            "name": "拉包测试",
-            "product_id": "1",
-            "customer_id": "2",
-            "price_version_id": "3",
-            "coupon_version_id": "4",
-            "account_specs": [
-                {"account_id": "10", "account_name": "A", "sku_id": "100", "price": 7500},
-                {"account_id": "11", "account_name": "B", "sku_id": "101", "price": 4000},
-            ],
-            "confirm": True,
-        }
-    )
+    for name in (
+        "create_package_quote",
+        "create_order_from_quote",
+        "create_combined_order",
+    ):
+        monkeypatch.setattr(adapter, name, delegate(name))
 
-    assert "BJ1" in result
-    path, payload = calls[0]
-    assert path == "/api/mcn/offerOrder/save"
-    assert payload["orderMoney"] == 11500
-    assert payload["factOrderMoney"] == 11500
-    assert payload["priceVersion"] == "3"
-    assert payload["itemRoList"][0] == {
-        "type": 3,
-        "modeOperation": 1,
-        "skuId": "100",
-        "accountId": "10",
-        "accountName": "A",
-        "quantity": 1,
-        "price": 7500.0,
-        "originalPrice": 7500.0,
-        "originalMoney": 7500.0,
-        "couponAfterMoney": 7500.0,
-        "factMoney": 7500.0,
-        "noCalculate": 0,
-    }
-
-
-@pytest.mark.asyncio
-async def test_create_package_quote_multiplies_quantity(monkeypatch) -> None:
-    set_current_youli_sid("sid-1")
-    monkeypatch.setattr(youli_tools, "decrypt_secret", lambda repo, blob: "tok")
-    calls: list = []
-
-    def fake_post(self, path, payload=None):
-        calls.append((path, payload))
-        return True
-
-    monkeypatch.setattr(McnClient, "post", fake_post)
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_create_package_quote"
-    ].ainvoke(
-        {
-            "name": "小数",
-            "product_id": "1",
-            "customer_id": "2",
-            "price_version_id": "3",
-            "coupon_version_id": "4",
-            "account_specs": [
-                {
-                    "account_id": "10",
-                    "account_name": "A",
-                    "sku_id": "100",
-                    "price": "0.10",
-                    "quantity": 3,
-                },
-                {
-                    "account_id": "11",
-                    "account_name": "B",
-                    "sku_id": "101",
-                    "price": "0.20",
-                    "quantity": 1,
-                },
-            ],
-            "confirm": True,
-        }
-    )
-
-    assert "true" in result
-    payload = calls[0][1]
-    assert payload["orderMoney"] == 0.5
-    assert payload["factOrderMoney"] == 0.5
-    assert payload["itemRoList"][0]["quantity"] == 3
-    assert payload["itemRoList"][0]["factMoney"] == 0.3
-    assert payload["itemRoList"][1]["originalMoney"] == 0.2
-
-
-@pytest.mark.asyncio
-async def test_create_order_from_quote_maps_snapshot(monkeypatch) -> None:
-    set_current_youli_sid("sid-1")
-    monkeypatch.setattr(youli_tools, "decrypt_secret", lambda repo, blob: "tok")
-    calls: list = []
-
-    detail = {
-        "customerId": "2",
-        "productId": "1",
-        "priceVersion": "3",
-        "couponVersion": "4",
-        "orderMoney": 7500.0,
-        "factOrderMoney": 7500.0,
-        "orderType": 1,
-        "offerOrderNo": "BJ1",
-        "offerOrderItemVos": [
+    tools = _tools(SimpleNamespace(token_blob=b"blob"))
+    assert (
+        await tools["youli_create_package_quote"].ainvoke(
             {
-                "itemId": "9",
-                "type": 3,
-                "skuId": "100",
-                "accountId": "10",
-                "accountName": "A",
-                "quantity": 1,
-                "originalPrice": 7500,
-                "originalMoney": 7500,
-                "baseMoney": 7500,
-                "factMoney": 7500,
-                "modeOperation": 1,
-                "noCalculate": 0,
+                "name": "q",
+                "product_id": "p",
+                "customer_id": "c",
+                "account_specs": [{"account_id": "a", "sku_id": "s"}],
+                "confirm": True,
             }
-        ],
+        )
+        == "create_package_quote-ok"
+    )
+    assert (
+        await tools["youli_create_order_from_quote"].ainvoke({"quote_id": "5", "confirm": True})
+        == "create_order_from_quote-ok"
+    )
+    assert (
+        await tools["youli_create_combined_order"].ainvoke({"quote_id": "9", "confirm": True})
+        == "create_combined_order-ok"
+    )
+
+    package = seen[0][2]
+    assert package["account_specs"] == [{"account_id": "a", "sku_id": "s"}]
+    assert package["price_version_id"] == ""
+    assert package["coupon_version_id"] == ""
+    assert package["project_type"] is None
+    assert package["order_type"] == 1
+    assert package["confirm"] is True
+    assert seen[1][2] == {
+        "quote_id": "5",
+        "project_id": "",
+        "sub_project_id": "",
+        "confirm": True,
     }
-
-    def fake_get(self, path, params=None):
-        calls.append((path, params))
-        return detail
-
-    def fake_post(self, path, payload=None):
-        calls.append((path, payload))
-        return {"orderId": "77", "result": True}
-
-    monkeypatch.setattr(McnClient, "get", fake_get)
-    monkeypatch.setattr(McnClient, "post", fake_post)
-
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_create_order_from_quote"
-    ].ainvoke({"quote_id": "5", "confirm": True})
-
-    assert "77" in result
-    assert calls[0] == ("/api/mcn/offerOrder/detail", {"id": "5"})
-    path, payload = calls[1]
-    assert path == "/api/mcn/order/temporaryStorage"
-    assert payload["submitMethod"] == 2
-    assert payload["orderRo"]["customerId"] == "2"
-    assert payload["orderRo"]["offerOrderId"] == "5"
-    assert payload["offerOrderSaveRo"]["itemRoList"][0]["couponAfterMoney"] == 7500
-
-
-@pytest.mark.asyncio
-async def test_create_combined_order_groups_by_supplier(monkeypatch) -> None:
-    set_current_youli_sid("sid-1")
-    monkeypatch.setattr(youli_tools, "decrypt_secret", lambda repo, blob: "tok")
-    posts: list = []
-
-    def item(account: str, supplier: str, amount: float) -> dict:
-        return {
-            "itemId": account,
-            "type": 3,
-            "skuId": "100",
-            "accountId": account,
-            "quantity": 1,
-            "originalPrice": amount,
-            "originalMoney": amount,
-            "baseMoney": amount,
-            "factMoney": amount,
-            "modeOperation": 1,
-            "dynamicItemObj": f'{{"formLabelAlign":{{"supplier":"{supplier}"}}}}',
-        }
-
-    detail = {
-        "customerId": "2",
-        "productId": "1",
-        "priceVersion": "3",
-        "couponVersion": "4",
-        "orderType": 1,
-        "offerOrderNo": "BJ9",
-        "offerOrderItemVos": [item("10", "501", 7500), item("11", "502", 4000)],
-    }
-
-    monkeypatch.setattr(McnClient, "get", lambda self, path, params=None: detail)
-
-    def fake_post(self, path, payload=None):
-        posts.append(payload)
-        return {"orderId": str(len(posts)), "result": True}
-
-    monkeypatch.setattr(McnClient, "post", fake_post)
-
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_create_combined_order"
-    ].ainvoke({"quote_id": "9", "confirm": True})
-
-    assert "\"groups\": 2" in result
-    assert len(posts) == 2
-    amounts = sorted(post["offerOrderSaveRo"]["factOrderMoney"] for post in posts)
-    assert amounts == [4000.0, 7500.0]
-    assert all(len(post["offerOrderSaveRo"]["itemRoList"]) == 1 for post in posts)
-    assert "offerOrderId" not in posts[0]
+    assert seen[2][2] == {"quote_id": "9", "confirm": True}
+    assert all(isinstance(entry[1], McnClient) for entry in seen)
 
 
 @pytest.mark.asyncio

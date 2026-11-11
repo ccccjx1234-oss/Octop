@@ -889,6 +889,14 @@ def _create_combined_order(client: McnClient, args: dict[str, Any]) -> str:
     return text_result
 
 
+# The legacy youli tool entry forwards here so quote/order writes keep one
+# implementation. Both surfaces must stay in step; do not fork these again.
+save_quote = _save_quote
+create_package_quote = _create_package_quote
+create_order_from_quote = _create_order_from_quote
+create_combined_order = _create_combined_order
+
+
 def _list_service_items(client: McnClient, args: dict[str, Any]) -> str:
     order_id = str(args.get("order_id") or "").strip()
     if not order_id:
