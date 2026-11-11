@@ -83,20 +83,28 @@ Octop 必须与 `youli-crm`、`youli-mdm` 处于同一 Compose 网络，或使�
 
 Octop Compose 配置位于 `/opt/octop/docker-compose.yml`，业务数据挂载为
 `/opt/octop/data:/data/.octop`。报价、交付导出、默认关闭记忆和员工界面修复
-对应源码提交 `7aee66e6`，运行镜像为 `octop:release-7aee66e6`。
+当前源码提交 `c8ad3355`，运行镜像为 `octop:release-c8ad3355`。
 该镜像基于当前测试容器快照构建，保留原运行依赖和已存在的记忆热修复，
 仅覆盖本次提交的后端文件；无需数据库迁移。
 
-发布文件、摘要及核验回执位于 `/opt/octop/releases/7aee66e6/`。
+发布文件、摘要及核验回执位于 `/opt/octop/releases/c8ad3355/`。
 前端保留原会火 HTML 品牌壳，更新 `/aiwork/` 构建的脚本和样式引用。
 静态资源备份为 `/root/mcn/docker/nginx-edge/www/aiwork.bak.release-7aee66e6`，
-回滚镜像为 `octop:rollback-before-7aee66e6`。
+回滚镜像为 `octop:rollback-before-c8ad3355`，上一版运行镜像
+`octop:release-7aee66e6` 保留可用。
 
 后端回滚时将 Compose 的 image 改为该回滚镜像，再在 `/opt/octop` 执行
 `docker compose up -d --no-deps octop`，等待健康检查通过。前端回滚恢复备份中的
 `index.html`、`sw.js` 和被替换的同名静态资源；哈希资源可保留。
 本次验证包含容器 healthy、入口与资源 HTTP/MIME/摘要、真实员工报价只读试算，
 未执行账号密码登录或创建新业务单据，也未修改已有报价数据。
+
+### 报价与下单只有一份实现
+
+报价单保存、账号报价、报价转订单和组合订单的组装逻辑集中在
+`infra/connectors/gateway/adapters/mcn.py`。`infra/auth/youli/tools.py`
+的同名工具只转发参数，不再自行拼装载荷。改动写到适配器一处即可；两个入口的
+测试分别验证行为与转发，避免同一断言在两处重复。
 
 `/aiwork/` 由 mcn-edge-nginx 直接读取宿主机目录
 `/root/mcn/docker/nginx-edge/www/aiwork`，不经过 Octop 容器。该目录当前是
