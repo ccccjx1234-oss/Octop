@@ -82,6 +82,9 @@ def test_merge_turn_mcp_servers_unions_extra_defaults() -> None:
         def list_active_mcp_server_names(self, _uid: int) -> list[str]:
             return ["always", "expert"]
 
+        def expand_connector_refs(self, _uid: int, refs: list[str]) -> list[str]:
+            return [name for name in refs if name]
+
     svc = _Svc()
     assert ConnectorService.merge_turn_mcp_servers(
         svc,  # type: ignore[arg-type]
@@ -103,3 +106,51 @@ def test_merge_turn_mcp_servers_unions_extra_defaults() -> None:
     # IM / Cron force defaults.
     assert merge_mcp_servers_with_defaults([], ["a"], apply_defaults=True) == ["a"]
     assert merge_mcp_servers_with_defaults(None, ["a"], apply_defaults=True) == ["a"]
+
+
+def test_expand_connector_refs_uses_the_caller_own_instances() -> None:
+    from types import SimpleNamespace
+
+    from octop.infra.connectors.service import ConnectorService
+
+    class _Repo:
+        def list_visible(self, _uid: int):
+            return [
+                SimpleNamespace(
+                    kind="mcn",
+                    status="active",
+                    has_credentials=True,
+                    mcp_server_name="mcn__a",
+                    user_id=1,
+                ),
+                SimpleNamespace(
+                    kind="mcn",
+                    status="active",
+                    has_credentials=False,
+                    mcp_server_name="mcn__b",
+                    user_id=1,
+                ),
+                SimpleNamespace(
+                    kind="mcn",
+                    status="active",
+                    has_credentials=True,
+                    mcp_server_name="mcn__a",
+                    user_id=1,
+                ),
+                SimpleNamespace(
+                    kind="mcn",
+                    status="active",
+                    has_credentials=True,
+                    mcp_server_name="mcn__shared",
+                    user_id=2,
+                ),
+                SimpleNamespace(
+                    kind="erp", status="active", has_credentials=True, mcp_server_name="erp__c"
+                ),
+            ]
+
+    svc = ConnectorService.__new__(ConnectorService)
+    svc._repo = _Repo()  # type: ignore[assignment]
+    expanded = ConnectorService.expand_connector_refs(svc, 1, ["mcn", "mcn__x", "", "gone"])
+    assert expanded == ["mcn__a", "mcn__x"]
+    assert "mcn__shared" not in expanded

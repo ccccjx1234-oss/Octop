@@ -6,11 +6,13 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Header, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from octop.api.common.client_ip import resolve_client_ip
-from octop.api.deps import current_user, get_server, sign_token
+from octop.api.deps import current_user, extract_raw_token, get_server, sign_token
+from octop.infra.auth.tokens import InvalidToken, TokenExpired, decode_token
+from octop.infra.auth.youli.service import YouliAuthService
 from octop.infra.auth.captcha import current_env, ensure_captcha, load_effective, public_config
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.email import normalize_email
@@ -208,8 +210,30 @@ async def login(
 
 
 @router.post("/logout", status_code=204, summary="Sign out")
-async def logout(user: Any = Depends(current_user), server: Any = Depends(get_server)) -> Response:
-    """Record an audit event for the current session. JWTs are stateless and not revoked server-side."""
+async def logout(
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+    authorization: str | None = Header(None),
+) -> Response:
+    """Revoke the current Youli session when the token carries one, then audit."""
+    raw = extract_raw_token(authorization=authorization)
+    if raw:
+        secret = server.services.secret_repo.get("jwt")
+        payload: dict[str, Any] = {}
+        if secret is not None:
+            try:
+                payload = decode_token(secret, raw)
+            except (InvalidToken, TokenExpired):
+                payload = {}
+        sid = payload.get("sid")
+        if sid:
+            session = server.services.youli_session_repo.get(str(sid))
+            if session is not None and session.user_id == user.id:
+                await YouliAuthService(
+                    services=server.services,
+                    users=server.user_manager,
+                    cfg=server.services.config.youli,
+                ).logout(session=session)
     server.services.audit_repo.write(actor=user.username, action="auth.logout")
     return Response(status_code=204)
 

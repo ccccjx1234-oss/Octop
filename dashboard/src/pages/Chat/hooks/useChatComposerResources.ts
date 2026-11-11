@@ -247,9 +247,20 @@ export function useChatComposerResources(
             }));
           setChatConnectors(options);
           const allowed = new Set(options.map((o) => o.mcp_server_name));
+          // Expert picks may name a connector kind (each employee installs
+          // their own instance); resolve them against this user's instances.
+          const namesByKind = new Map<string, string[]>();
+          for (const option of options) {
+            const names = namesByKind.get(option.kind) ?? [];
+            names.push(option.mcp_server_name);
+            namesByKind.set(option.kind, names);
+          }
+          const expertConnectorNames = (expertMcpServers ?? []).flatMap((ref) =>
+            allowed.has(ref) ? [ref] : (namesByKind.get(ref) ?? []),
+          );
           const defaults = withDefaultOpenKnowledgeBases(
             options.filter((o) => o.default_open).map((o) => o.mcp_server_name),
-            expertMcpServers ?? [],
+            expertConnectorNames,
           );
           setSelectedConnectors((prev) =>
             resolveInitialConnectors({

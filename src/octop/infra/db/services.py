@@ -39,6 +39,12 @@ from octop.infra.db.repos.user_groups import UserGroupRepo
 from octop.infra.db.repos.user_policies import UserPolicyRepo
 from octop.infra.db.repos.users import UserRepo
 from octop.infra.db.repos.voice_providers import VoiceProviderRepo
+from octop.infra.db.repos.youli import (
+    YouliAgentBindingRepo,
+    YouliBusinessTemplateRepo,
+    YouliLoginRequestRepo,
+    YouliSessionRepo,
+)
 from octop.infra.utils.paths import PathLayout
 
 
@@ -74,6 +80,10 @@ class RepoBundle:
     user_group_repo: UserGroupRepo
     user_group_member_repo: UserGroupMemberRepo
     resource_group_grant_repo: ResourceGroupGrantRepo
+    youli_login_request_repo: YouliLoginRequestRepo
+    youli_session_repo: YouliSessionRepo
+    youli_agent_binding_repo: YouliAgentBindingRepo
+    youli_business_template_repo: YouliBusinessTemplateRepo
 
     @classmethod
     def from_pool(cls, db: DatabasePool) -> RepoBundle:
@@ -108,6 +118,10 @@ class RepoBundle:
             user_group_repo=UserGroupRepo(db),
             user_group_member_repo=UserGroupMemberRepo(db),
             resource_group_grant_repo=ResourceGroupGrantRepo(db),
+            youli_login_request_repo=YouliLoginRequestRepo(db),
+            youli_session_repo=YouliSessionRepo(db),
+            youli_agent_binding_repo=YouliAgentBindingRepo(db),
+            youli_business_template_repo=YouliBusinessTemplateRepo(db),
         )
 
 
@@ -220,6 +234,22 @@ class SharedServices:
     @property
     def sso_repo(self) -> SsoRepo:
         return self.repos.sso_repo
+
+    @property
+    def youli_login_request_repo(self) -> YouliLoginRequestRepo:
+        return self.repos.youli_login_request_repo
+
+    @property
+    def youli_session_repo(self) -> YouliSessionRepo:
+        return self.repos.youli_session_repo
+
+    @property
+    def youli_agent_binding_repo(self) -> YouliAgentBindingRepo:
+        return self.repos.youli_agent_binding_repo
+
+    @property
+    def youli_business_template_repo(self) -> YouliBusinessTemplateRepo:
+        return self.repos.youli_business_template_repo
 
 
 def build_shared_services(

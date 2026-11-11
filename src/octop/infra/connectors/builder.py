@@ -60,6 +60,13 @@ def mcp_server_name(kind: str, instance_id: str) -> str:
     return f"{kind}__{instance_id}"
 
 
+def personal_connector_visible(inst: Any, user_id: int) -> bool:
+    """MCN keeps the installing employee's own token and cannot be shared."""
+    if getattr(inst, "kind", "") != "mcn":
+        return True
+    return int(getattr(inst, "user_id", -1)) == int(user_id)
+
+
 def _internal_mcp_uses_https(config: OctopConfig) -> bool:
     """True when the API listener is HTTPS (not the ACME/redirect companion)."""
     return bool(config.tls.enabled and config.tls.cert_file and config.tls.key_file)
@@ -473,6 +480,18 @@ def validate_create_credentials(
         }
 
     if entry.auth_kind == "custom_fields":
+        if entry.kind == "mcn":
+            token = str(credentials.get("token") or "").strip()
+            if not token:
+                raise ValueError("请先完成会火员工登录，再安装 MCN 连接器")
+            out = {
+                "token": token,
+                "internal_token": new_internal_token(),
+            }
+            base_url = str(credentials.get("base_url") or "").strip()
+            if base_url:
+                out["base_url"] = base_url
+            return out
         if entry.kind == "agently-cli":
             # A caller must never select another instance's CLI credential directory.
             return {"internal_token": new_internal_token(), "cli_config_key": new_ulid()}
@@ -562,6 +581,8 @@ def _iter_active_connectors(
     for inst in connector_repo.list_visible(user_id):
         if inst.status != "active":
             continue
+        if not personal_connector_visible(inst, user_id):
+            continue
         entry = get_catalog_entry(inst.kind)
         if entry is None:
             continue
@@ -569,6 +590,24 @@ def _iter_active_connectors(
         if not creds:
             continue
         yield inst, entry, creds
+
+
+def _mcn_turn_token_resolver(svc: Any, owner_user_id: int) -> Any:
+    """Resolve this instance owner's token from the current turn."""
+
+    def resolve() -> str:
+        try:
+            from langgraph.config import get_config
+
+            configurable = get_config().get("configurable") or {}
+        except Exception:
+            return ""
+        sid = str(configurable.get("youli_sid") or "").strip()
+        if not sid:
+            return ""
+        return svc.live_youli_token_for_sid(sid, owner_user_id=owner_user_id)
+
+    return resolve
 
 
 def build_mcp_server_configs_for_user(
@@ -660,6 +699,8 @@ def gateway_mcp_server_names(*, connector_repo: Any, user_id: int) -> set[str]:
     for inst in connector_repo.list_visible(user_id):
         if inst.status != "active":
             continue
+        if not personal_connector_visible(inst, user_id):
+            continue
         entry = get_catalog_entry(inst.kind)
         if entry is not None and is_inprocess_gateway(entry):
             names.add(inst.mcp_server_name)
@@ -699,6 +740,11 @@ def inject_missing_gateway_tools(
             continue
         if any(str(t).startswith(f"{inst.mcp_server_name}_") for t in tool_set):
             continue
+        if inst.kind == "mcn":
+            creds = dict(creds)
+            creds["_owner_user_id"] = inst.user_id
+            creds["_token_resolver"] = _mcn_turn_token_resolver(svc, inst.user_id)
+            creds["_latest_token_resolver"] = lambda uid=inst.user_id: svc.live_youli_token_for_user(uid)
         extra.extend(
             build_gateway_langchain_tools(
                 entry=entry,

@@ -853,6 +853,7 @@ class GlobalProcessor:
             model=model_ref,
             auto_route=model_route.automatic,
             message_kwargs=message_kwargs or None,
+            youli_sid=(msg.metadata or {}).get("youli_sid"),
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(
@@ -1493,6 +1494,7 @@ class GlobalProcessor:
             auto_route=model_route.automatic,
             message_kwargs=message_kwargs or None,
             reasoning_overrides=reasoning_overrides,
+            youli_sid=(msg.metadata or {}).get("youli_sid"),
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(

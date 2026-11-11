@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
 
 from octop.api.deps import get_server
+from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.connectors.gateway.protocol import handle_mcp_request
 from octop.infra.connectors.service import ConnectorService
 from octop.infra.errors import ErrorCode, OctopError
@@ -32,6 +33,26 @@ def _service(server: Any) -> ConnectorService:
         settings_repo=server.services.settings_repo,
         config=server.services.config,
     )
+
+
+def _live_mcn_token(server: Any, user_id: int) -> str:
+    """Use the employee's current MCN token, not the install-time snapshot."""
+    try:
+        sessions = server.services.repos.youli_session_repo.list_active_for_user(user_id)
+    except Exception:
+        logger.exception("failed to read youli sessions for user %s", user_id)
+        return ""
+    for row in sessions:
+        if row.token_blob is None:
+            continue
+        try:
+            token = decrypt_secret(server.services.secret_repo, row.token_blob)
+        except Exception:
+            logger.exception("failed to decrypt youli token for user %s", user_id)
+            continue
+        if token:
+            return token
+    return ""
 
 
 def _negotiate_initialize_result(body: dict[str, Any], resp: dict[str, Any]) -> dict[str, Any]:
@@ -63,6 +84,11 @@ async def internal_mcp_post(
     creds = svc.verify_internal_token(instance_id, token)
     if creds is None:
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid internal token")
+    if kind == "mcn":
+        creds = dict(creds)
+        live = _live_mcn_token(server, inst.user_id)
+        if live:
+            creds["token"] = live
 
     try:
         body = await request.json()

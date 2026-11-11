@@ -556,6 +556,7 @@ class AgentManager:
             secret_repo=repos.secret_repo,
             settings_repo=repos.settings_repo,
             config=self._config,
+            youli_session_repo=repos.youli_session_repo,
         )
         # User-scoped custom MCP tools: (user_id, server_name, fingerprint) -> tools
         self._mcp_tool_cache: dict[tuple[int, str, str], list[Any]] = {}
@@ -591,6 +592,7 @@ class AgentManager:
             secret_repo=repos.secret_repo,
             settings_repo=repos.settings_repo,
             config=self._config,
+            youli_session_repo=repos.youli_session_repo,
         )
 
     def set_cron_manager(self, cron_manager: CronManager) -> None:
@@ -4004,7 +4006,11 @@ class AgentManager:
             plugin_tools,
             reserved={
                 str(getattr(t, "name", ""))
-                for t in [*(cron_tools or []), *knowledge_tools, *mobile_tools]
+                for t in [
+                    *(cron_tools or []),
+                    *knowledge_tools,
+                    *mobile_tools,
+                ]
             },
         )
         self._plugin_tool_labels[row.agent_id] = {

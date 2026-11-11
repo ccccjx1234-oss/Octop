@@ -122,6 +122,25 @@ class CapabilitiesConfig:
 
 
 @dataclass(frozen=True)
+class YouliConfig:
+    """Octop ↔ 经贝 MCN 登录交接配置。"""
+
+    enabled: bool = False
+    base_url: str = ""
+    client_id: str = "octop"
+    client_secret: str = ""
+    audience: str = "octop"
+    callback_url: str = ""
+    business_entry_url: str = ""
+    mdm_base_url: str = ""
+    mcn_base_url: str = ""
+    token_ttl_seconds: int = 172800
+    request_ttl_seconds: int = 300
+    revalidate_seconds: int = 30
+    cookie_secure: bool = True
+
+
+@dataclass(frozen=True)
 class OctopConfig:
     bind_host: str = "127.0.0.1"
     port: int = 8088
@@ -141,6 +160,7 @@ class OctopConfig:
     tls: TlsConfig = field(default_factory=TlsConfig)
     backup: BackupConfig = field(default_factory=BackupConfig)
     capabilities: CapabilitiesConfig = field(default_factory=CapabilitiesConfig)
+    youli: YouliConfig = field(default_factory=YouliConfig)
     max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB
     browser_idle_timeout_minutes: int = DEFAULT_BROWSER_IDLE_TIMEOUT_MINUTES
 
@@ -234,6 +254,38 @@ def _parse_backup_section(raw: object) -> BackupConfig:
         include_plugins=bool(raw.get("include_plugins", defaults.include_plugins)),
         include_knowledge=bool(raw.get("include_knowledge", defaults.include_knowledge)),
         include_chats=bool(raw.get("include_chats", defaults.include_chats)),
+    )
+
+
+def _parse_youli_section(raw: object) -> YouliConfig:
+    if raw is None:
+        return YouliConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("config.youli must be an object")
+    defaults = YouliConfig()
+    ttl_raw = raw.get("request_ttl_seconds", defaults.request_ttl_seconds)
+    try:
+        ttl = int(ttl_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("config.youli.request_ttl_seconds must be an integer") from exc
+    return YouliConfig(
+        enabled=bool(raw.get("enabled", defaults.enabled)),
+        base_url=str(raw.get("base_url", defaults.base_url) or "").strip().rstrip("/"),
+        client_id=str(raw.get("client_id", defaults.client_id) or "").strip(),
+        client_secret=str(raw.get("client_secret", defaults.client_secret) or "").strip(),
+        audience=str(raw.get("audience", defaults.audience) or "").strip(),
+        callback_url=str(raw.get("callback_url", defaults.callback_url) or "").strip(),
+        business_entry_url=str(
+            raw.get("business_entry_url", defaults.business_entry_url) or ""
+        ).strip(),
+        mdm_base_url=str(raw.get("mdm_base_url", defaults.mdm_base_url) or "")
+        .strip()
+        .rstrip("/"),
+        token_ttl_seconds=max(
+            300, int(raw.get("token_ttl_seconds", defaults.token_ttl_seconds) or 172800)
+        ),
+        request_ttl_seconds=max(30, min(ttl, 600)),
+        cookie_secure=bool(raw.get("cookie_secure", defaults.cookie_secure)),
     )
 
 
@@ -515,6 +567,41 @@ def load_config(path: Path) -> OctopConfig:
             ),
         )
 
+    youli = _parse_youli_section(raw.get("youli"))
+    youli_updates: dict[str, Any] = {}
+    if v := os.environ.get("OCTOP_YOULI_ENABLED"):
+        youli_updates["enabled"] = _coerce_bool("OCTOP_YOULI_ENABLED", v, youli.enabled)
+    if v := os.environ.get("OCTOP_YOULI_BASE_URL"):
+        youli_updates["base_url"] = v.strip().rstrip("/")
+    if v := os.environ.get("OCTOP_YOULI_CLIENT_ID"):
+        youli_updates["client_id"] = v.strip()
+    if v := os.environ.get("OCTOP_YOULI_CLIENT_SECRET"):
+        youli_updates["client_secret"] = v.strip()
+    if v := os.environ.get("OCTOP_YOULI_AUDIENCE"):
+        youli_updates["audience"] = v.strip()
+    if v := os.environ.get("OCTOP_YOULI_CALLBACK_URL"):
+        youli_updates["callback_url"] = v.strip()
+    if v := os.environ.get("OCTOP_YOULI_BUSINESS_ENTRY_URL"):
+        youli_updates["business_entry_url"] = v.strip()
+    if v := os.environ.get("OCTOP_YOULI_MDM_URL"):
+        youli_updates["mdm_base_url"] = v.strip().rstrip("/")
+    if v := os.environ.get("OCTOP_YOULI_MCN_URL"):
+        youli_updates["mcn_base_url"] = v.strip().rstrip("/")
+    if v := os.environ.get("OCTOP_YOULI_TOKEN_TTL"):
+        youli_updates["token_ttl_seconds"] = _coerce_int(
+            "OCTOP_YOULI_TOKEN_TTL", v, youli.token_ttl_seconds
+        )
+    if v := os.environ.get("OCTOP_YOULI_REVALIDATE_SECONDS"):
+        youli_updates["revalidate_seconds"] = _coerce_int(
+            "OCTOP_YOULI_REVALIDATE_SECONDS", v, youli.revalidate_seconds
+        )
+    if v := os.environ.get("OCTOP_YOULI_COOKIE_SECURE"):
+        youli_updates["cookie_secure"] = _coerce_bool(
+            "OCTOP_YOULI_COOKIE_SECURE", v, youli.cookie_secure
+        )
+    if youli_updates:
+        youli = replace(youli, **youli_updates)
+
     capabilities = _parse_capabilities_section(raw.get("capabilities"))
     if v := os.environ.get("OCTOP_ENABLE_MOBILE"):
         forced = _coerce_bool("OCTOP_ENABLE_MOBILE", v, capabilities.mobile.enabled)
@@ -620,6 +707,7 @@ def load_config(path: Path) -> OctopConfig:
         tls=_parse_tls_section(raw.get("tls")),
         backup=backup,
         capabilities=capabilities,
+        youli=youli,
         max_upload_mb=int(merged.get("max_upload_mb", DEFAULT_MAX_UPLOAD_MB)),
         browser_idle_timeout_minutes=max(
             0,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -27,6 +28,10 @@ else:
 ACCESS_TOKEN_RESPONSE_HEADER = "X-Octop-Access-Token"
 _SLIDING_RENEW_REMAINING_FRACTION = 1 / 3
 
+# sid -> last successful (or attempted) upstream business-token check.
+_YOULI_REVALIDATED_AT: dict[str, float] = {}
+_YOULI_REVALIDATE_LOCK = threading.Lock()
+
 
 # Paths that bypass JWT middleware (setup wizard, health, login).
 _JWT_EXEMPT_PREFIXES = (
@@ -50,6 +55,10 @@ _JWT_EXEMPT_EXACT = (
     "/api/auth/oauth/start",
     "/api/auth/oauth/callback",
     "/api/auth/oauth/exchange",
+    "/api/auth/youli/status",
+    "/api/auth/youli/start",
+    "/api/auth/youli/exchange",
+    "/api/auth/youli/staff-login",
     "/api/auth/ldap/status",
     "/api/auth/invite/validate",
     "/api/auth/invite/redeem",
@@ -110,6 +119,7 @@ def _decode(server: OctopServer, token: str) -> dict[str, Any]:
 
 def resolve_user_from_token(server: OctopServer, token: str) -> User:
     payload = _decode(server, token)
+    _require_active_session(server, payload)
     assert server.user_manager is not None
     user = server.user_manager.get_by_id(int(payload["sub"]))
     if user is None:
@@ -126,6 +136,14 @@ def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> st
     assert server.services is not None
     payload = _decode(server, token)
     ttl = int(server.services.config.access_token_ttl_seconds)
+    sid = payload.get("sid")
+    if sid:
+        session = _require_active_session(server, payload)
+        assert session is not None  # noqa: S101 - sid claim implies a session row
+        remaining_abs = int(session.abs_expires_at) - int(time.time())
+        if remaining_abs <= 0:
+            raise OctopError(ErrorCode.TOKEN_EXPIRED, "session expired")
+        ttl = min(ttl, remaining_abs)
     remaining = int(payload["exp"]) - int(time.time())
     threshold = max(1, int(ttl * _SLIDING_RENEW_REMAINING_FRACTION))
     if remaining >= threshold:
@@ -139,7 +157,47 @@ def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> st
         uname=user.username,
         role=user.role,
         ttl_seconds=ttl,
+        sid=str(sid) if sid else None,
     )
+
+
+def _require_active_session(server: OctopServer, payload: dict[str, Any]) -> Any | None:
+    """Reject revoked/expired Youli session tokens; other auth sources have no sid."""
+    sid = payload.get("sid")
+    if not sid:
+        return None
+    assert server.services is not None
+    session = server.services.youli_session_repo.get_active(str(sid))
+    if session is None or session.user_id != int(payload["sub"]):
+        raise OctopError(ErrorCode.AUTH_FAILED, "session revoked")
+    _revalidate_youli_session(server, session)
+    from octop.infra.auth.youli.context import set_current_youli_sid
+
+    set_current_youli_sid(str(sid))
+    return session
+
+
+def _revalidate_youli_session(server: OctopServer, session: Any) -> None:
+    """Re-check the delegated business token, throttled per sid."""
+    assert server.services is not None
+    cfg = server.services.config.youli
+    interval = max(1, int(cfg.revalidate_seconds))
+    now = time.time()
+    with _YOULI_REVALIDATE_LOCK:
+        last = _YOULI_REVALIDATED_AT.get(session.sid, 0.0)
+        if now - last < interval:
+            return
+        _YOULI_REVALIDATED_AT[session.sid] = now
+    from octop.infra.auth.youli.service import revalidate_business_session
+
+    try:
+        revalidate_business_session(
+            services=server.services, cfg=cfg, session=session
+        )
+    except Exception:
+        with _YOULI_REVALIDATE_LOCK:
+            _YOULI_REVALIDATED_AT.pop(session.sid, None)
+        raise
 
 
 def authenticate_request(request: Request, server: OctopServer) -> User:
