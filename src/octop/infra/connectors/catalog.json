@@ -760,6 +760,26 @@
         }
       ],
       "remote_transport": "streamable_http"
+    },
+    {
+      "kind": "mcn",
+      "name": { "en": "MCN Business", "zh": "MCN 业务" },
+      "description": {
+        "en": "Accounts, quotes, orders, contracts, projects and delivery data with the employee's own MCN permissions",
+        "zh": "按员工本人在 MCN 的权限访问账号、报价、订单、合同、项目和交付数据"
+      },
+      "auth_kind": "custom_fields",
+      "doc_url": "https://8.163.15.131/aiwork/",
+      "icon": "mcn",
+      "color": "#e8493a",
+      "phase": "available",
+      "mcp_mode": "gateway",
+      "category": "professional",
+      "auth_hint": {
+        "en": "Install, then complete the employee login. The connector stores this employee's own MCN token; permissions follow that account.",
+        "zh": "安装后完成会火员工登录；连接器保存当前员工自己的 MCN 业务凭证，权限跟随该员工账号。"
+      },
+      "credential_fields": []
     }
   ]
 }

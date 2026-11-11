@@ -305,7 +305,11 @@ def build_harness_request(
     auto_route: bool = False,
     message_kwargs: dict[str, Any] | None = None,
     reasoning_overrides: dict[str, Any] | None = None,
+    youli_sid: str | None = None,
 ) -> dict[str, Any]:
+    from octop.infra.auth.youli.context import current_youli_sid  # noqa: PLC0415
+
+    youli_sid = (youli_sid or "").strip() or current_youli_sid()
     if messages is not None:
         req: dict[str, Any] = {
             "messages": messages,
@@ -322,6 +326,9 @@ def build_harness_request(
             configurable["session_key"] = session_key
         if reasoning_overrides:
             configurable["octop_reasoning_overrides"] = reasoning_overrides
+        if youli_sid:
+            configurable["youli_sid"] = youli_sid
+        configurable["octop_user_id"] = int(user_id)
         if configurable:
             req["configurable"] = configurable
         if model:
@@ -358,6 +365,9 @@ def build_harness_request(
         configurable["session_key"] = session_key
     if reasoning_overrides:
         configurable["octop_reasoning_overrides"] = reasoning_overrides
+    if youli_sid:
+        configurable["youli_sid"] = youli_sid
+    configurable["octop_user_id"] = int(user_id)
     if configurable:
         req["configurable"] = configurable
     if model:

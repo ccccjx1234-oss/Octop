@@ -1,6 +1,6 @@
 {
   "app": {
-    "pageTitle": "Octop - An intelligent partner that understands you, helps you, and grows with you"
+    "pageTitle": "Huihuo - An intelligent partner that understands you, helps you, and grows with you"
   },
   "layout": {
     "collapsePanel": "Collapse panel",
@@ -1046,6 +1046,9 @@
     "connectorsLabel": "Optional Connectors",
     "connectorsHint": "Opened by default in new chats with this expert; you can turn them off in the console.",
     "connectorsPlaceholder": "Select connectors",
+    "connectorsInstalledGroup": "Installed (this account)",
+    "connectorsKindGroup": "Authorized per employee (connector type)",
+    "connectorsKindTag": "each employee installs",
     "manifestWriteFailed": "Page configuration could not be saved.",
     "manifestInvalidJson": "Page configuration was not saved because manifest.json is not valid JSON.",
     "pageConfigTitle": "Page Configuration",

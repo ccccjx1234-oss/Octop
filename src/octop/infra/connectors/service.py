@@ -10,8 +10,10 @@ from typing import Any
 from weakref import WeakKeyDictionary
 
 from octop.config import OctopConfig
+from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.connectors import qcc
 from octop.infra.connectors.builder import build_http_mcp_spec, mcp_server_name, new_internal_token
+from octop.infra.connectors.builder import personal_connector_visible
 from octop.infra.connectors.catalog import get_catalog_entry, uses_internal_http_mcp
 from octop.infra.connectors.crypto import decrypt_credentials, encrypt_credentials
 from octop.infra.connectors.custom_mcp import (
@@ -85,9 +87,11 @@ class ConnectorService:
         secret_repo: SecretRepo,
         settings_repo: Any,
         config: OctopConfig,
+        youli_session_repo: Any = None,
     ) -> None:
         self._repo = repo
         self._secret_repo = secret_repo
+        self._youli_session_repo = youli_session_repo
         self._settings_repo = settings_repo
         self._config = config
 
@@ -109,7 +113,63 @@ class ConnectorService:
         row = self._repo.get(instance_id)
         if row is None or not row.credential_blob:
             return {}
-        return decrypt_credentials(self._secret_repo, row.credential_blob)
+        creds = decrypt_credentials(self._secret_repo, row.credential_blob)
+        if row.kind == "mcn" and self._youli_session_repo is not None:
+            creds = dict(creds)
+            live = self._live_youli_token(row.user_id)
+            if live:
+                creds["token"] = live
+        return creds
+
+    def _live_youli_token(self, user_id: int) -> str:
+        """Resolve the employee's current MCN token; a re-login replaces it."""
+        if self._youli_session_repo is None:
+            return ""
+        try:
+            sessions = self._youli_session_repo.list_active_for_user(user_id)
+        except Exception:
+            logger.exception("failed to read youli sessions for user %s", user_id)
+            return ""
+        for row in sessions:
+            if row.token_blob is None:
+                continue
+            try:
+                token = decrypt_secret(self._secret_repo, row.token_blob)
+            except Exception:
+                logger.exception("failed to decrypt youli token for user %s", user_id)
+                continue
+            if token:
+                return token
+        return ""
+
+    def live_youli_token_for_user(self, user_id: int) -> str:
+        """Newest token for the employee, resolved at tool-call time."""
+        return self._live_youli_token(user_id)
+
+    def live_youli_token_for_sid(self, sid: str, owner_user_id: int | None = None) -> str:
+        """Token for the employee who is running this turn, if they own MCN."""
+        if not sid or self._youli_session_repo is None:
+            return ""
+        try:
+            session = self._youli_session_repo.get_active(sid)
+        except Exception:
+            logger.exception("failed to read youli session %s", sid)
+            return ""
+        if session is None or session.token_blob is None:
+            return ""
+        if owner_user_id is not None and int(session.user_id) != int(owner_user_id):
+            return ""
+        owns_mcn = any(
+            inst.kind == "mcn" and inst.status == "active"
+            for inst in self._repo.list_by_user(session.user_id)
+        )
+        if not owns_mcn:
+            return ""
+        try:
+            return decrypt_secret(self._secret_repo, session.token_blob) or ""
+        except Exception:
+            logger.exception("failed to decrypt youli token for session %s", sid)
+            return ""
 
     def encrypt_and_store(
         self,
@@ -471,6 +531,8 @@ class ConnectorService:
         for inst in visible:
             if is_custom_mcp_kind(inst.kind):
                 continue
+            if not personal_connector_visible(inst, user_id):
+                continue
             config = ConnectorRepo.parse_config_json(inst)
             out.append(
                 {
@@ -519,6 +581,8 @@ class ConnectorService:
         names: list[str] = []
         for inst in self._repo.list_visible(user_id):
             if is_custom_mcp_kind(inst.kind):
+                continue
+            if not personal_connector_visible(inst, user_id):
                 continue
             if inst.status != "active" or not inst.has_credentials:
                 continue
@@ -572,19 +636,55 @@ class ConnectorService:
         defaults = list(self.list_default_open_mcp_server_names(user_id))
         if extra_defaults:
             allowed = set(self.list_active_mcp_server_names(user_id))
-            for name in extra_defaults:
-                text = str(name).strip()
-                if text and text in allowed and text not in defaults:
-                    defaults.append(text)
+            for name in self.expand_connector_refs(user_id, extra_defaults):
+                if name in allowed and name not in defaults:
+                    defaults.append(name)
+        resolved_explicit = (
+            self.expand_connector_refs(user_id, explicit) if explicit is not None else None
+        )
         return merge_mcp_servers_with_defaults(
-            explicit,
+            resolved_explicit,
             defaults,
             apply_defaults=apply_defaults,
         )
 
+    def expand_connector_refs(self, user_id: int, refs: list[str]) -> list[str]:
+        """Expand bare connector kinds to the caller's own active instances.
+
+        Experts bind a connector kind so a shared expert still uses each
+        employee's own credentials; kind__instance refs pass through unchanged.
+        """
+        by_kind: dict[str, list[str]] = {}
+        for inst in self._repo.list_visible(user_id):
+            if is_custom_mcp_kind(inst.kind):
+                continue
+            if not personal_connector_visible(inst, user_id):
+                continue
+            if inst.status != "active" or not inst.has_credentials:
+                continue
+            by_kind.setdefault(inst.kind, []).append(inst.mcp_server_name)
+        out: list[str] = []
+        for raw in refs:
+            name = str(raw).strip()
+            if not name:
+                continue
+            if "__" in name:
+                out.append(name)
+                continue
+            out.extend(by_kind.get(name, []))
+        return list(dict.fromkeys(out))
+
     def validate_mcp_servers_for_user(self, user_id: int, names: list[str]) -> list[str]:
         allowed = set(self.list_active_mcp_server_names(user_id))
-        unknown = sorted(set(names) - allowed)
+        # Experts may reference a connector kind the owner has not installed
+        # yet: employees resolve it against their own instances at chat time.
+        unknown = sorted(
+            {
+                name
+                for name in names
+                if name not in allowed and get_catalog_entry(name) is None
+            }
+        )
         if unknown:
             raise ValueError(f"mcp_servers not available for user: {unknown}")
         return list(names)
@@ -617,6 +717,8 @@ class ConnectorService:
             if inst.status != "active":
                 continue
             if is_custom_mcp_kind(inst.kind):
+                continue
+            if not personal_connector_visible(inst, user_id):
                 continue
             entry = get_catalog_entry(inst.kind)
             if entry is None:

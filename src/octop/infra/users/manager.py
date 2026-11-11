@@ -244,6 +244,7 @@ class UserManager:
         provider_id: int,
         subject: str,
         claims: dict[str, Any],
+        role_assignment: tuple[str, str | None, list[str], list[tuple[str, str]]] | None = None,
     ) -> User:
         async with self._lock:
             row = self._services.user_repo.get_by_sso(provider_id, subject)
@@ -253,7 +254,7 @@ class UserManager:
             if row is None:
                 from octop.infra.db.repos.user_roles import seeded_user_role_assignment
 
-                assignment = seeded_user_role_assignment(self._services.db)
+                assignment = role_assignment or seeded_user_role_assignment(self._services.db)
                 sso_role_id = assignment[0] if assignment else Role.USER
                 sso_role_name = assignment[1] if assignment else None
                 sso_permissions = list(assignment[2]) if assignment else []

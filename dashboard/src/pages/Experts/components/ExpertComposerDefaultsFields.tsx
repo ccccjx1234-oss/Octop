@@ -72,6 +72,7 @@ export default function ExpertComposerDefaultsFields({
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [connectors, setConnectors] = useState<ConnectorOption[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
+  const [connectorKinds, setConnectorKinds] = useState<ConnectorOption[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,13 +142,59 @@ export default function ExpertComposerDefaultsFields({
     };
   }, [agentId, currentUserId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    connectorsApi
+      .catalog()
+      .then((entries) => {
+        if (cancelled) return;
+        setConnectorKinds(
+          (entries ?? [])
+            .filter((entry) => entry.phase === "available")
+            .map((entry) => ({
+              value: entry.kind,
+              label: entry.name,
+              kind: entry.kind,
+            })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setConnectorKinds([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const knowledgeById = useMemo(
     () => new Map(knowledgeBases.map((base) => [base.id, base])),
     [knowledgeBases],
   );
+  const connectorOptions = useMemo(() => {
+    const groups: Array<{ label: string; options: ConnectorOption[] }> = [];
+    if (connectors.length > 0) {
+      groups.push({
+        label: t("experts.connectorsInstalledGroup"),
+        options: connectors,
+      });
+    }
+    if (connectorKinds.length > 0) {
+      groups.push({
+        label: t("experts.connectorsKindGroup"),
+        options: connectorKinds.map((item) => ({
+          ...item,
+          label: `${item.label} · ${t("experts.connectorsKindTag")}`,
+        })),
+      });
+    }
+    return groups;
+  }, [connectors, connectorKinds, t]);
   const connectorByValue = useMemo(
-    () => new Map(connectors.map((item) => [item.value, item])),
-    [connectors],
+    () =>
+      new Map(
+        [...connectors, ...connectorKinds].map((item) => [item.value, item]),
+      ),
+    [connectors, connectorKinds],
   );
 
   return (
@@ -205,10 +252,7 @@ export default function ExpertComposerDefaultsFields({
           showSearch
           optionFilterProp="label"
           loading={connectorsLoading}
-          options={connectors.map((item) => ({
-            value: item.value,
-            label: item.label,
-          }))}
+          options={connectorOptions}
           optionRender={(option) => {
             const item = connectorByValue.get(String(option.value));
             if (!item) return option.label;

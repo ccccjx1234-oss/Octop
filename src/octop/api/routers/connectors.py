@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, model_validator
 from octop.api.common.public_base import resolve_public_base
 from octop.api.deps import current_user, get_server, require_permission
 from octop.i18n import tr
+from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.auth.sso.redirect_after import sanitize_redirect_after
 from octop.infra.connectors.builder import (
     mcp_server_name,
@@ -296,6 +297,7 @@ def _connector_service(server: Any) -> ConnectorService:
         secret_repo=server.services.secret_repo,
         settings_repo=server.services.settings_repo,
         config=server.services.config,
+        youli_session_repo=server.services.repos.youli_session_repo,
     )
 
 
@@ -364,6 +366,14 @@ def _validate_connector_visibility(
     GroupAccess(server.services.repos).validate_visibility(visibility, group_ids)
 
 
+def _reject_shared_mcn(kind: str, shared: bool) -> None:
+    if kind == "mcn" and shared:
+        raise OctopError(
+            ErrorCode.FORBIDDEN,
+            "MCN 连接器只能由安装它的员工使用，不能共享",
+        )
+
+
 async def _prepare_credentials(
     kind: str,
     credentials: dict[str, Any],
@@ -392,6 +402,26 @@ async def _prepare_credentials(
             raise ValueError("token is required")
         cred_payload = {"token": token}
     return validate_create_credentials(kind, cred_payload)
+
+
+def _active_youli_token(server: Any, user_id: int) -> str:
+    """Return the current employee's MCN token, if they completed SSO."""
+    try:
+        sessions = server.services.repos.youli_session_repo.list_active_for_user(user_id)
+    except Exception:
+        logger.exception("failed to read youli sessions for user %s", user_id)
+        return ""
+    for row in sessions:
+        if row.token_blob is None:
+            continue
+        try:
+            token = decrypt_secret(server.services.secret_repo, row.token_blob)
+        except Exception:
+            logger.exception("failed to decrypt youli token for user %s", user_id)
+            continue
+        if token:
+            return token
+    return ""
 
 
 def _merge_credentials(
@@ -816,6 +846,17 @@ async def create_instance(
     if repo.name_exists(user.id, display_name) or _custom_name_exists(svc, user.id, display_name):
         _raise_name_taken(display_name)
     cred_input = dict(body.credentials)
+    if body.kind == "mcn" and not str(cred_input.get("token") or "").strip():
+        token = _active_youli_token(server, user.id)
+        if not token:
+            raise OctopError(
+                ErrorCode.AUTH_FAILED,
+                "请先完成会火员工登录，再安装 MCN 连接器",
+                details={"login_url": "/aiwork/staff-login.html"},
+            )
+        cred_input["token"] = token
+        if not str(cred_input.get("base_url") or "").strip():
+            cred_input["base_url"] = server.services.config.youli.mcn_base_url
 
     try:
         cred_payload = await _prepare_credentials(
@@ -834,6 +875,7 @@ async def create_instance(
         group_ids=body.group_ids,
         shared=body.shared,
     )
+    _reject_shared_mcn(body.kind, shared)
     _validate_connector_visibility(server, visibility=visibility, group_ids=group_ids)
     repo.create(
         instance_id=instance_id,
@@ -954,6 +996,7 @@ async def patch_instance(
             shared=body.shared,
             default_shared=bool(inst.shared),
         )
+        _reject_shared_mcn(inst.kind, shared)
         _validate_connector_visibility(server, visibility=visibility, group_ids=group_ids)
         repo.update_metadata(instance_id, shared=shared)
         _apply_connector_visibility(server, instance_id, visibility=visibility, group_ids=group_ids)

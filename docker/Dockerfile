@@ -33,7 +33,11 @@
 # ---------------------------------------------------------------------------
 # 阶段 1 — 前端构建
 # ---------------------------------------------------------------------------
-FROM node:20-slim AS frontend-builder
+ARG NODE_IMAGE=node:20-slim
+ARG PYTHON_IMAGE=python:3.12-slim
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.7
+
+FROM ${NODE_IMAGE} AS frontend-builder
 
 ARG NPM_REGISTRY=
 # Node heap ceiling for the vite build. Lower this (e.g. 1024) on low-memory
@@ -61,7 +65,7 @@ RUN NODE_ENV=production NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_
 # ---------------------------------------------------------------------------
 # 阶段 2 — Python 运行时
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
 
 LABEL maintainer="OrcaKit Team"
 LABEL org.opencontainers.image.title="Octop"
@@ -82,6 +86,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG PIP_INDEX_URL=
 ARG PIP_TRUSTED_HOST=
 ARG APT_MIRROR=
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.7
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -99,7 +104,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
+COPY --from=${UV_IMAGE} /uv /uvx /bin/
 
 WORKDIR /app
 

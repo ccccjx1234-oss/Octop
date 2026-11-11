@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会火员工登录</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#f7f7f8; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; }
+  .card { width:360px; padding:40px 32px; background:#fff; border-radius:16px;
+          box-shadow:0 10px 40px rgba(0,0,0,.08); }
+  h1 { font-size:22px; margin:0 0 8px; color:#222; text-align:center; }
+  .sub { color:#888; font-size:13px; line-height:1.7; margin:0 0 24px; text-align:center; }
+  label { display:block; font-size:12px; color:#666; margin:0 0 6px; }
+  input { width:100%; height:42px; padding:0 12px; box-sizing:border-box; margin-bottom:16px;
+          border:1px solid #ddd; border-radius:10px; font-size:14px; outline:none; }
+  input:focus { border-color:#e8493a; }
+  button { width:100%; height:44px; border:0; border-radius:10px; background:#e8493a; color:#fff;
+           font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .err { color:#d33; font-size:12px; margin-top:14px; min-height:16px; text-align:center; }
+  .alt { margin-top:18px; text-align:center; font-size:12px; color:#999; }
+  .alt a { color:#999; text-decoration:underline; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>会火员工登录</h1>
+  <p class="sub">使用你的员工账号进入 AI 管理平台，登录后可以直接询问业务数据。</p>
+  <form id="form">
+    <label for="mobile">手机号</label>
+    <input id="mobile" name="mobile" autocomplete="username" inputmode="numeric" required>
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button id="go" type="submit">登录</button>
+  </form>
+  <div class="err" id="err"></div>
+</div>
+<script>
+const form = document.getElementById('form');
+const btn = document.getElementById('go');
+const err = document.getElementById('err');
+
+function fail(message) {
+  err.textContent = message || '登录失败';
+  btn.disabled = false;
+}
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    const mobile = document.getElementById('mobile').value.trim();
+    const password = document.getElementById('password').value;
+    if (!mobile || !password) throw new Error('请输入手机号和密码');
+    const resp = await fetch('/aiwork/api/auth/youli/staff-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile, password }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.access_token) {
+      throw new Error(data.msg || data.message || '账号或密码不正确');
+    }
+    localStorage.setItem('auth_token', data.access_token);
+    sessionStorage.removeItem('auth_token');
+    location.replace('/aiwork/');
+  } catch (e) {
+    fail(e.message);
+  }
+});
+
+</script>
+</body>
+</html>

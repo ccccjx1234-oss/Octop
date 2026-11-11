@@ -317,12 +317,21 @@ def build_dashboard_inbound(
     ws_connection_id: str,
     user_is_admin: bool = False,
 ) -> InboundMessage:
+    from octop.infra.auth.youli.context import (  # noqa: PLC0415
+        bind_thread_sid,
+        current_youli_sid,
+    )
+
     metadata: dict[str, Any] = {
         "ws_connection_id": ws_connection_id,
         "session_key": prepared.session_key,
         "thread_id": prepared.thread_id,
         "user_is_admin": user_is_admin,
     }
+    youli_sid = current_youli_sid()
+    if youli_sid:
+        metadata["youli_sid"] = youli_sid
+        bind_thread_sid(prepared.thread_id, youli_sid)
     if prepared.mcp_servers is not None:
         # Including [] — Dashboard opt-out of default_open for this turn.
         metadata["mcp_servers"] = list(prepared.mcp_servers)

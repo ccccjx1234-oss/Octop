@@ -86,6 +86,19 @@ export interface OidcStatus {
   display_name: string;
 }
 
+export interface YouliStatus {
+  enabled: boolean;
+  audience?: string;
+}
+
+export interface YouliStartResult {
+  request_id: string;
+  state: string;
+  entry_url: string;
+  callback_url: string;
+  expires_in: number;
+}
+
 export interface OauthProviderStatus {
   kind: string;
   display_name: string;
@@ -206,6 +219,26 @@ export const authApi = {
 
   /** Return whether the configured OIDC provider can accept logins. */
   getOidcStatus: () => request<OidcStatus>("/auth/oidc/status"),
+
+  /** 经贝 MCN handoff availability. */
+  getYouliStatus: () => request<YouliStatus>("/auth/youli/status"),
+
+  /** Start a Youli handoff; the browser must keep the HttpOnly request cookie. */
+  startYouli: () =>
+    request<YouliStartResult>("/auth/youli/start", { method: "POST" }),
+
+  /** Exchange the callback fragment code for an Octop JWT. */
+  exchangeYouliCode: async (body: {
+    code: string;
+    state: string;
+    request_id: string;
+  }): Promise<LoginResponse> => {
+    const raw = await request<RawLoginResponse>("/auth/youli/exchange", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return { ...raw, token: raw.access_token };
+  },
 
   /** Return enabled dashboard SSO providers for the login page. */
   getOauthStatus: () => request<OauthStatus>("/auth/oauth/status"),

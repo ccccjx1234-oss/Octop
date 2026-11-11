@@ -1,6 +1,6 @@
 {
   "app": {
-    "pageTitle": "Octop - 懂你、帮你、陪你成长的智能伙伴"
+    "pageTitle": "会火 - 懂你、帮你、陪你成长的智能伙伴"
   },
   "layout": {
     "collapsePanel": "收起面板",
@@ -1046,6 +1046,9 @@
     "connectorsLabel": "可选连接器",
     "connectorsHint": "该专家新建会话时默认打开，可在控制台关闭。",
     "connectorsPlaceholder": "选择连接器",
+    "connectorsInstalledGroup": "已安装（本账号）",
+    "connectorsKindGroup": "按员工授权（连接器类型）",
+    "connectorsKindTag": "员工各自安装",
     "patchFailed": "保存失败",
     "manifestWriteFailed": "页面配置未能保存。",
     "manifestInvalidJson": "manifest.json 不是合法 JSON，页面配置未写入以免覆盖原文件。",
