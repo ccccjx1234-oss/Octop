@@ -102,3 +102,11 @@ def test_builtin_tool_available_gates() -> None:
         )
         is False
     )
+    assert builtin_tool_available("memory_search", agent_cfg={}) is False
+    assert (
+        builtin_tool_available(
+            "memory_search",
+            agent_cfg={"memory": {"memory_enabled": True}},
+        )
+        is True
+    )

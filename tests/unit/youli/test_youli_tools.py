@@ -361,7 +361,7 @@ async def test_create_combined_order_groups_by_supplier(monkeypatch) -> None:
             "baseMoney": amount,
             "factMoney": amount,
             "modeOperation": 1,
-            "dynamicItemObj": '{"formLabelAlign":{"supplier":"%s"}}' % supplier,
+            "dynamicItemObj": f'{{"formLabelAlign":{{"supplier":"{supplier}"}}}}',
         }
 
     detail = {
@@ -444,14 +444,58 @@ async def test_export_delivery_selects_path(monkeypatch) -> None:
     monkeypatch.setattr(McnClient, "post", fake_post)
     tool = _tools(SimpleNamespace(token_blob=b"blob"))["youli_export_delivery"]
 
-    await tool.ainvoke({"mode": "project", "project_name": "测试项目", "confirm": True})
-    assert calls[-1] == (
-        "/api/mcn/deliveryDashboard/project/export",
-        {"projectName": "测试项目"},
+    monkeypatch.setattr(
+        "octop.infra.auth.youli.delivery_export.time.sleep", lambda _seconds: None
+    )
+    blocked = await tool.ainvoke({"mode": "project", "project_name": "测试项目"})
+    assert blocked.startswith("未导出")
+    assert calls == []
+
+    await tool.ainvoke(
+        {
+            "mode": "project",
+            "project_name": "测试项目",
+            "export_template_id": "12",
+            "confirm": True,
+        }
+    )
+    export_calls = [call for call in calls if "deliveryDashboard" in call[0]]
+    assert export_calls == [
+        (
+            "/api/mcn/deliveryDashboard/project/export",
+            {
+                "page": {"pageNum": 1, "pageSize": 20},
+                "projectName": "测试项目",
+            },
+        )
+    ]
+
+    await tool.ainvoke({"mode": "link", "export_template_id": "12", "confirm": True})
+    link_calls = [call for call in calls if call[0].endswith("/link/export")]
+    assert link_calls[-1] == (
+        "/api/mcn/deliveryDashboard/link/export",
+        {"page": {"pageNum": 1, "pageSize": 20}, "exportTemplateId": "12"},
     )
 
-    await tool.ainvoke({"mode": "link", "confirm": True})
-    assert calls[-1] == ("/api/mcn/deliveryDashboard/link/export", {})
+
+@pytest.mark.asyncio
+async def test_delivery_lookup_tools_call_helpers_not_themselves(monkeypatch) -> None:
+    set_current_youli_sid("sid-1")
+    monkeypatch.setattr(youli_tools, "decrypt_secret", lambda repo, blob: "tok")
+    calls = []
+
+    def fake_post(self, path, payload=None):
+        calls.append((path, payload))
+        return []
+
+    monkeypatch.setattr(McnClient, "post", fake_post)
+    tools = _tools(SimpleNamespace(token_blob=b"blob"))
+    await tools["youli_list_delivery_projects"].ainvoke({"keyword": "杜甫江阁"})
+    await tools["youli_list_export_templates"].ainvoke({"template_name": "周报"})
+    assert [path for path, _ in calls] == [
+        "/api/mcn/deliveryDashboard/project/list",
+        "/api/mcn/excel/export/template/list",
+    ]
 
 
 @pytest.mark.asyncio

@@ -134,7 +134,14 @@ function ThemedApp() {
             <DesktopWindowControls chrome={desktopChrome} />
           ) : null}
           <Routes>
-            <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/login"
+              element={<LoginPage key="staff" mode="staff" />}
+            />
+            <Route
+              path="/manageLogin"
+              element={<LoginPage key="manage" />}
+            />
             <Route path="/login/oidc/complete" element={<OidcComplete />} />
             <Route path="/login/youli/complete" element={<YouliComplete />} />
             <Route path="/setup" element={<SetupPage />} />

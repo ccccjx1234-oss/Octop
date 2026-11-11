@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import time
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from langchain_core.tools import StructuredTool
@@ -15,6 +15,20 @@ from pydantic import Field
 from octop.config import YouliConfig
 from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.auth.youli.context import current_youli_sid, sid_for_thread
+from octop.infra.auth.youli.delivery_export import (
+    EXPORT_DESCRIPTION,
+    GET_DOWNLOAD_TASK_DESCRIPTION,
+    LIST_DELIVERY_PROJECTS_DESCRIPTION,
+    LIST_EXPORT_TEMPLATES_DESCRIPTION,
+    export_delivery_result,
+    get_download_task,
+)
+from octop.infra.auth.youli.delivery_export import (
+    list_delivery_projects as query_delivery_projects,
+)
+from octop.infra.auth.youli.delivery_export import (
+    list_export_templates as query_export_templates,
+)
 from octop.infra.auth.youli.mcn_client import McnClient, McnClientError
 
 _MAX_OUTPUT_CHARS = 8000
@@ -35,7 +49,7 @@ def _line_quantity(spec: dict[str, Any]) -> int:
     raw = spec.get("quantity")
     if raw in (None, ""):
         raw = spec.get("count") if spec.get("count") not in (None, "") else 1
-    quantity = int(raw)
+    quantity = int(str(raw))
     if quantity < 1 or quantity > 9999:
         raise ValueError("quantity")
     return quantity
@@ -672,39 +686,63 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         mode: Annotated[str, Field(description="project 按项目导出，link 按链接导出")] = "project",
         project_name: Annotated[str, Field(description="项目名称关键字，可空")] = "",
         customer_opportunity_id: Annotated[str, Field(description="客户商机 ID，可空")] = "",
-        export_template_id: Annotated[str, Field(description="客户导出模板 ID，可空")] = "",
+        export_template_id: Annotated[
+            str,
+            Field(description="仅按链接导出且用户指定模板名称时传入，不要问用户要 ID"),
+        ] = "",
         confirm: Annotated[
-            bool, Field(description="用户核对导出范围后确认才传 true")
+            bool, Field(description="用户用业务语言同意导出范围后才传 true，不要向用户提这个参数")
         ] = False,
     ) -> str:
-        """下载交付数据：按客户模板创建项目或链接维度的导出任务。"""
-        if not confirm:
-            return "未导出：请先和用户确认导出维度和范围，确认后再以 confirm=true 调用。"
-        if mode not in {"project", "link"}:
-            return "导出失败：mode 只能是 project 或 link。"
+        """按用户确认过的项目名和导出方式创建交付导出，并取回下载链接。"""
         try:
-            payload: dict[str, Any] = {}
-            if project_name.strip():
-                payload["projectName"] = project_name.strip()
-            if str(customer_opportunity_id).strip():
-                payload["customerOpportunityIds"] = [str(customer_opportunity_id)]
-            if str(export_template_id).strip():
-                payload["exportTemplateId"] = str(export_template_id)
-            path = (
-                "/api/mcn/deliveryDashboard/project/export"
-                if mode == "project"
-                else "/api/mcn/deliveryDashboard/link/export"
-            )
-            result = _client().post(path, payload)
-            return _json(
+            return export_delivery_result(
+                _client(),
                 {
                     "mode": mode,
-                    "result": result,
-                    "note": "导出任务已创建，请在交付看板的下载中心获取文件。",
-                }
+                    "project_name": project_name,
+                    "customer_opportunity_id": customer_opportunity_id,
+                    "export_template_id": export_template_id,
+                    "confirm": confirm,
+                },
             )
         except McnClientError as exc:
             return f"导出交付数据失败：{exc}"
+
+    async def list_delivery_projects(
+        keyword: Annotated[str, Field(description="用户说的或截图上的项目名，可空")] = "",
+        name_field: Annotated[
+            str, Field(description="project 查娱乐/品牌名，brand 查订单项目名")
+        ] = "project",
+    ) -> str:
+        """按名称核对交付看板中的项目。"""
+        try:
+            return query_delivery_projects(
+                _client(), {"keyword": keyword, "name_field": name_field}
+            )
+        except McnClientError as exc:
+            return f"查询交付项目失败：{exc}"
+
+    async def list_export_templates(
+        template_name: Annotated[str, Field(description="模板名称，可空")] = "",
+    ) -> str:
+        """查询按链接导出可用的模板名称。"""
+        try:
+            return query_export_templates(_client(), {"template_name": template_name})
+        except McnClientError as exc:
+            return f"查询导出模板失败：{exc}"
+
+    async def fetch_download_task(
+        task_id: Annotated[str, Field(description="导出返回的任务 ID，可空")] = "",
+        file_prefix: Annotated[str, Field(description="没有任务 ID 时使用导出返回的 file_prefix")] = "",
+    ) -> str:
+        """查询交付导出文件是否已经生成。"""
+        try:
+            return get_download_task(
+                _client(), {"task_id": task_id, "file_prefix": file_prefix}
+            )
+        except McnClientError as exc:
+            return f"查询导出文件失败：{exc}"
 
     async def create_project(
         project_name: Annotated[str, Field(description="项目名称")],
@@ -859,7 +897,22 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         StructuredTool.from_function(
             coroutine=export_delivery,
             name="youli_export_delivery",
-            description="按项目或链接创建交付数据导出任务（写操作，需用户确认）。",
+            description=EXPORT_DESCRIPTION,
+        ),
+        StructuredTool.from_function(
+            coroutine=list_delivery_projects,
+            name="youli_list_delivery_projects",
+            description=LIST_DELIVERY_PROJECTS_DESCRIPTION,
+        ),
+        StructuredTool.from_function(
+            coroutine=list_export_templates,
+            name="youli_list_export_templates",
+            description=LIST_EXPORT_TEMPLATES_DESCRIPTION,
+        ),
+        StructuredTool.from_function(
+            coroutine=fetch_download_task,
+            name="youli_get_download_task",
+            description=GET_DOWNLOAD_TASK_DESCRIPTION,
         ),
         StructuredTool.from_function(
             coroutine=create_project,

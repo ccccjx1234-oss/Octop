@@ -4,6 +4,13 @@ import { octopThreadsApi } from "../../../api/modules/octopThreads";
 import * as chatStore from "./chatStore";
 import { useChat } from "./useChat";
 
+// These history tests do not need the session list's network/runtime lifecycle.
+vi.mock("./useSessions", () => ({
+  syncSessionArtifacts: vi.fn(),
+  syncSessionConversationMode: vi.fn(),
+  syncSessionHitlPolicy: vi.fn(),
+}));
+
 const thread = "versioned-history-test";
 
 afterEach(() => {

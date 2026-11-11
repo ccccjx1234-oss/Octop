@@ -217,6 +217,15 @@ export const authApi = {
     return { ...raw, token: raw.access_token };
   },
 
+  /** Validate an MCN employee account through the existing Youli login flow. */
+  staffLogin: async (mobile: string, password: string): Promise<LoginResponse> => {
+    const raw = await request<RawLoginResponse>("/auth/youli/staff-login", {
+      method: "POST",
+      body: JSON.stringify({ mobile, password }),
+    });
+    return { ...raw, token: raw.access_token };
+  },
+
   /** Return whether the configured OIDC provider can accept logins. */
   getOidcStatus: () => request<OidcStatus>("/auth/oidc/status"),
 

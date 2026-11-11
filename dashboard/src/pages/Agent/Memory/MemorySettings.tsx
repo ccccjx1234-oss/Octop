@@ -96,7 +96,7 @@ export default function MemorySettings({ agentId }: Props) {
   }, []);
 
   const applyConfig = useCallback((cfg: ExtractConfig) => {
-    setMemoryEnabled(cfg.memory_enabled ?? true);
+    setMemoryEnabled(cfg.memory_enabled ?? false);
     setMode(cfg.extract_trigger_mode);
     setAuxModel(defaultModelToForm(cfg.aux_model));
     setSupportedCallOptions(cfg.supported_call_options);

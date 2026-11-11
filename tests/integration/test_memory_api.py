@@ -358,7 +358,7 @@ async def test_extract_config_defaults_then_update(env_with_main_agent) -> None:
     # GET returns defaults for a fresh agent.
     r = await client.get(f"/api/agents/{aid}/memory/extract-config", headers=auth)
     assert r.status_code == 200, r.text
-    assert r.json()["memory_enabled"] is True
+    assert r.json()["memory_enabled"] is False
     assert r.json()["extract_trigger_mode"] == "idle"
     assert r.json()["extract_idle_seconds"] == 300.0
 

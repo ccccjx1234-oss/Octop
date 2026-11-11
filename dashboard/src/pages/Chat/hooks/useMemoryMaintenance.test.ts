@@ -102,3 +102,24 @@ it("does not turn legacy completion into a persistent manual-maintenance result"
   expect(result.current.blocking).toBe(false);
   unmount();
 });
+
+it("does not report a lost connection or keep polling when status is forbidden", async () => {
+  vi.useFakeTimers();
+  vi.mocked(request).mockRejectedValue(
+    new Error("Request failed: 403 Forbidden"),
+  );
+  const { result, unmount } = renderHook(() =>
+    useMemoryMaintenance("shared-expert", true),
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(result.current.connectionLost).toBe(false);
+  expect(request).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4000);
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(result.current.connectionLost).toBe(false);
+  unmount();
+});
