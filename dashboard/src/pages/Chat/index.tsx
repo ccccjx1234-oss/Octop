@@ -1532,7 +1532,7 @@ function ChatPageInner() {
                   welcomeSuffix={welcomeSuffix}
                   quickCards={expertQuickCards}
                   onPromptClick={handlePromptClick}
-                  hideMascot={isStreaming || liveSpeakers.length > 0}
+                  hideMascot
                   isTeam={isTeamChat}
                 />
               ) : (
