@@ -272,12 +272,55 @@ def _list_products(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _list_customers(client: McnClient, args: dict[str, Any]) -> str:
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 20}}
+    # The MCN list endpoint defaults this flag to false; list views must opt in.
+    payload: dict[str, Any] = {
+        "page": {"pageNum": 1, "pageSize": 20},
+        "useDataPermission": True,
+    }
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["name"] = keyword
     data = client.post("/api/mcn/customer-management/list", payload)
     return _json(_slim(data, ("id", "name", "category", "contact", "mobile")))
+
+
+def _list_customer_ownerships(client: McnClient, args: dict[str, Any]) -> str:
+    payload: dict[str, Any] = {
+        "page": {
+            "pageNum": max(1, int(args.get("page") or 1)),
+            "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
+        },
+        "useDataPermission": True,
+    }
+    keyword = str(args.get("keyword") or "").strip()
+    if keyword:
+        payload["name"] = keyword
+    customer_id = str(args.get("customer_id") or "").strip()
+    if customer_id:
+        payload["customerId"] = customer_id
+    data = client.post("/api/mcn/customer/opportunity/list", payload)
+    return _json(
+        _slim(
+            data,
+            (
+                "id",
+                "opportunityCode",
+                "customerCode",
+                "customerId",
+                "name",
+                "category",
+                "contact",
+                "job",
+                "mobile",
+                "type",
+                "brandType",
+                "isNewCustomer",
+                "userName",
+                "userTwoName",
+                "createdTime",
+            ),
+        )
+    )
 
 
 def _list_contracts(client: McnClient, args: dict[str, Any]) -> str:
@@ -1088,6 +1131,7 @@ _HANDLERS = {
     "youli_get_quote": ("查询报价单详情", _get_quote),
     "youli_list_products": ("查询产品", _list_products),
     "youli_list_customers": ("查询客户", _list_customers),
+    "youli_list_customer_ownerships": ("查询客户归属", _list_customer_ownerships),
     "youli_list_contracts": ("查询合同", _list_contracts),
     "youli_get_contract": ("查询合同详情", _get_contract),
     "youli_list_company_entities": ("查询签约主体", _list_company_entities),
@@ -1169,8 +1213,20 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_list_customers",
-        "description": "查询经贝 MCN 客户列表，用于确定客户和商机。",
+        "description": "查询经贝 MCN 客户主数据（公司客户库），按当前员工的客户管理数据权限过滤，用于创建报价/合同时确定 customer_id。查询我的客户、客户归属或客户信息时请用 youli_list_customer_ownerships。",
         "inputSchema": _schema({"keyword": {"type": "string"}}),
+    },
+    {
+        "name": "youli_list_customer_ownerships",
+        "description": "查询当前员工数据权限内的客户归属（我的客户/客户商机），用于查客户归属、我的客户或客户信息。返回客户归属ID、客户ID、客户名称、类别、联系人、电话、归属商务/执行等。",
+        "inputSchema": _schema(
+            {
+                "keyword": {"type": "string", "description": "客户名称关键字，可空"},
+                "customer_id": {"type": "string", "description": "客户ID，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，最大 20"},
+            }
+        ),
     },
     {
         "name": "youli_list_contracts",
@@ -1197,7 +1253,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_list_opportunities",
-        "description": "查询客户商机列表，创建合同/项目/报价时用于确定 customer_opportunity_id。",
+        "description": "查询客户商机列表，创建合同/项目/报价时用于确定 customer_opportunity_id；返回精简字段。查询客户归属明细请用 youli_list_customer_ownerships。",
         "inputSchema": _schema(
             {
                 "keyword": {"type": "string", "description": "客户或商机名称关键字，可空"},

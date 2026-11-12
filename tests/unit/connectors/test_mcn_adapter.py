@@ -504,6 +504,32 @@ def test_opportunities_use_customer_opportunity_list(monkeypatch) -> None:
     assert payload["keyword"] == "超级飞侠"
 
 
+def test_customers_use_data_permission(monkeypatch) -> None:
+    fake = FakeClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool({"token": "t"}, "youli_list_customers", {"keyword": "茶颜"})
+    path, payload = fake.calls[-1]
+    assert path == "/api/mcn/customer-management/list"
+    assert payload["name"] == "茶颜"
+    assert payload["useDataPermission"] is True
+
+
+def test_customer_ownerships_use_data_permission(monkeypatch) -> None:
+    fake = FakeClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_list_customer_ownerships",
+        {"keyword": "茶颜", "customer_id": "c1", "page": 2, "page_size": 50},
+    )
+    path, payload = fake.calls[-1]
+    assert path == "/api/mcn/customer/opportunity/list"
+    assert payload["name"] == "茶颜"
+    assert payload["customerId"] == "c1"
+    assert payload["useDataPermission"] is True
+    assert payload["page"] == {"pageNum": 2, "pageSize": 20}
+
+
 def test_dictionaries_and_projects(monkeypatch) -> None:
     fake = FakeClient()
     _use(monkeypatch, fake)
