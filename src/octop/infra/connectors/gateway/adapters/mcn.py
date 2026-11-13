@@ -14,6 +14,7 @@ import time
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
+from octop.config import YouliConfig
 from octop.infra.auth.youli.delivery_export import (
     EXPORT_DESCRIPTION,
     GET_DOWNLOAD_TASK_DESCRIPTION,
@@ -166,9 +167,10 @@ def _client(creds: dict[str, Any]) -> McnClient:
             # Background work for this same employee has no turn sid.
             token = str(creds.get("token") or "").strip()
     base_url = str(creds.get("base_url") or os.environ.get("OCTOP_YOULI_MCN_URL") or "").strip()
+    ca_file = str(creds.get("ca_file") or os.environ.get("OCTOP_YOULI_CA_FILE") or "").strip()
     if not token:
         raise McnClientError("MCN 连接器未授权，请重新登录会火员工账号")
-    client = McnClient(None, token, base_url=base_url)
+    client = McnClient(YouliConfig(mcn_base_url=base_url, ca_file=ca_file), token)
     if not client.enabled:
         raise McnClientError("MCN 业务接口未配置")
     return client
