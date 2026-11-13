@@ -58,9 +58,7 @@ def test_export_returns_download_url_for_the_new_task(monkeypatch) -> None:
     assert result["project_name"] == "杜甫江阁"
     assert "不要" in result["note"]
     export_payload = [
-        payload
-        for path, payload in client.calls
-        if path.endswith("/project/export")
+        payload for path, payload in client.calls if path.endswith("/project/export")
     ][0]
     assert export_payload["projectName"] == "杜甫江阁"
     assert "exportTemplateId" not in export_payload
@@ -87,8 +85,9 @@ def test_export_does_not_attach_an_older_file(monkeypatch) -> None:
 
 def test_followup_without_task_id_does_not_return_a_historical_file() -> None:
     client = _Client(rows_by_call=[[_ready("old")]], export_result=True)
-    result = json.loads(delivery_export.get_download_task(
-        client, {"file_prefix": "交付看板按项目导出"}))
+    result = json.loads(
+        delivery_export.get_download_task(client, {"file_prefix": "交付看板按项目导出"})
+    )
     assert result["download_url"] == ""
     assert client.calls == []
 
@@ -124,9 +123,7 @@ def test_lookup_tools_use_names_not_ids() -> None:
             client, {"keyword": "杜甫江阁", "name_field": "project"}
         )
     )
-    templates = json.loads(
-        delivery_export.list_export_templates(client, {"template_name": "周报"})
-    )
+    templates = json.loads(delivery_export.list_export_templates(client, {"template_name": "周报"}))
 
     assert projects["projects"] == [
         {
@@ -144,9 +141,7 @@ def test_lookup_tools_use_names_not_ids() -> None:
             "projectName": "杜甫江阁",
         },
     )
-    assert templates["templates"] == [
-        {"id": "12", "templateName": "客户周报", "isDefault": 0}
-    ]
+    assert templates["templates"] == [{"id": "12", "templateName": "客户周报", "isDefault": 0}]
     assert calls[1][0] == "/api/mcn/excel/export/template/list"
     assert calls[1][1]["sceneCode"] == 2
     assert calls[1][1]["templateName"] == "周报"
@@ -204,13 +199,9 @@ def test_link_export_keeps_template_and_followup_uses_task_id(monkeypatch) -> No
     )
     assert created["download_url"] == ""
     assert created["task_id"] == "77"
-    export_payload = [
-        payload for path, payload in client.calls if path.endswith("/link/export")
-    ][0]
+    export_payload = [payload for path, payload in client.calls if path.endswith("/link/export")][0]
     assert export_payload["exportTemplateId"] == "12"
 
-    finished = json.loads(
-        delivery_export.get_download_task(client, {"task_id": "77"})
-    )
+    finished = json.loads(delivery_export.get_download_task(client, {"task_id": "77"}))
     assert finished["download_url"] == "https://files.example/link.xlsx"
     assert finished["task_id"] == "77"

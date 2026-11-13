@@ -69,10 +69,7 @@ def _rows(data: Any) -> list[dict[str, Any]]:
 
 
 def _slim(data: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
-    return [
-        {key: item.get(key) for key in keys if key in item}
-        for item in _rows(data)
-    ]
+    return [{key: item.get(key) for key in keys if key in item} for item in _rows(data)]
 
 
 def _row_id(row: dict[str, Any]) -> str:
@@ -105,7 +102,9 @@ def _download_view(row: dict[str, Any] | None, task_id: str = "") -> dict[str, A
     return {
         "task_id": _row_id(row) or task_id,
         "file_name": str(row.get("fileName") or ""),
-        "status": _DOWNLOAD_STATUS.get(status_code, "处理中") if isinstance(status_code, int) else "处理中",
+        "status": _DOWNLOAD_STATUS.get(status_code, "处理中")
+        if isinstance(status_code, int)
+        else "处理中",
         "status_code": status_code if status_code is not None else 1,
         "download_url": url,
         "message": str(row.get("exceptionMessage") or ""),
@@ -114,9 +113,7 @@ def _download_view(row: dict[str, Any] | None, task_id: str = "") -> dict[str, A
 
 
 def _list_download_tasks(client: Any) -> list[dict[str, Any]]:
-    data = client.post(
-        _DOWNLOAD_LIST, {"page": {"pageNum": 1, "pageSize": 20}}
-    )
+    data = client.post(_DOWNLOAD_LIST, {"page": {"pageNum": 1, "pageSize": 20}})
     return _rows(data)
 
 
@@ -240,8 +237,14 @@ def get_download_task(client: Any, args: dict[str, Any]) -> str:
         return "未查询：请传入 youli_export_delivery 返回的 task_id。"
     # 跨轮次只凭文件名前缀无法区分新旧任务，不能返回历史文件。
     if not task_id:
-        return _json({"status": "未知", "download_url": "", "file_prefix": file_prefix,
-                      "note": "缺少本次任务编号，无法安全关联下载文件，请核对本次导出任务。"})
+        return _json(
+            {
+                "status": "未知",
+                "download_url": "",
+                "file_prefix": file_prefix,
+                "note": "缺少本次任务编号，无法安全关联下载文件，请核对本次导出任务。",
+            }
+        )
     known_ids: set[str] | None = None
     view = _poll_download(
         client,

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Generator
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 import psycopg
+from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
@@ -40,7 +42,7 @@ class RuntimePostgresSaver(PostgresSaver):
     """Reuse LangGraph's format with bounded connections and async adapters."""
 
     def __init__(self, dsn: str):
-        self._pool = ConnectionPool(
+        self._pool: ConnectionPool[psycopg.Connection[dict[str, Any]]] = ConnectionPool(
             dsn,
             min_size=0,
             max_size=2,
@@ -69,7 +71,7 @@ class RuntimePostgresSaver(PostgresSaver):
         await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
 
     async def alist(self, config: Any, **kwargs: Any) -> Any:
-        iterator = self.list(config, **kwargs)
+        iterator = cast(Generator[CheckpointTuple, None, None], self.list(config, **kwargs))
         sentinel = object()
         try:
             while True:

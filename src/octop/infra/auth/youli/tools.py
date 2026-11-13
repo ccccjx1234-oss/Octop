@@ -104,20 +104,20 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         return client
 
     async def list_accounts(
-        account_name: Annotated[
-            str, Field(description="账号名称关键字，可空")
-        ] = "",
+        account_name: Annotated[str, Field(description="账号名称关键字，可空")] = "",
         platform: Annotated[
-            int, Field(description="媒体平台：1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站；0 表示不限", ge=0)
+            int,
+            Field(
+                description="媒体平台：1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站；0 表示不限",
+                ge=0,
+            ),
         ] = 0,
         page: Annotated[int, Field(description="页码，从 1 开始", ge=1)] = 1,
         page_size: Annotated[int, Field(description="每页数量，最大 20", ge=1, le=20)] = 20,
     ) -> str:
         """查询账号库。拉包报价先选账号时使用，返回账号、平台、供应商、粉丝数等。"""
         try:
-            payload: dict[str, Any] = {
-                "page": {"pageNum": page, "pageSize": min(page_size, 20)}
-            }
+            payload: dict[str, Any] = {"page": {"pageNum": page, "pageSize": min(page_size, 20)}}
             if account_name.strip():
                 payload["accountName"] = account_name.strip()
             if platform:
@@ -163,9 +163,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             if str(version_id).strip():
                 payload["versionId"] = str(version_id)
             return _json(
-                _client().post(
-                    "/api/mcn/account/quotation/queryByProductSpecList", payload
-                )
+                _client().post("/api/mcn/account/quotation/queryByProductSpecList", payload)
             )
         except McnClientError as exc:
             return f"查询账号规格失败：{exc}"
@@ -177,9 +175,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
     ) -> str:
         """查询报价单列表，返回报价单号、客户、金额和状态。"""
         try:
-            payload: dict[str, Any] = {
-                "page": {"pageNum": page, "pageSize": min(page_size, 20)}
-            }
+            payload: dict[str, Any] = {"page": {"pageNum": page, "pageSize": min(page_size, 20)}}
             if keyword.strip():
                 payload["offerOrderName"] = keyword.strip()
             data = _client().post("/api/mcn/offer/order/list", payload)
@@ -207,9 +203,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
     ) -> str:
         """读取报价单详情，含明细、账号、规格、数量和金额。"""
         try:
-            return _json(
-                _client().get("/api/mcn/offer/order/detail", {"id": str(quote_id)})
-            )
+            return _json(_client().get("/api/mcn/offer/order/detail", {"id": str(quote_id)}))
         except McnClientError as exc:
             return f"查询报价单详情失败：{exc}"
 
@@ -240,9 +234,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             if keyword.strip():
                 payload["name"] = keyword.strip()
             data = _client().post("/api/mcn/customer-management/list", payload)
-            return _json(
-                _slim(data, ("id", "name", "category", "contact", "mobile"))
-            )
+            return _json(_slim(data, ("id", "name", "category", "contact", "mobile")))
         except McnClientError as exc:
             return f"查询客户失败：{exc}"
 
@@ -276,9 +268,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             if keyword.strip():
                 payload["name"] = keyword.strip()
             data = _client().post("/api/mcn/account/quote/version/list", payload)
-            return _json(
-                _slim(data, ("id", "name", "version", "isDefault", "status"))
-            )
+            return _json(_slim(data, ("id", "name", "version", "isDefault", "status")))
         except McnClientError as exc:
             return f"查询价格版本失败：{exc}"
 
@@ -291,9 +281,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             if keyword.strip():
                 payload["name"] = keyword.strip()
             data = _client().post("/api/mcn/coupon/version/list", payload)
-            return _json(
-                _slim(data, ("id", "name", "version", "isDefault", "status"))
-            )
+            return _json(_slim(data, ("id", "name", "version", "isDefault", "status")))
         except McnClientError as exc:
             return f"查询优惠政策版本失败：{exc}"
 
@@ -349,9 +337,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             int | None, Field(description="散投自动带出；项目产品需明确业务类型")
         ] = None,
         order_type: Annotated[int, Field(description="订单类型，默认常规单 1")] = 1,
-        contract_id: Annotated[
-            str, Field(description="可空，默认商机下首个有效已审核合同")
-        ] = "",
+        contract_id: Annotated[str, Field(description="可空，默认商机下首个有效已审核合同")] = "",
         customer_opportunity_id: Annotated[
             str, Field(description="客户商机 ID，可空；传了报价和后续订单才能归到项目")
         ] = "",
@@ -450,7 +436,9 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
     async def update_publish_link(
         service_item_id: Annotated[str, Field(description="服务项目 ID")],
         publish_link: Annotated[str, Field(description="发布链接")],
-        publish_time: Annotated[str, Field(description="发布时间，可空，格式 yyyy-MM-dd HH:mm:ss")] = "",
+        publish_time: Annotated[
+            str, Field(description="发布时间，可空，格式 yyyy-MM-dd HH:mm:ss")
+        ] = "",
         confirm: Annotated[
             bool, Field(description="用户核对账号、规格和链接后确认才传 true")
         ] = False,
@@ -468,9 +456,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             }
             if publish_time.strip():
                 payload["publishTime"] = publish_time.strip()
-            return _json(
-                _client().post("/api/mcn/order/service/item/edit", payload)
-            )
+            return _json(_client().post("/api/mcn/order/service/item/edit", payload))
         except McnClientError as exc:
             return f"填写发布链接失败：{exc}"
 
@@ -526,13 +512,13 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
 
     async def fetch_download_task(
         task_id: Annotated[str, Field(description="导出返回的任务 ID，可空")] = "",
-        file_prefix: Annotated[str, Field(description="没有任务 ID 时使用导出返回的 file_prefix")] = "",
+        file_prefix: Annotated[
+            str, Field(description="没有任务 ID 时使用导出返回的 file_prefix")
+        ] = "",
     ) -> str:
         """查询交付导出文件是否已经生成。"""
         try:
-            return get_download_task(
-                _client(), {"task_id": task_id, "file_prefix": file_prefix}
-            )
+            return get_download_task(_client(), {"task_id": task_id, "file_prefix": file_prefix})
         except McnClientError as exc:
             return f"查询导出文件失败：{exc}"
 
@@ -548,9 +534,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             return "未创建：请先和用户确认项目名称，确认后再以 confirm=true 调用。"
         try:
             return _json(
-                _client().post(
-                    "/api/mcn/customerProject/addProject", {"projectName": name}
-                )
+                _client().post("/api/mcn/customerProject/addProject", {"projectName": name})
             )
         except McnClientError as exc:
             return f"创建项目失败：{exc}"
@@ -558,7 +542,9 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
     async def create_coupon_version(
         name: Annotated[str, Field(description="优惠政策版本名称")],
         version: Annotated[str, Field(description="版本号，可空")] = "",
-        opportunity_id: Annotated[str, Field(description="客户商机 ID，可空；填了表示客户特定版本")] = "",
+        opportunity_id: Annotated[
+            str, Field(description="客户商机 ID，可空；填了表示客户特定版本")
+        ] = "",
         is_default: Annotated[bool, Field(description="是否默认版本")] = False,
         effective_time: Annotated[str, Field(description="生效时间，可空")] = "",
         expiration_time: Annotated[str, Field(description="过期时间，可空")] = "",
@@ -582,9 +568,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
                 payload["effectiveTime"] = effective_time.strip()
             if expiration_time.strip():
                 payload["expirationTime"] = expiration_time.strip()
-            return _json(
-                _client().post("/api/mcn/coupon/version/addCouponVersion", payload)
-            )
+            return _json(_client().post("/api/mcn/coupon/version/addCouponVersion", payload))
         except McnClientError as exc:
             return f"创建优惠政策版本失败：{exc}"
 

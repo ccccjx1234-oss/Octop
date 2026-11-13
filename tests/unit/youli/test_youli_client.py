@@ -32,9 +32,7 @@ def _patch_http(monkeypatch, *, status_code: int, body: object, calls: list):
             calls.append((url, kwargs))
             return _FakeResponse(status_code, body)
 
-    monkeypatch.setattr(
-        "octop.infra.auth.youli.client.httpx.Client", _FakeClient
-    )
+    monkeypatch.setattr("octop.infra.auth.youli.client.httpx.Client", _FakeClient)
 
 
 def _client() -> YouliClient:

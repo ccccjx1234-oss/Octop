@@ -256,7 +256,8 @@ class UserManager:
         provider_id: int,
         subject: str,
         claims: dict[str, Any],
-        role_assignment: tuple[str, str | None, list[str], list[tuple[str, str]]] | None = None,
+        role_assignment: tuple[str, str | None, builtins.list[str], builtins.list[tuple[str, str]]]
+        | None = None,
     ) -> User:
         async with self._lock:
             row = self._services.user_repo.get_by_sso(provider_id, subject)
