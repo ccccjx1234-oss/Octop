@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ssl
+
+import certifi
 import httpx
 import pytest
 
@@ -40,9 +43,7 @@ def _patch_http(monkeypatch, *, status_code=200, body=None, calls=None, error=No
             calls.append((method, url, json, params, headers))
             return _FakeResponse(status_code, body)
 
-    monkeypatch.setattr(
-        "octop.infra.auth.youli.mcn_client.httpx.Client", _FakeClient
-    )
+    monkeypatch.setattr("octop.infra.auth.youli.mcn_client.httpx.Client", _FakeClient)
 
 
 def _client() -> McnClient:
@@ -88,3 +89,30 @@ def test_unreachable_is_reported(monkeypatch) -> None:
 def test_unconfigured_client_fails_closed() -> None:
     with pytest.raises(McnClientError, match="未配置"):
         McnClient(YouliConfig(), "token").post("/api/mcn/account/list", {})
+
+
+def test_pinned_ca_is_passed_to_the_http_client(monkeypatch) -> None:
+    seen: list[dict] = []
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            seen.append(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def request(self, method, url, *, json=None, params=None, headers=None):
+            return _FakeResponse(200, {"code": 200, "data": {}})
+
+    monkeypatch.setattr("octop.infra.auth.youli.mcn_client.httpx.Client", _FakeClient)
+    client = McnClient(
+        YouliConfig(mcn_base_url="http://mcn.example", ca_file=certifi.where()),
+        "business-token",
+    )
+
+    client.get("/api/mcn/account/list")
+
+    assert isinstance(seen[0]["verify"], ssl.SSLContext)

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import ssl
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from octop.config import YouliConfig
+from octop.infra.auth.youli.tls import build_verify
 
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
@@ -38,20 +38,7 @@ class YouliIssuedToken:
 class YouliClient:
     def __init__(self, cfg: YouliConfig) -> None:
         self._cfg = cfg
-        self._tls = self._build_tls()
-
-    def _build_tls(self) -> ssl.SSLContext | bool:
-        """Trust the configured server certificate, including a private CA leaf.
-
-        A deployment can hand us the exact public certificate of an internal
-        HTTPS endpoint. Treating that leaf as the trust anchor needs OpenSSL's
-        partial-chain flag; otherwise the default store cannot verify it.
-        """
-        if not self._cfg.ca_file:
-            return True
-        context = ssl.create_default_context(cafile=self._cfg.ca_file)
-        context.verify_flags |= getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0x80000)
-        return context
+        self._tls = build_verify(cfg.ca_file)
 
     @property
     def enabled(self) -> bool:

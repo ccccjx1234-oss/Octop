@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from octop.config import YouliConfig
+from octop.infra.auth.youli.tls import build_verify
 
 _TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 _AUTH_CODES = frozenset({401, 403, 708})
@@ -34,6 +35,7 @@ class McnClient:
     ) -> None:
         self._base_url = (base_url or (cfg.mcn_base_url if cfg is not None else "")).strip()
         self._token = token
+        self._tls = build_verify(cfg.ca_file if cfg is not None else "")
 
     @property
     def enabled(self) -> bool:
@@ -57,10 +59,8 @@ class McnClient:
         url = f"{self._base_url.rstrip('/')}{path}"
         headers = {"Auth-Token": self._token}
         try:
-            with httpx.Client(timeout=_TIMEOUT) as client:
-                response = client.request(
-                    method, url, json=payload, params=params, headers=headers
-                )
+            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
+                response = client.request(method, url, json=payload, params=params, headers=headers)
         except httpx.HTTPError as exc:
             raise McnClientError("MCN 服务不可达") from exc
         try:
