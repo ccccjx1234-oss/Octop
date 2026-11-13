@@ -59,6 +59,8 @@ router = APIRouter(dependencies=[Depends(require_permission("memory"))])
 # under ``memory``, and ``AgentManager._build_harness_config`` reads them back.
 _EXTRACT_DEFAULTS: dict[str, Any] = {
     "memory_enabled": False,
+    "memory_capture_enabled": True,
+    "memory_recall_inject_enabled": True,
     "extract_on_session_end": True,
     "extract_trigger_mode": "idle",
     "extract_idle_seconds": 300.0,
@@ -195,6 +197,12 @@ class _ExtractConfigBody(BaseModel):
     """
 
     memory_enabled: bool | None = None
+    memory_capture_enabled: bool | None = Field(
+        default=None, description="Automatically record conversation events in memory"
+    )
+    memory_recall_inject_enabled: bool | None = Field(
+        default=None, description="Automatically inject recalled memory into the agent context"
+    )
     extract_on_session_end: bool | None = None
     extract_trigger_mode: str | None = Field(default=None, description="idle / interval")
     extract_idle_seconds: float | None = Field(
@@ -927,8 +935,9 @@ async def put_extract_config(
     merged = _read_extract_config(row)
     patch = body.model_dump(exclude_none=True)
 
-    if "memory_enabled" in patch:
-        merged["memory_enabled"] = bool(patch["memory_enabled"])
+    for key in ("memory_enabled", "memory_capture_enabled", "memory_recall_inject_enabled"):
+        if key in patch:
+            merged[key] = bool(patch[key])
     if "extract_on_session_end" in patch:
         merged["extract_on_session_end"] = bool(patch["extract_on_session_end"])
     if "extract_trigger_mode" in patch:

@@ -99,9 +99,13 @@ async def test_start_and_exchange_creates_session(service, monkeypatch):
         browser_token=started.browser_token,
     )
     payload = decode_token(
-        service._services.secret_repo.get("jwt"), result.access_token  # noqa: SLF001
+        service._services.secret_repo.get("jwt"),
+        result.access_token,  # noqa: SLF001
     )
     assert payload["sid"] == result.session.sid
+    assert payload["purpose"] == "access"
+    assert payload["mfa_version"] == 0
+    assert payload["password_version"] == 0
     assert result.user.username
     assert service.session(result.session.sid) is not None
 
@@ -154,9 +158,7 @@ async def test_identity_change_revokes_upstream(service, monkeypatch):
         }
 
     monkeypatch.setattr(YouliClient, "verify", wrong_identity)
-    monkeypatch.setattr(
-        YouliClient, "revoke", lambda self, **kwargs: revoked.append(kwargs)
-    )
+    monkeypatch.setattr(YouliClient, "revoke", lambda self, **kwargs: revoked.append(kwargs))
     started = await service.start(public_base="https://octop.example")
     with pytest.raises(OctopError):
         await service.exchange(
@@ -241,4 +243,3 @@ async def test_revalidation_keeps_session_when_mdm_is_unreachable(service, monke
     )
 
     assert service.session(result.session.sid) is not None
-
