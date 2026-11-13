@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   captcha: vi.fn(),
   passkeyStatus: vi.fn(),
   setToken: vi.fn(),
+  youliStatus: vi.fn().mockResolvedValue({ enabled: true }),
   staffLogin: vi.fn().mockResolvedValue({
     access_token: "employee-token",
     user: { locale: "zh" },
@@ -27,6 +28,7 @@ vi.mock("../../api/modules/auth", () => ({
     getAuthStatus: () => Promise.resolve({ setup_required: false }),
     getCaptcha: mocks.captcha,
     getPasskeyLoginStatus: mocks.passkeyStatus,
+    getYouliStatus: mocks.youliStatus,
     staffLogin: mocks.staffLogin,
   },
 }));
@@ -67,4 +69,19 @@ it("keeps employee login independent of local captcha and passkey login", async 
   expect(mocks.setToken).toHaveBeenCalledWith("employee-token", true);
   expect(mocks.captcha).not.toHaveBeenCalled();
   expect(mocks.passkeyStatus).not.toHaveBeenCalled();
+});
+
+it("redirects to the system-account form when Youli is not configured", async () => {
+  mocks.youliStatus.mockResolvedValueOnce({ enabled: false });
+  render(
+    <MemoryRouter initialEntries={["/login"]}>
+      <Routes>
+        <Route path="/login" element={<LoginPage mode="staff" />} />
+        <Route path="/manageLogin" element={<div>system login</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await waitFor(() =>
+    expect(screen.getByText("system login")).toBeInTheDocument(),
+  );
 });

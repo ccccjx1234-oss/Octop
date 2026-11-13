@@ -227,7 +227,22 @@ export default function LoginPage({
         }
         // Employee passwords are checked by MCN; its endpoint does not use
         // the local-account captcha or the platform's OAuth/LDAP providers.
-        if (isStaff) return;
+        if (isStaff) {
+          // Standalone deployments have no Youli endpoint. Send the visitor to
+          // the system-account form instead of letting a login hit a missing
+          // MCN service and fail with a server error.
+          void authApi
+            .getYouliStatus()
+            .then((next) => {
+              if (!cancelled && next.enabled !== true) {
+                navigate("/manageLogin", { replace: true });
+              }
+            })
+            .catch(() => {
+              if (!cancelled) navigate("/manageLogin", { replace: true });
+            });
+          return;
+        }
         if (isDesktopShell()) {
           setShowCreateLocal(true);
           setLocalAccountExists(status.local_account);
