@@ -13,19 +13,35 @@ class FakeClient:
     def post(self, path: str, payload: Any = None) -> Any:
         self.calls.append((path, payload))
         if path.endswith("/product/list"):
-            return [{"id": "p1", "productType": 1, "attribute": -1},
-                    {"id": "1", "productType": 1, "attribute": -1}]
+            return [
+                {"id": "p1", "productType": 1, "attribute": -1},
+                {"id": "1", "productType": 1, "attribute": -1},
+            ]
         if path.endswith("/getEnumList"):
-            return [{"enumKey": "project_type", "enumDataDictionaryVos": [
-                {"enumValue": 6, "description": "散投"}]}]
+            return [
+                {
+                    "enumKey": "project_type",
+                    "enumDataDictionaryVos": [{"enumValue": 6, "description": "散投"}],
+                }
+            ]
         if path.endswith("/queryByProductSpecList"):
             pairs = [("a1", "s1"), ("a2", "s2"), ("10", "100"), ("11", "101")]
-            return [{"accountId": a, "id": s, "accountName": "会火" + a,
-                     "specName": "娱乐/视频<60s", "ad_category": "4", "publish_category": "10",
-                     "modeOperation": 2 if a == "a1" else 1,
-                     "supplierId": "sup1" if a == "a1" else None,
-                     "platform": 1, "linkUrl": "/douyin.png", "price": 7500}
-                    for a, s in pairs]
+            return [
+                {
+                    "accountId": a,
+                    "id": s,
+                    "accountName": "会火" + a,
+                    "specName": "娱乐/视频<60s",
+                    "ad_category": "4",
+                    "publish_category": "10",
+                    "modeOperation": 2 if a == "a1" else 1,
+                    "supplierId": "sup1" if a == "a1" else None,
+                    "platform": 1,
+                    "linkUrl": "/douyin.png",
+                    "price": 7500,
+                }
+                for a, s in pairs
+            ]
         if path.endswith("/calculateCoupon"):
             return {"orderItems": [{**i, "couponDetailVos": []} for i in payload["orderItems"]]}
         if path.endswith("/offerOrder/save"):
@@ -264,7 +280,13 @@ def test_package_quote_builds_rows(monkeypatch) -> None:
             "price_version_id": "v1",
             "coupon_version_id": "v2",
             "account_specs": [
-                {"account_id": "a1", "account_name": "会火大明星", "sku_id": "s1", "price": 7500, "supplier_id": "sup1"},
+                {
+                    "account_id": "a1",
+                    "account_name": "会火大明星",
+                    "sku_id": "s1",
+                    "price": 7500,
+                    "supplier_id": "sup1",
+                },
                 {"account_id": "a2", "account_name": "会火", "sku_id": "s2", "price": 4000},
             ],
             "confirm": True,
@@ -649,6 +671,7 @@ def test_create_contract_requires_opportunity(monkeypatch) -> None:
     assert "customer_opportunity_id" in result
     assert fake.calls == []
 
+
 def test_combined_order_groups_by_supplier(monkeypatch) -> None:
     class CombinedClient(FakeClient):
         def get(self, path: str, params: Any = None) -> Any:
@@ -666,9 +689,7 @@ def test_combined_order_groups_by_supplier(monkeypatch) -> None:
                     "baseMoney": amount,
                     "factMoney": amount,
                     "modeOperation": 1,
-                    "dynamicItemObj": json.dumps(
-                        {"formLabelAlign": {"supplier": supplier}}
-                    ),
+                    "dynamicItemObj": json.dumps({"formLabelAlign": {"supplier": supplier}}),
                 }
 
             return {
@@ -686,9 +707,7 @@ def test_combined_order_groups_by_supplier(monkeypatch) -> None:
     fake = CombinedClient()
     _use(monkeypatch, fake)
     result = json.loads(
-        mcn.call_tool(
-            {}, "youli_create_combined_order", {"quote_id": "9", "confirm": True}
-        )
+        mcn.call_tool({}, "youli_create_combined_order", {"quote_id": "9", "confirm": True})
     )
     posts = [p for path, p in fake.calls if path.endswith("/temporaryStorage")]
     assert result["groups"] == 2

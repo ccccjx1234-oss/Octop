@@ -52,9 +52,7 @@ class YouliLoginRequestRow:
             browser_hash=str(row["browser_hash"]),
             created_at=int(row["created_at"]),
             expires_at=int(row["expires_at"]),
-            consumed_at=(
-                int(row["consumed_at"]) if row["consumed_at"] is not None else None
-            ),
+            consumed_at=(int(row["consumed_at"]) if row["consumed_at"] is not None else None),
         )
 
 
@@ -96,9 +94,7 @@ class YouliSessionRow:
             abs_expires_at=int(row["abs_expires_at"]),
             status=str(row["status"] or "active"),
             created_at=int(row["created_at"]),
-            revoked_at=(
-                int(row["revoked_at"]) if row["revoked_at"] is not None else None
-            ),
+            revoked_at=(int(row["revoked_at"]) if row["revoked_at"] is not None else None),
         )
 
 
@@ -316,8 +312,7 @@ class YouliAgentBindingRepo:
     def get_by_agent(self, agent_id: str) -> YouliAgentBindingRow | None:
         with self._db.connect() as conn:
             row: Any = conn.execute(
-                "SELECT * FROM youli_agent_binding WHERE agent_id = ? "
-                "ORDER BY id LIMIT 1",
+                "SELECT * FROM youli_agent_binding WHERE agent_id = ? ORDER BY id LIMIT 1",
                 (agent_id,),
             ).fetchone()
         return YouliAgentBindingRow.from_row(row) if row else None
@@ -394,8 +389,5 @@ class YouliBusinessTemplateRepo:
 
     def list(self) -> list[YouliBusinessTemplateRow]:
         with self._db.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM youli_business_template ORDER BY id"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM youli_business_template ORDER BY id").fetchall()
         return map_rows(rows, YouliBusinessTemplateRow)
-

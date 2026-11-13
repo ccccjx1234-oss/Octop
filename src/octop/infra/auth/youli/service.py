@@ -32,7 +32,7 @@ from octop.infra.users.manager import UserManager
 logger = logging.getLogger(__name__)
 
 YOULI_PROVIDER_KIND = "youli"
-YOULI_ROLE_ASSIGNMENT = (
+YOULI_ROLE_ASSIGNMENT: tuple[str, str | None, list[str], list[tuple[str, str]]] = (
     "youli_employee",
     "会火员工",
     ["connector_enabled", "connector_builtin"],

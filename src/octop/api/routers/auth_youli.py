@@ -124,4 +124,3 @@ async def exchange(
         "expires_in": result.expires_in,
         "user": me_payload(result.user, server),
     }
-

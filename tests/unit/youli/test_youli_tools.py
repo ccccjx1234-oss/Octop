@@ -22,9 +22,7 @@ class _SessionRepo:
 
 
 def _tools(row: object | None):
-    repos = SimpleNamespace(
-        youli_session_repo=_SessionRepo(row), secret_repo=object()
-    )
+    repos = SimpleNamespace(youli_session_repo=_SessionRepo(row), secret_repo=object())
     return {
         tool.name: tool
         for tool in youli_tools.build_youli_tools(
@@ -54,9 +52,9 @@ async def test_account_tool_uses_delegated_session(monkeypatch) -> None:
 
     monkeypatch.setattr(McnClient, "post", fake_post)
 
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_list_accounts"
-    ].ainvoke({"account_name": "测试", "platform": 1})
+    result = await _tools(SimpleNamespace(token_blob=b"blob"))["youli_list_accounts"].ainvoke(
+        {"account_name": "测试", "platform": 1}
+    )
 
     assert "测试账号" in result
     assert calls == [
@@ -73,9 +71,7 @@ async def test_account_tool_uses_delegated_session(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_tools_refuse_without_sid() -> None:
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_list_quotes"
-    ].ainvoke({})
+    result = await _tools(SimpleNamespace(token_blob=b"blob"))["youli_list_quotes"].ainvoke({})
 
     assert result.startswith("查询报价单失败")
     assert "没有经贝员工授权" in result
@@ -94,9 +90,9 @@ async def test_quote_list_rejects_oversized_page() -> None:
     set_current_youli_sid("sid-1")
 
     with pytest.raises(Exception, match="less than or equal to 20"):
-        await _tools(SimpleNamespace(token_blob=b"blob"))[
-            "youli_list_quotes"
-        ].ainvoke({"keyword": "拉包", "page": 2, "page_size": 50})
+        await _tools(SimpleNamespace(token_blob=b"blob"))["youli_list_quotes"].ainvoke(
+            {"keyword": "拉包", "page": 2, "page_size": 50}
+        )
 
 
 @pytest.mark.asyncio
@@ -133,9 +129,9 @@ async def test_save_quote_requires_confirmation(monkeypatch) -> None:
 
     monkeypatch.setattr(McnClient, "post", fake_post)
 
-    result = await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_save_quote"
-    ].ainvoke({"payload": {"productId": "1"}})
+    result = await _tools(SimpleNamespace(token_blob=b"blob"))["youli_save_quote"].ainvoke(
+        {"payload": {"productId": "1"}}
+    )
 
     assert result.startswith("未保存")
     assert calls == []
@@ -274,9 +270,7 @@ async def test_export_delivery_selects_path(monkeypatch) -> None:
     monkeypatch.setattr(McnClient, "post", fake_post)
     tool = _tools(SimpleNamespace(token_blob=b"blob"))["youli_export_delivery"]
 
-    monkeypatch.setattr(
-        "octop.infra.auth.youli.delivery_export.time.sleep", lambda _seconds: None
-    )
+    monkeypatch.setattr("octop.infra.auth.youli.delivery_export.time.sleep", lambda _seconds: None)
     blocked = await tool.ainvoke({"mode": "project", "project_name": "测试项目"})
     assert blocked.startswith("未导出")
     assert calls == []
@@ -346,9 +340,7 @@ async def test_create_project_gate(monkeypatch) -> None:
     assert calls == []
 
     await tool.ainvoke({"project_name": " AI测试项目 ", "confirm": True})
-    assert calls == [
-        ("/api/mcn/customerProject/addProject", {"projectName": "AI测试项目"})
-    ]
+    assert calls == [("/api/mcn/customerProject/addProject", {"projectName": "AI测试项目"})]
 
 
 @pytest.mark.asyncio
@@ -363,9 +355,7 @@ async def test_create_coupon_version_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(McnClient, "post", fake_post)
 
-    await _tools(SimpleNamespace(token_blob=b"blob"))[
-        "youli_create_coupon_version"
-    ].ainvoke(
+    await _tools(SimpleNamespace(token_blob=b"blob"))["youli_create_coupon_version"].ainvoke(
         {
             "name": "客户A专属优惠",
             "opportunity_id": "88",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from octop.config import OctopConfig
@@ -649,7 +649,7 @@ def _mcn_turn_token_resolver(svc: Any, owner_user_id: int) -> Any:
         sid = str(configurable.get("youli_sid") or "").strip()
         if not sid:
             return ""
-        return svc.live_youli_token_for_sid(sid, owner_user_id=owner_user_id)
+        return cast(str, svc.live_youli_token_for_sid(sid, owner_user_id=owner_user_id))
 
     return resolve
 
@@ -788,7 +788,9 @@ def inject_missing_gateway_tools(
             creds = dict(creds)
             creds["_owner_user_id"] = inst.user_id
             creds["_token_resolver"] = _mcn_turn_token_resolver(svc, inst.user_id)
-            creds["_latest_token_resolver"] = lambda uid=inst.user_id: svc.live_youli_token_for_user(uid)
+            creds["_latest_token_resolver"] = lambda uid=inst.user_id: (
+                svc.live_youli_token_for_user(uid)
+            )
         extra.extend(
             build_gateway_langchain_tools(
                 entry=entry,

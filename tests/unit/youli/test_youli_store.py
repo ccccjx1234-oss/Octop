@@ -145,4 +145,3 @@ def test_business_template_whitelist(services):
     assert repo.is_business_template(101) is True
     assert repo.is_business_template(102) is False
     assert [row.published_expert_id for row in repo.list()] == [101]
-

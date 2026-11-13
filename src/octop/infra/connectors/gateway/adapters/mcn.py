@@ -165,9 +165,7 @@ def _client(creds: dict[str, Any]) -> McnClient:
         if not token:
             # Background work for this same employee has no turn sid.
             token = str(creds.get("token") or "").strip()
-    base_url = str(
-        creds.get("base_url") or os.environ.get("OCTOP_YOULI_MCN_URL") or ""
-    ).strip()
+    base_url = str(creds.get("base_url") or os.environ.get("OCTOP_YOULI_MCN_URL") or "").strip()
     if not token:
         raise McnClientError("MCN 连接器未授权，请重新登录会火员工账号")
     client = McnClient(None, token, base_url=base_url)
@@ -221,9 +219,7 @@ def _query_account_specs(client: McnClient, args: dict[str, Any]) -> str:
     version_id = str(args.get("version_id") or "").strip()
     if version_id:
         payload["versionId"] = version_id
-    return _json(
-        client.post("/api/mcn/account/quotation/queryByProductSpecList", payload)
-    )
+    return _json(client.post("/api/mcn/account/quotation/queryByProductSpecList", payload))
 
 
 def _list_quotes(client: McnClient, args: dict[str, Any]) -> str:
@@ -392,9 +388,7 @@ def _list_dictionaries(client: McnClient, args: dict[str, Any]) -> str:
     keys = [str(k).strip() for k in (args.get("enum_keys") or []) if str(k).strip()]
     if not keys:
         keys = ["project_type", "account_platform", "contract_type"]
-    data = client.post(
-        "/api/mcn/enum/data/dictionary/getEnumList", {"enumKeys": keys}
-    )
+    data = client.post("/api/mcn/enum/data/dictionary/getEnumList", {"enumKeys": keys})
     if not isinstance(data, list):
         return _json(data)
     out = []
@@ -913,7 +907,9 @@ def _create_combined_order(client: McnClient, args: dict[str, Any]) -> str:
                 "projectType": detail.get("projectType"),
                 "customerOpportunityId": detail.get("customerOpportunityId"),
                 "contractId": detail.get("contractId"),
-                **{key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")},
+                **{
+                    key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")
+                },
                 "itemRoList": mapped_items,
             },
             "orderExtraChargeRoList": [],
@@ -1011,9 +1007,7 @@ def _create_project(client: McnClient, args: dict[str, Any]) -> str:
         return "未创建：项目名称不能为空。"
     if not bool(args.get("confirm")):
         return "未创建：请先和用户确认项目名称，确认后再以 confirm=true 调用。"
-    return _json(
-        client.post("/api/mcn/customerProject/addProject", {"projectName": name})
-    )
+    return _json(client.post("/api/mcn/customerProject/addProject", {"projectName": name}))
 
 
 def _create_sub_project(client: McnClient, args: dict[str, Any]) -> str:
@@ -1068,14 +1062,14 @@ def _create_coupon_version(client: McnClient, args: dict[str, Any]) -> str:
     expiration_time = str(args.get("expiration_time") or "").strip()
     if expiration_time:
         payload["expirationTime"] = expiration_time
-    return _json(
-        client.post("/api/mcn/coupon/version/addCouponVersion", payload)
-    )
+    return _json(client.post("/api/mcn/coupon/version/addCouponVersion", payload))
 
 
 def _create_contract(client: McnClient, args: dict[str, Any]) -> str:
     if not bool(args.get("confirm")):
-        return "未创建：请先和用户核对合同类型、客户、保价政策和有效期，确认后再以 confirm=true 调用。"
+        return (
+            "未创建：请先和用户核对合同类型、客户、保价政策和有效期，确认后再以 confirm=true 调用。"
+        )
     payload = args.get("payload")
     if payload is None:
         payload = {
@@ -1172,7 +1166,10 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": _schema(
             {
                 "account_name": {"type": "string", "description": "账号名称关键字，可空"},
-                "platform": {"type": "integer", "description": "媒体平台：1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站；0 表示不限"},
+                "platform": {
+                    "type": "integer",
+                    "description": "媒体平台：1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站；0 表示不限",
+                },
                 "page": {"type": "integer", "description": "页码，从 1 开始"},
                 "page_size": {"type": "integer", "description": "每页数量，最大 20"},
             }
@@ -1184,7 +1181,11 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": _schema(
             {
                 "product_id": {"type": "string", "description": "产品 ID"},
-                "account_ids": {"type": "array", "items": {"type": "string"}, "description": "账号 ID 列表，最多 50 个"},
+                "account_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "账号 ID 列表，最多 50 个",
+                },
                 "version_id": {"type": "string", "description": "价格版本 ID，可空"},
             },
             ["product_id", "account_ids"],
@@ -1327,12 +1328,27 @@ TOOLS: list[dict[str, Any]] = [
                 "name": {"type": "string", "description": "报价单名称"},
                 "product_id": {"type": "string"},
                 "customer_id": {"type": "string"},
-                "price_version_id": {"type": "string", "description": "用户指定时传；省略则自动按页面规则选择"},
-                "coupon_version_id": {"type": "string", "description": "用户指定时传；省略则自动按页面规则选择"},
-                "project_type": {"type": "integer", "description": "散投自动带出；项目产品需明确业务类型"},
+                "price_version_id": {
+                    "type": "string",
+                    "description": "用户指定时传；省略则自动按页面规则选择",
+                },
+                "coupon_version_id": {
+                    "type": "string",
+                    "description": "用户指定时传；省略则自动按页面规则选择",
+                },
+                "project_type": {
+                    "type": "integer",
+                    "description": "散投自动带出；项目产品需明确业务类型",
+                },
                 "order_type": {"type": "integer", "description": "默认常规单 1"},
-                "contract_id": {"type": "string", "description": "可选，默认商机下首个有效已审核合同"},
-                "expected_amount": {"type": "number", "description": "confirm=true 时传入用户已确认的草稿应付金额；金额变化会阻止保存"},
+                "contract_id": {
+                    "type": "string",
+                    "description": "可选，默认商机下首个有效已审核合同",
+                },
+                "expected_amount": {
+                    "type": "number",
+                    "description": "confirm=true 时传入用户已确认的草稿应付金额；金额变化会阻止保存",
+                },
                 "customer_opportunity_id": {
                     "type": "string",
                     "description": "客户商机 ID，可空；传了报价和后续订单才能归到项目",
@@ -1396,7 +1412,10 @@ TOOLS: list[dict[str, Any]] = [
             {
                 "service_item_id": {"type": "string"},
                 "publish_link": {"type": "string"},
-                "publish_time": {"type": "string", "description": "发布时间 yyyy-MM-dd；时分秒会被忽略"},
+                "publish_time": {
+                    "type": "string",
+                    "description": "发布时间 yyyy-MM-dd；时分秒会被忽略",
+                },
                 "confirm": {"type": "boolean"},
             },
             ["service_item_id", "publish_link", "confirm"],
@@ -1479,14 +1498,31 @@ TOOLS: list[dict[str, Any]] = [
                 "project_name": {"type": "string"},
                 "customer_opportunity_id": {"type": "string"},
                 "customer_name": {"type": "string"},
-                "project_type": {"type": "integer", "description": "项目类型，先用 youli_list_dictionaries 查询 project_type"},
-                "main_platform": {"type": "integer", "description": "主平台，1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站"},
+                "project_type": {
+                    "type": "integer",
+                    "description": "项目类型，先用 youli_list_dictionaries 查询 project_type",
+                },
+                "main_platform": {
+                    "type": "integer",
+                    "description": "主平台，1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站",
+                },
                 "project_budget": {"type": "number", "description": "项目预算，可空"},
-                "project_leader_ids": {"type": "array", "items": {"type": "string"}, "description": "项目负责人员工 ID 列表，可空"},
+                "project_leader_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "项目负责人员工 ID 列表，可空",
+                },
                 "parent_project_id": {"type": "string", "description": "父项目 ID，可空"},
                 "confirm": {"type": "boolean"},
             },
-            ["project_name", "customer_opportunity_id", "customer_name", "project_type", "main_platform", "confirm"],
+            [
+                "project_name",
+                "customer_opportunity_id",
+                "customer_name",
+                "project_type",
+                "main_platform",
+                "confirm",
+            ],
         ),
     },
     {
@@ -1513,7 +1549,10 @@ TOOLS: list[dict[str, Any]] = [
                 "payload": {"type": "object", "description": "ContractRo 结构"},
                 "name": {"type": "string", "description": "合同名称"},
                 "customer_id": {"type": "string", "description": "签约客户 ID"},
-                "customer_opportunity_id": {"type": "string", "description": "客户商机 ID；填了合同才会出现在合同列表"},
+                "customer_opportunity_id": {
+                    "type": "string",
+                    "description": "客户商机 ID；填了合同才会出现在合同列表",
+                },
                 "type": {"type": "integer", "description": "合同类型 1单次 2季框 3半年框 4年框"},
                 "issuing_office": {"type": "string", "description": "签约主体/开票单位 ID"},
                 "effective_time": {"type": "string", "description": "有效开始日期 yyyy-MM-dd"},

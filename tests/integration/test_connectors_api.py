@@ -503,7 +503,7 @@ async def test_patch_instance_status(env):
     assert r2.json()["status"] == "disabled"
 
 
-async def test_catalog_weknora_dify_last(env):
+async def test_catalog_weknora_dify_and_mcn_last(env):
     c, _, auth, _ = env
     r = await c.get("/api/connectors/catalog", headers=auth)
     assert r.status_code == 200
@@ -515,7 +515,7 @@ async def test_catalog_weknora_dify_last(env):
     assert kinds.index("obsidian-cli") < kinds.index("weknora")
     assert kinds.index("wecom-cli") < kinds.index("dify")
     assert kinds.index("didi") < kinds.index("weknora")
-    assert kinds[-2:] == ["weknora", "dify"]
+    assert kinds[-3:] == ["weknora", "dify", "mcn"]
 
 
 async def test_obsidian_cli_install_registers_binary(
