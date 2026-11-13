@@ -82,7 +82,9 @@ def test_merge_turn_mcp_servers_unions_extra_defaults() -> None:
         def list_active_mcp_server_names(self, _uid: int) -> list[str]:
             return ["always", "expert"]
 
-        def expand_connector_refs(self, _uid: int, refs: list[str]) -> list[str]:
+        def expand_connector_refs(
+            self, _uid: int, refs: list[str], *, allowed_names: set[str] | None = None
+        ) -> list[str]:
             return [name for name in refs if name]
 
     svc = _Svc()

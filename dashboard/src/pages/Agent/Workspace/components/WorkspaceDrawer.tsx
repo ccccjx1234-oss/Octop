@@ -41,6 +41,7 @@ import {
   FilePlus,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import cx from "classnames";
 import { request, requestBlob, requestUpload } from "../../../../api/request";
 import { withFromWorkspace } from "../../../../utils/fromWorkspace";
 import { workspaceApi } from "../../../../api/modules/workspace";
@@ -864,9 +865,10 @@ export default function WorkspaceDrawer({
   const renderSplitDivider = () => (
     <div
       data-split-divider=""
-      className={`${styles.splitDivider} ${
-        treeCollapsed ? styles.splitDividerCollapsed : ""
-      }`}
+      className={cx(
+        styles.splitDivider,
+        treeCollapsed && styles.splitDividerCollapsed,
+      )}
     >
       {!treeCollapsed && (
         <div
@@ -1251,7 +1253,7 @@ export default function WorkspaceDrawer({
         </div>
       ) : (
         <div
-          className={`${styles.split} ${isMobile ? styles.splitMobile : ""}`}
+          className={cx(styles.split, isMobile && styles.splitMobile)}
           style={{ flex: 1, minHeight: 0 }}
         >
           {((!isMobile && !treeCollapsed) ||
@@ -1294,9 +1296,10 @@ export default function WorkspaceDrawer({
 
           {(!isMobile || mobilePane === "viewer") && (
             <div
-              className={`${styles.viewerPane} ${
-                !isMobile && treeCollapsed ? styles.viewerPaneFull : ""
-              }`}
+              className={cx(
+                styles.viewerPane,
+                !isMobile && treeCollapsed && styles.viewerPaneFull,
+              )}
             >
               {!selected ? (
                 <div className={styles.viewerEmpty}>

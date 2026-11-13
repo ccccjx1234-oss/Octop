@@ -9,7 +9,7 @@ import pytest
 
 from octop.api.deps import maybe_sliding_renew_token, resolve_user_from_token
 from octop.config import OctopConfig
-from octop.infra.auth.tokens import decode_token, sign_token
+from octop.infra.auth.tokens import PURPOSE_ACCESS, decode_token, sign_token
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.services import build_shared_services
@@ -66,7 +66,13 @@ def _make_session(server, user: User, *, abs_offset: int = 300) -> str:
 
 def test_sign_token_carries_sid():
     token = sign_token(
-        b"secret", sub=1, uname="u", role="user", ttl_seconds=60, sid="sid-1"
+        b"secret",
+        sub=1,
+        uname="u",
+        role="user",
+        purpose=PURPOSE_ACCESS,
+        ttl_seconds=60,
+        sid="sid-1",
     )
     payload = decode_token(b"secret", token)
     assert payload["sid"] == "sid-1"
@@ -80,6 +86,7 @@ def test_revoked_session_rejects_token(server):
         sub=user.id,
         uname=user.username,
         role=user.role,
+        purpose=PURPOSE_ACCESS,
         ttl_seconds=60,
         sid=sid,
     )
@@ -97,6 +104,7 @@ def test_sliding_renew_keeps_sid_and_absolute_expiry(server):
         sub=user.id,
         uname=user.username,
         role=user.role,
+        purpose=PURPOSE_ACCESS,
         ttl_seconds=5,
         sid=sid,
     )
@@ -105,4 +113,3 @@ def test_sliding_renew_keeps_sid_and_absolute_expiry(server):
     payload = decode_token(server.services.secret_repo.get("jwt"), renewed)
     assert payload["sid"] == sid
     assert int(payload["exp"]) <= int(time.time()) + 120
-

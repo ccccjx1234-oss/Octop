@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlparse
 from octop.config import YouliConfig
 from octop.infra.auth.sso.crypto import decrypt_secret, encrypt_secret
 from octop.infra.auth.sso.pkce import new_pkce_pair
-from octop.infra.auth.tokens import sign_token
+from octop.infra.auth.tokens import PURPOSE_ACCESS, sign_token
 from octop.infra.auth.youli.client import (
     YouliClient,
     YouliClientError,
@@ -253,11 +253,15 @@ class YouliAuthService:
         secret = self._services.secret_repo.get("jwt")
         if secret is None:
             raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
+        user_row = self._services.user_repo.get(user.id)
         access_token = sign_token(
             secret,
             sub=user.id,
             uname=user.username,
             role=user.role,
+            purpose=PURPOSE_ACCESS,
+            mfa_version=int(user_row.mfa_version) if user_row is not None else 0,
+            password_version=int(user_row.password_version) if user_row is not None else 0,
             ttl_seconds=abs_expires - now,
             sid=sid,
         )
@@ -340,7 +344,11 @@ def _parse_company_expiration(raw: Any) -> datetime:
         text = text[:-1] + "+00:00"
     if "T" in text:
         parsed = datetime.fromisoformat(text)
-        return parsed.replace(tzinfo=None) if parsed.tzinfo is None else parsed.astimezone().replace(tzinfo=None)
+        return (
+            parsed.replace(tzinfo=None)
+            if parsed.tzinfo is None
+            else parsed.astimezone().replace(tzinfo=None)
+        )
     return datetime.fromisoformat(text[:19].replace(" ", "T"))
 
 
@@ -411,4 +419,3 @@ def revalidate_business_session(
     if failure:
         services.youli_session_repo.revoke(session.sid)
         raise OctopError(ErrorCode.TOKEN_EXPIRED, f"请重新登录：{failure}")
-

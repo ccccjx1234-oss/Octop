@@ -74,12 +74,28 @@ def test_personal_connector_visible_only_for_mcn_owner() -> None:
     assert personal_connector_visible(shared_other_kind, 1) is True
 
 
+def test_turn_defaults_combine_employee_kind_and_shared_custom_alias() -> None:
+    svc = _service(_Repo([_instance()]))
+    svc.list_active_mcp_server_names = lambda _uid: ["mcn__own", "doris", "custom__owner__doris"]
+    svc.shared_custom_harness_aliases = lambda _uid: {"custom__owner__doris": "doris"}
+    assert svc.merge_turn_mcp_servers(
+        1, None, extra_defaults=["mcn", "doris"], agent_owner_id=2
+    ) == ["mcn__own", "custom__owner__doris"]
+    assert svc.merge_turn_mcp_servers(1, ["doris", "mcn"]) == ["doris", "mcn__own"]
+
+
 def test_active_names_and_api_list_hide_another_employees_mcn() -> None:
     repo = _Repo(
         [
             _instance(),
             _instance(user_id=2, instance_id="other", mcp_server_name="mcn__other", shared=True),
-            _instance(kind="notion", user_id=2, instance_id="notion", mcp_server_name="notion__x", shared=True),
+            _instance(
+                kind="notion",
+                user_id=2,
+                instance_id="notion",
+                mcp_server_name="notion__x",
+                shared=True,
+            ),
         ]
     )
     svc = _service(repo)
@@ -218,7 +234,9 @@ async def test_mcp_configs_skip_another_employees_mcn(monkeypatch) -> None:
         _Repo(
             [
                 _instance(),
-                _instance(user_id=2, instance_id="other", mcp_server_name="mcn__other", shared=True),
+                _instance(
+                    user_id=2, instance_id="other", mcp_server_name="mcn__other", shared=True
+                ),
                 _instance(
                     kind="dify",
                     user_id=2,

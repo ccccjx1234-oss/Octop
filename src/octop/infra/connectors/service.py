@@ -579,6 +579,108 @@ class ConnectorService:
             item["usable"] = True
         return out
 
+    def shared_custom_harness_aliases(self, owner_user_id: int) -> dict[str, str]:
+        """Map a viewer's collision-safe name to the owner's harness server name.
+
+        The owner's custom server is registered as ``doris``. Everyone else
+        addresses the same shared server as ``custom__{instance}__doris``.
+        A shared expert's harness only knows the short name.
+        """
+        if not self._repo.connector_feature_allows(owner_user_id):
+            return {}
+        parent = self._repo.get_by_user_kind(owner_user_id, CUSTOM_MCP_KIND)
+        if parent is None or not parent.has_credentials:
+            return {}
+        aliases: dict[str, str] = {}
+        for name, spec in extract_servers(self.decrypt(parent.instance_id)).items():
+            if (
+                not isinstance(spec, dict)
+                or spec.get("shared") is not True
+                or not server_enabled(spec)
+            ):
+                continue
+            aliases[shared_mcp_server_name(parent.instance_id, name)] = name
+        return aliases
+
+    def align_mcp_names_to_harness(
+        self,
+        *,
+        owner_user_id: int | None,
+        viewer_user_id: int,
+        names: list[str],
+    ) -> list[str]:
+        """Rewrite viewer-facing shared custom names onto the agent's harness.
+
+        Other names are left unchanged. The owner already speaks harness names.
+        """
+        if owner_user_id is None or owner_user_id == viewer_user_id or not names:
+            return list(names)
+        aliases = self.shared_custom_harness_aliases(owner_user_id)
+        if not aliases:
+            return list(names)
+        out: list[str] = []
+        for name in names:
+            mapped = aliases.get(name, name)
+            if mapped not in out:
+                out.append(mapped)
+        return out
+
+    def present_mcp_names_for_viewer(
+        self,
+        *,
+        owner_user_id: int | None,
+        viewer_user_id: int,
+        names: list[str],
+    ) -> list[str]:
+        """Show a non-owner the catalog names they can actually select.
+
+        Owner short names of shared custom servers become the collision-safe
+        name. Servers the viewer cannot use are omitted.
+        """
+        if owner_user_id is None or owner_user_id == viewer_user_id:
+            return list(names)
+        aliases = self.shared_custom_harness_aliases(owner_user_id)
+        reverse: dict[str, str] = {}
+        for long_name, short_name in aliases.items():
+            reverse.setdefault(short_name, long_name)
+        allowed = set(self.list_active_mcp_server_names(viewer_user_id))
+        out: list[str] = []
+        for name in names:
+            shown = reverse.get(name, name)
+            if shown in allowed and shown not in out:
+                out.append(shown)
+        return out
+
+    def mcp_names_for_chips(
+        self,
+        *,
+        owner_user_id: int | None,
+        viewer_user_id: int,
+        requested: list[str],
+        harness_names: list[str],
+    ) -> list[str]:
+        """Catalog names for the servers that will actually run this turn.
+
+        A viewer's own server keeps its short name. The owner's shared server
+        shows the collision-safe name when that is what was selected. Selecting
+        both collapses to the shared server, so only that chip is returned.
+        """
+        if owner_user_id is None or owner_user_id == viewer_user_id:
+            return list(requested)
+        aliases = self.shared_custom_harness_aliases(owner_user_id)
+        short_to_long = {short: long for long, short in aliases.items()}
+        active = set(harness_names)
+        out: list[str] = []
+        for name in requested:
+            mapped = aliases.get(name, name)
+            if mapped not in active:
+                continue
+            shared_label = short_to_long.get(mapped)
+            shown = shared_label if shared_label is not None and shared_label in requested else name
+            if shown not in out:
+                out.append(shown)
+        return out
+
     def list_active_mcp_server_names(self, user_id: int) -> list[str]:
         if not self._repo.connector_feature_allows(user_id):
             return []
@@ -628,6 +730,7 @@ class ConnectorService:
         *,
         apply_defaults: bool | None = None,
         extra_defaults: list[str] | None = None,
+        agent_owner_id: int | None = None,
     ) -> list[str] | None:
         """Resolve turn MCP servers vs the user's default_open set.
 
@@ -636,15 +739,42 @@ class ConnectorService:
         defaults when the job has no picks; explicit Cron picks win as-is.
         ``extra_defaults`` (expert composer picks) are unioned with default_open
         when defaults apply, but only names still available to *user_id*.
+
+        When ``agent_owner_id`` is another user, an expert pick stored under the
+        owner's short custom-MCP name is returned as the viewer's catalog name
+        (``custom__...``) when that server is shared. Callers translate to the
+        harness short name only when building the model request.
         """
+        aliases: dict[str, str] = {}
+        if agent_owner_id is not None and agent_owner_id != user_id:
+            aliases = self.shared_custom_harness_aliases(agent_owner_id)
         defaults = list(self.list_default_open_mcp_server_names(user_id))
+        allowed = (
+            set(self.list_active_mcp_server_names(user_id))
+            if extra_defaults or explicit is not None
+            else set()
+        )
         if extra_defaults:
-            allowed = set(self.list_active_mcp_server_names(user_id))
-            for name in self.expand_connector_refs(user_id, extra_defaults):
-                if name in allowed and name not in defaults:
-                    defaults.append(name)
+            short_to_long = {short: long for long, short in aliases.items()}
+            catalog_refs = [
+                short_to_long.get(str(ref).strip(), str(ref).strip()) for ref in extra_defaults
+            ]
+            for name in self.expand_connector_refs(user_id, catalog_refs, allowed_names=allowed):
+                text = str(name).strip()
+                if not text:
+                    continue
+                viewer_name = short_to_long.get(text)
+                # The viewer's own server can share the short name. Keep the
+                # shared server under its catalog name instead of skipping it.
+                if viewer_name is not None and viewer_name in allowed:
+                    if viewer_name not in defaults:
+                        defaults.append(viewer_name)
+                elif text in allowed and text not in defaults:
+                    defaults.append(text)
         resolved_explicit = (
-            self.expand_connector_refs(user_id, explicit) if explicit is not None else None
+            self.expand_connector_refs(user_id, explicit, allowed_names=allowed)
+            if explicit is not None
+            else None
         )
         return merge_mcp_servers_with_defaults(
             resolved_explicit,
@@ -652,7 +782,9 @@ class ConnectorService:
             apply_defaults=apply_defaults,
         )
 
-    def expand_connector_refs(self, user_id: int, refs: list[str]) -> list[str]:
+    def expand_connector_refs(
+        self, user_id: int, refs: list[str], *, allowed_names: set[str] | None = None
+    ) -> list[str]:
         """Expand bare connector kinds to the caller's own active instances.
 
         Experts bind a connector kind so a shared expert still uses each
@@ -672,7 +804,7 @@ class ConnectorService:
             name = str(raw).strip()
             if not name:
                 continue
-            if "__" in name:
+            if "__" in name or (allowed_names is not None and name in allowed_names):
                 out.append(name)
                 continue
             out.extend(by_kind.get(name, []))
@@ -683,11 +815,7 @@ class ConnectorService:
         # Experts may reference a connector kind the owner has not installed
         # yet: employees resolve it against their own instances at chat time.
         unknown = sorted(
-            {
-                name
-                for name in names
-                if name not in allowed and get_catalog_entry(name) is None
-            }
+            {name for name in names if name not in allowed and get_catalog_entry(name) is None}
         )
         if unknown:
             raise ValueError(f"mcp_servers not available for user: {unknown}")
