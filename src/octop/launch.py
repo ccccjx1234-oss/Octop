@@ -75,7 +75,8 @@ async def run_foreground(
 
     srv = OctopServer()
     await srv.start()
-    bwrap_task = _schedule_linux_bubblewrap_ensure()
+    maintenance = srv.isolation_policy is not None and srv.isolation_policy.state == "maintenance"
+    bwrap_task = None if maintenance else _schedule_linux_bubblewrap_ensure()
     # Greenfield deferral leaves services unset until /setup/database binds.
     cfg = srv.services.config if srv.services is not None else srv.config
     assert cfg is not None
@@ -153,10 +154,12 @@ async def run_foreground(
     memory_control = MemorySlimControl(srv)
     with coalesce_accept_errors(asyncio.get_running_loop()):
         try:
-            await memory_control.start()
+            if not maintenance:
+                await memory_control.start()
             await asyncio.gather(*(_serve(s) for s in servers))
         finally:
-            await memory_control.close()
+            if not maintenance:
+                await memory_control.close()
             await _cancel_background_task(bwrap_task)
             await srv.stop()
 

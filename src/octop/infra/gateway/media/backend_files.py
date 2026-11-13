@@ -410,6 +410,10 @@ async def _download_via_workspace(workspace: BackendWorkspace, path: str) -> byt
 
 async def _read_host_file_bytes(abs_path: str) -> bytes | None:
     """Best-effort host read when BackendWorkspace cannot open a Windows abs path."""
+    from octop.infra.isolation.context import enabled
+
+    if enabled():
+        return None
     try:
         return await asyncio.to_thread(Path(abs_path).read_bytes)
     except OSError as exc:

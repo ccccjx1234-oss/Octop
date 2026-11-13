@@ -1954,6 +1954,15 @@
       "cancelled": "已取消"
     }
   },
+  "fileSharing": {
+    "title": "分享文件",
+    "accounts": "接收人的账号名，多个账号用逗号分隔",
+    "snapshotHint": "分享当前文件的只读副本，后续修改不会同步。仅指定账号登录后可下载。",
+    "create": "创建分享",
+    "revoke": "撤销分享",
+    "revoked": "分享已撤销",
+    "unavailable": "分享不可用，可能已撤销或当前账号无权访问。"
+  },
   "workspace": {
     "refreshHint": "只刷新根目录；子目录在展开时按需加载",
     "refreshFailed": "刷新失败",

@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 
 from octop.api.common.client_ip import resolve_client_ip
 from octop.api.deps import current_user, extract_raw_token, get_server, sign_token
+from octop.infra.auth.captcha import current_env, ensure_captcha, load_effective, public_config
 from octop.infra.auth.tokens import InvalidToken, TokenExpired, decode_token
 from octop.infra.auth.youli.service import YouliAuthService
-from octop.infra.auth.captcha import current_env, ensure_captcha, load_effective, public_config
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.email import normalize_email
 from octop.infra.users.permissions import effective_permissions

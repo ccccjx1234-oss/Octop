@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from octop.infra.auth.sso.service import SsoService
     from octop.infra.db.services import SharedServices
     from octop.infra.history.trajectory.service import TrajectoryService
+    from octop.infra.isolation.policy import IsolationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -332,11 +333,13 @@ class OctopServer:
         self._ldap_service: LdapAuthService | None = None
         self._ldap_bind_throttle: LdapBindThrottle | None = None
         self._ldap_bind_throttle_services: SharedServices | None = None
+        self.isolation_policy: IsolationPolicy | None = None
+        self._maintenance_user_manager: UserManager | None = None
 
     # Backward compat: expose user_manager directly
     @property
     def user_manager(self) -> UserManager | None:
-        return self.app_runtime.user_manager if self.app_runtime else None
+        return self.app_runtime.user_manager if self.app_runtime else self._maintenance_user_manager
 
     @property
     def sso_service(self) -> SsoService:
@@ -406,6 +409,35 @@ class OctopServer:
         from octop.infra.utils.env_file import apply_env_file, env_file_path  # noqa: PLC0415
 
         apply_env_file(env_file_path(self.paths.root))
+        from octop.infra.isolation.context import enabled as isolation_enabled
+        from octop.infra.isolation.policy import IsolationPolicy
+
+        if isolation_enabled():
+            self.isolation_policy = IsolationPolicy(self.paths)
+            await asyncio.to_thread(self.isolation_policy.start)
+            if self.isolation_policy.state == "maintenance":
+                # No plugins, device probes, gateway, cron, bridge or agents may
+                # start when the security boundary could not be established.
+                self.config = (
+                    load_config(self.paths.config)
+                    if self.isolation_policy.control_plane_safe
+                    else OctopConfig()
+                )
+                self._started_at = int(time.time())
+                if self.isolation_policy.control_plane_safe:
+                    db = open_database(self.config, self.paths)
+                    run_migrations(db)
+                    self.services = build_shared_services(
+                        db=db, paths=self.paths, config=self.config
+                    )
+                    from octop.infra.auth.captcha import boot_from_services
+
+                    boot_from_services(self.services.settings_repo, self.services.secret_repo)
+                    self._ensure_jwt_secret()
+                    self._maintenance_user_manager = UserManager(self.services)
+                    await self._maintenance_user_manager.boot()
+                self._started = True
+                return
         self._setup_logging()
         ensure_nofile_limit()
         from octop.infra.backend.grep_safety import install_safe_grep_fallback  # noqa: PLC0415
@@ -431,8 +463,6 @@ class OctopServer:
         self.plugin_manager.seed_bundled()
         self.plugin_manager.load_installed(install_deps=True)
         self._apply_plugin_channels()
-
-        import time  # noqa: PLC0415
 
         self._started_at = int(time.time())
 
@@ -461,6 +491,8 @@ class OctopServer:
         into ``config.json``. Does not rebind an existing live pool — use
         ``rebind_control_plane`` only when swapping while ``user_count == 0``.
         """
+        if self.isolation_policy is not None:
+            self.isolation_policy.require_ready()
         if self.database_bound:
             return
         config = load_config(self.paths.config)
@@ -500,6 +532,8 @@ class OctopServer:
             expert_catalog=self.expert_catalog,
             plugin_manager=self.plugin_manager,
         )
+        if registry._user_runtimes is not None and self.isolation_policy is not None:
+            registry._user_runtimes.policy = self.isolation_policy
 
         from octop.infra.history.trajectory.live import TrajectoryLiveBus  # noqa: PLC0415
         from octop.infra.history.trajectory.service import TrajectoryService  # noqa: PLC0415
@@ -769,6 +803,9 @@ class OctopServer:
                 await rt.user_manager.shutdown_all()
                 if rt.history_archive is not None:
                     rt.history_archive.store.close()
+            if self._maintenance_user_manager is not None:
+                await self._maintenance_user_manager.shutdown_all()
+                self._maintenance_user_manager = None
             from octop.infra.backend.browse import dispose_all_browse_sessions
 
             dispose_all_browse_sessions()

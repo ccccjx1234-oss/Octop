@@ -18,10 +18,10 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from octop.api.common.agent import require_agent_owner_row
 from octop.api.common.agent_workspace import resolve_agent_workspace_dir
 from octop.api.common.content_disposition import content_disposition
 from octop.api.common.memory_client import memory_db_path_for_cfg, memory_namespace
+from octop.api.common.user_content import require_content_owner_row as require_agent_owner_row
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.agents.memory.backend import open_memory_kwargs
 from octop.infra.errors import ErrorCode, OctopError

@@ -12,8 +12,12 @@ from weakref import WeakKeyDictionary
 from octop.config import OctopConfig
 from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.connectors import qcc
-from octop.infra.connectors.builder import build_http_mcp_spec, mcp_server_name, new_internal_token
-from octop.infra.connectors.builder import personal_connector_visible
+from octop.infra.connectors.builder import (
+    build_http_mcp_spec,
+    mcp_server_name,
+    new_internal_token,
+    personal_connector_visible,
+)
 from octop.infra.connectors.catalog import get_catalog_entry, uses_internal_http_mcp
 from octop.infra.connectors.crypto import decrypt_credentials, encrypt_credentials
 from octop.infra.connectors.custom_mcp import (

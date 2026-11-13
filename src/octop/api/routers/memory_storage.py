@@ -7,7 +7,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from octop.api.common.agent import require_agent_owner_row
+from octop.api.common.user_content import require_content_owner_row as require_agent_owner_row
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.utils.locale import resolve_request_locale
 

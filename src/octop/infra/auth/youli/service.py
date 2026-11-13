@@ -23,8 +23,8 @@ from octop.infra.auth.youli.client import (
     YouliClientUnavailable,
     YouliIssuedToken,
 )
+from octop.infra.db.repos.youli import YouliSessionRow
 from octop.infra.db.services import SharedServices
-from octop.infra.db.repos.youli import YouliLoginRequestRow, YouliSessionRow
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
 from octop.infra.users.manager import UserManager
@@ -325,7 +325,7 @@ def _common_path_prefix(left: str, right: str) -> str:
     left_parts = [p for p in left.split("/") if p]
     right_parts = [p for p in right.split("/") if p]
     shared: list[str] = []
-    for a, b in zip(left_parts, right_parts):
+    for a, b in zip(left_parts, right_parts, strict=False):
         if a != b:
             break
         shared.append(a)

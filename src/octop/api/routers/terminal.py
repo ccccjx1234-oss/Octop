@@ -274,6 +274,7 @@ def _spawn_pty_session(
     cols: int,
     rows: int,
     persistent: bool,
+    isolation: Any = None,
 ) -> _PtySession:
     """Create a PTY pair, spawn the shell at ``workspace_dir`` (pump not started).
 
@@ -296,6 +297,25 @@ def _spawn_pty_session(
         env["ZDOTDIR"] = zdotdir
 
     cwd = workspace_dir
+    if isolation is not None:
+        import sys
+        from pathlib import Path
+
+        from octop.infra.isolation import policy as isolation_policy
+
+        policy, identity = isolation
+        cmd = policy.command(
+            identity,
+            [
+                sys.executable,
+                "-I",
+                str(Path(isolation_policy.__file__).with_name("terminal_worker.py")),
+                str(identity.workspace),
+            ],
+        )
+        env = policy.environment(identity)
+        env["TERM"] = "xterm-256color"
+        cwd = "/"
     if not os.path.isdir(cwd):
         # Fall back rather than fail the whole WebSocket — mkdir races or a
         # deleted workspace should still yield a usable shell.
@@ -453,7 +473,14 @@ async def terminal_context(
     row = server.app_runtime.agent_registry.get_row(agent_id)
     if row is None:
         raise OctopError(ErrorCode.AGENT_NOT_FOUND, "no agents for user")
-    assert_agent_owner(row, user)
+    from octop.infra.isolation.context import enabled as isolation_enabled
+
+    if not isolation_enabled():
+        assert_agent_owner(row, user)
+    else:
+        from octop.api.common.agent import assert_agent_access
+
+        assert_agent_access(server, agent_id, user)
     # AI-facing path: persisted config value (e.g. ``/.octop/workspaces/<id>``).
     # PTY spawn still uses the host-mapped path via resolve_agent_workspace_dir.
     cfg = server.app_runtime.agent_registry.get_config(agent_id)
@@ -462,6 +489,10 @@ async def terminal_context(
         workspace_dir = raw_ws.strip()
     else:
         workspace_dir = str(resolve_agent_workspace_dir(server, agent_id))
+    if isolation_enabled():
+        registry = server.app_runtime.agent_registry
+        scoped = registry._user_runtimes.row(agent_id, user.id)
+        workspace_dir = str(registry._user_runtimes.backend(scoped).identity.workspace)
 
     os_name = platform.system()
     os_release = platform.release()
@@ -549,7 +580,14 @@ async def terminal_ws(
         await websocket.close(code=4404, reason="agent not found")
         return
     try:
-        assert_agent_owner(agent_row, user)
+        from octop.infra.isolation.context import enabled as isolation_enabled
+
+        if isolation_enabled():
+            from octop.api.common.agent import assert_agent_access
+
+            assert_agent_access(server, agent_id, user)
+        else:
+            assert_agent_owner(agent_row, user)
     except OctopError:
         await websocket.close(code=4003, reason="agent not owned by user")
         return
@@ -573,7 +611,15 @@ async def terminal_ws(
     # --- resolve session (re-attach vs create) --------------------------
     persistent = bool(session_id and session_id.strip())
     sid = (session_id.strip() if session_id else "") or uuid.uuid4().hex
-    key = (agent_id, sid)
+    isolation = None
+    if getattr(registry, "_user_runtimes", None) is not None:
+        row = registry._user_runtimes.row(agent_id, user.id)
+        policy = registry._user_runtimes.policy
+        identity = registry._user_runtimes.backend(row).identity
+        isolation = (policy, identity)
+        key = (row.agent_id, sid)
+    else:
+        key = (agent_id, sid)
 
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     session: _PtySession | None = None
@@ -604,7 +650,14 @@ async def terminal_ws(
                 else:
                     try:
                         session = _spawn_pty_session(
-                            sid, agent_id, user.id, workspace_dir, cols, rows, persistent
+                            sid,
+                            key[0],
+                            user.id,
+                            workspace_dir,
+                            cols,
+                            rows,
+                            persistent,
+                            **({"isolation": isolation} if isolation is not None else {}),
                         )
                         _sessions[key] = session
                         just_spawned = True

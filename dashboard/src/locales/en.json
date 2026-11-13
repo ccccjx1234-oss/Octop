@@ -1954,6 +1954,15 @@
       "cancelled": "Cancelled"
     }
   },
+  "fileSharing": {
+    "title": "Share file",
+    "accounts": "Recipient account names, separated by commas",
+    "snapshotHint": "Share a read-only copy of the current file. Later edits are not included. Only named accounts can download after signing in.",
+    "create": "Create share",
+    "revoke": "Revoke share",
+    "revoked": "Share revoked",
+    "unavailable": "This share is unavailable, revoked, or inaccessible to this account."
+  },
   "workspace": {
     "refreshHint": "Refreshes root only; subfolders load on expand",
     "refreshFailed": "Refresh failed",

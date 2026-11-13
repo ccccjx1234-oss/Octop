@@ -41,11 +41,13 @@ from typing import Any, Literal, cast
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from octop.api.common.agent import assert_agent_owner, require_agent_owner_row
+from octop.api.common.agent import assert_agent_owner
 from octop.api.common.memory_client import call_memory_rpc
+from octop.api.common.user_content import require_content_owner_row
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.agents.manager import memory_extract_supported_options
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.isolation.context import enabled as isolation_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -894,7 +896,7 @@ async def get_extract_config(
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Return memory extraction timing and independent model call options."""
-    row = require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    row = require_content_owner_row(agent_id, user=user, as_user=as_user, server=server)
     return {
         **_read_extract_config(row),
         "supported_call_options": memory_extract_supported_options(),
@@ -917,7 +919,10 @@ async def put_extract_config(
     row = registry.get_row(agent_id)
     if row is None:
         raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
-    assert_agent_owner(row, user)
+    if isolation_enabled():
+        row = require_content_owner_row(agent_id, user=user, as_user=None, server=server)
+    else:
+        assert_agent_owner(row, user)
 
     merged = _read_extract_config(row)
     patch = body.model_dump(exclude_none=True)
@@ -966,7 +971,10 @@ async def put_extract_config(
     mem_section.update(merged)
     cfg["memory"] = mem_section
 
-    await registry.update(agent_id, config_json=json.dumps(cfg))
+    if isolation_enabled():
+        registry.persist_harness_config(row.agent_id, cfg)
+    else:
+        await registry.update(agent_id, config_json=json.dumps(cfg))
     return {**merged, "supported_call_options": memory_extract_supported_options()}
 
 

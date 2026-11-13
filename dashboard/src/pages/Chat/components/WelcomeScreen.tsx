@@ -4,7 +4,7 @@ import { useWelcomeQuickCardsLayout } from "../hooks/useWelcomeQuickCardsLayout"
 import WelcomeQuickCards, { WelcomeQuickCardProbe } from "./WelcomeQuickCards";
 import styles from "../index.module.less";
 
-// Animated WebP keeps alpha on Safari; VP9 WebM alpha is unreliable there.
+// Static WebP keeps alpha on Safari; VP9 WebM alpha is unreliable there.
 const MASCOT_PEEK = "/octop-mascot-peek.webp";
 const MASCOT_TYPE = "/octop-mascot-type.webp";
 const MASCOT_IMAGES = [MASCOT_PEEK, MASCOT_TYPE];
@@ -80,7 +80,7 @@ export default function WelcomeScreen({
               role="button"
               tabIndex={0}
               title={t("chatWelcome.mascotSwitchHint")}
-              aria-label="Octop mascot"
+              aria-label="会火吉祥物"
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
