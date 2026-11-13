@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import ssl
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +38,20 @@ class YouliIssuedToken:
 class YouliClient:
     def __init__(self, cfg: YouliConfig) -> None:
         self._cfg = cfg
+        self._tls = self._build_tls()
+
+    def _build_tls(self) -> ssl.SSLContext | bool:
+        """Trust the configured server certificate, including a private CA leaf.
+
+        A deployment can hand us the exact public certificate of an internal
+        HTTPS endpoint. Treating that leaf as the trust anchor needs OpenSSL's
+        partial-chain flag; otherwise the default store cannot verify it.
+        """
+        if not self._cfg.ca_file:
+            return True
+        context = ssl.create_default_context(cafile=self._cfg.ca_file)
+        context.verify_flags |= getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0x80000)
+        return context
 
     @property
     def enabled(self) -> bool:
@@ -54,16 +69,14 @@ class YouliClient:
         if not self.enabled:
             raise YouliClientError("youli integration is not configured")
         try:
-            with httpx.Client(timeout=_TIMEOUT) as client:
+            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
                 response = client.post(self._url(suffix), json=payload)
         except httpx.HTTPError as exc:
             raise YouliClientUnavailable("youli upstream unreachable") from exc
         try:
             body = response.json()
         except ValueError as exc:
-            raise YouliClientUnavailable(
-                "youli upstream returned a non-JSON body"
-            ) from exc
+            raise YouliClientUnavailable("youli upstream returned a non-JSON body") from exc
         code = body.get("code") if isinstance(body, dict) else None
         if response.status_code >= 400 or code != 200:
             message = body.get("msg") if isinstance(body, dict) else None
@@ -128,9 +141,7 @@ class YouliClient:
             user_id=int(data.get("userId") or 0),
             company_id=int(data.get("companyId") or 0),
             employee_id=int(data.get("employeeId") or 0),
-            industry=(
-                int(data["industry"]) if data.get("industry") is not None else None
-            ),
+            industry=(int(data["industry"]) if data.get("industry") is not None else None),
             terminal=int(data.get("terminal") or 0),
         )
 
@@ -186,16 +197,14 @@ class YouliClient:
         if not self.enabled:
             raise YouliClientError("youli integration is not configured")
         try:
-            with httpx.Client(timeout=_TIMEOUT) as client:
+            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
                 response = client.post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
             raise YouliClientUnavailable("youli upstream unreachable") from exc
         try:
             body = response.json()
         except ValueError as exc:
-            raise YouliClientUnavailable(
-                "youli upstream returned a non-JSON body"
-            ) from exc
+            raise YouliClientUnavailable("youli upstream returned a non-JSON body") from exc
         code = body.get("code") if isinstance(body, dict) else None
         if response.status_code >= 400 or code != 200:
             message = body.get("msg") if isinstance(body, dict) else None
@@ -215,7 +224,7 @@ class YouliClient:
         if not self._cfg.mdm_base_url:
             raise YouliClientError("youli MDM url is not configured")
         try:
-            with httpx.Client(timeout=_TIMEOUT) as client:
+            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
                 response = client.post(
                     f"{self._cfg.mdm_base_url.rstrip('/')}/api/auth/verify",
                     content=token.encode("utf-8"),
@@ -236,4 +245,3 @@ class YouliClient:
         if not body.get("userId") or not body.get("companyId"):
             raise YouliClientError("youli MDM returned an incomplete identity")
         return body
-
