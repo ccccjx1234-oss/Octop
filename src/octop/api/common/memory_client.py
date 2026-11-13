@@ -69,6 +69,7 @@ class _MemoryCache:
         backend: str,
         backend_config: dict[str, Any] | None,
         fingerprint: str,
+        namespace: str | None = None,
     ) -> tuple[Any, Any]:
         from octop_memory.adapters.bridge.handlers import Bridge  # noqa: PLC0415
         from octop_memory.core import Memory  # noqa: PLC0415
@@ -79,7 +80,7 @@ class _MemoryCache:
                 self._entries.move_to_end(agent_id)
                 return cached[0], cached[1]
 
-            ns = memory_namespace(agent_id)
+            ns = namespace or memory_namespace(agent_id)
             memory = Memory(
                 namespace=ns,
                 backend=backend,
@@ -107,7 +108,11 @@ def _open_memory_for_agent(server: Any, agent_id: str) -> tuple[Any, Any]:
     from octop.api.common.agent_workspace import resolve_agent_workspace_dir  # noqa: PLC0415
 
     workspace = resolve_agent_workspace_dir(server, agent_id)
-    row = server.services.agent_repo.get(agent_id)
+    runtime = getattr(server, "app_runtime", None)
+    if runtime is not None and getattr(runtime.agent_registry, "_user_runtimes", None) is not None:
+        row = runtime.agent_registry.get_row(agent_id)
+    else:
+        row = server.services.agent_repo.get(agent_id)
     cfg: dict[str, Any] = {}
     if row is not None and row.config_json:
         import json  # noqa: PLC0415
@@ -119,8 +124,12 @@ def _open_memory_for_agent(server: Any, agent_id: str) -> tuple[Any, Any]:
         except json.JSONDecodeError:
             cfg = {}
 
+    memory_id = agent_id
+    if runtime is not None and getattr(runtime.agent_registry, "_user_runtimes", None) is not None:
+        isolation = runtime.agent_registry._user_runtimes
+        memory_id = isolation.namespace(isolation.row(agent_id)).removeprefix("agent_")
     ns, backend, backend_config = open_memory_kwargs(
-        agent_id=agent_id,
+        agent_id=memory_id,
         cfg=cfg,
         octop_config=server.services.config,
         workspace_dir=workspace,
@@ -145,6 +154,7 @@ def _open_memory_for_agent(server: Any, agent_id: str) -> tuple[Any, Any]:
         backend=backend,
         backend_config=backend_config,
         fingerprint=fingerprint,
+        **({"namespace": ns} if memory_id != agent_id else {}),
     )
 
 
@@ -157,7 +167,14 @@ def call_memory_rpc(
     as_user: int | None,
     server: Any,
 ) -> Any:
-    require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    from octop.api.common.user_content import require_content_owner_row
+    from octop.infra.isolation.context import enabled
+
+    if enabled():
+        row = require_content_owner_row(agent_id, user=user, as_user=as_user, server=server)
+        agent_id = row.agent_id
+    else:
+        require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
     runtime = server.app_runtime
     coordinator = runtime.agent_registry.memory_slim if runtime is not None else None
     if coordinator is not None:

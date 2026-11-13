@@ -42,9 +42,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 
-from octop.api.common.agent import require_agent_owner_row
 from octop.api.common.agent_workspace import resolve_agent_workspace_dir
 from octop.api.common.memory_client import call_memory_rpc
+from octop.api.common.user_content import require_content_owner_row
 from octop.api.common.workspace import require_agent_workspace, require_running_workspace
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.errors import ErrorCode, OctopError
@@ -108,7 +108,7 @@ async def put_strong_memory(
     user: Any = Depends(require_permission("memory")),
     server: Any = Depends(get_server),
 ) -> StrongMemoryFile:
-    require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    require_content_owner_row(agent_id, user=user, as_user=as_user, server=server)
     await server.app_runtime.agent_registry.save_manual_memory_document(
         agent_id, "MEMORY.md", body.content
     )
@@ -149,7 +149,7 @@ async def put_user_profile(
     user: Any = Depends(require_permission("memory")),
     server: Any = Depends(get_server),
 ) -> UserProfileFile:
-    require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    require_content_owner_row(agent_id, user=user, as_user=as_user, server=server)
     await server.app_runtime.agent_registry.save_manual_memory_document(
         agent_id, "USER.md", body.content
     )
@@ -179,7 +179,7 @@ async def review_manual_memory(
     user: Any = Depends(require_permission("memory")),
     server: Any = Depends(get_server),
 ) -> ManualMemoryReview:
-    require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    require_content_owner_row(agent_id, user=user, as_user=as_user, server=server)
     result = await server.app_runtime.agent_registry.review_manual_memory_documents(agent_id)
     return ManualMemoryReview.model_validate(result)
 
@@ -220,7 +220,7 @@ async def get_manual_memory_review(
 
 def _resolve_runtime(agent_id: str, *, user: Any, as_user: int | None, server: Any) -> Any:
     """Return the AgentRow for the given agent_id after auth."""
-    return require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    return require_content_owner_row(agent_id, user=user, as_user=as_user, server=server)
 
 
 # --- heartbeat config ------------------------------------------------------
@@ -278,13 +278,18 @@ async def put_heartbeat_config(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    _resolve_runtime(agent_id, user=user, as_user=as_user, server=server)
+    rt = _resolve_runtime(agent_id, user=user, as_user=as_user, server=server)
     cfg = _load_full_config(server, agent_id)
     # Merge — never replace the whole config_json: skills_disabled,
     # backend spec, proactive config etc. live alongside heartbeat in
     # the same blob.
     cfg["heartbeat"] = body.model_dump()
-    await server.app_runtime.agent_registry.update_config_json(agent_id, json.dumps(cfg))
+    from octop.infra.isolation.context import enabled
+
+    if enabled():
+        server.app_runtime.agent_registry.persist_harness_config(rt.agent_id, cfg)
+    else:
+        await server.app_runtime.agent_registry.update_config_json(agent_id, json.dumps(cfg))
     saved = cfg.get("heartbeat")
     return saved if isinstance(saved, dict) else body.model_dump()
 
@@ -373,6 +378,12 @@ async def delete_daily_memory(
 ) -> Response:
     _validate_filename(filename)
     rt = _resolve_runtime(agent_id, user=user, as_user=as_user, server=server)
+    from octop.infra.isolation.context import enabled
+
+    if enabled():
+        ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
+        await ws.adelete(f"daily/{filename}")
+        return Response(status_code=204)
     # ``BackendProtocol`` has no delete — fall back to the filesystem
     # path we know lives behind the local_shell / filesystem backends.
     workspace = resolve_agent_workspace_dir(server, rt.agent_id)

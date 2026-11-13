@@ -135,7 +135,15 @@ def build_app(server: OctopServer) -> FastAPI:
     # (Starlette runs the last-added middleware first).
     install_bridge_proxy(app, server)
     install_jwt_auth(app, server)
+    from octop.api.middleware.user_isolation import UserIsolationMiddleware
+
+    app.add_middleware(UserIsolationMiddleware, server=server)
     install_setup_lockdown(app, server)
+    from octop.api.middleware.isolation_maintenance import IsolationMaintenanceMiddleware
+
+    # Outermost: even JWT-exempt MCP/setup/download paths must remain closed
+    # when isolation startup failed.
+    app.add_middleware(IsolationMaintenanceMiddleware, server=server)
 
     if server.app_runtime is not None and server.app_runtime.bridge_manager is not None:
         from octop.api.bridge_peer import prepare_peer_dashboard_turn
@@ -215,6 +223,7 @@ def build_app(server: OctopServer) -> FastAPI:
         workspace,
     )
     from octop.api.routers.decision import router as decision_router
+    from octop.api.routers.file_shares import router as file_shares_router
     from octop.api.routers.filesystem import router as filesystem_router
     from octop.api.routers.observability import router as observability_router
     from octop.api.routers.providers import admin_router as admin_providers_router
@@ -276,6 +285,7 @@ def build_app(server: OctopServer) -> FastAPI:
                 storage_backends_user_router, "/api/storage-backends", ["storage-backends"]
             ),
             _RouterMount(filesystem_router, "/api/filesystem", ["filesystem"]),
+            _RouterMount(file_shares_router, "/api", ["workspace"]),
             _RouterMount(mbti.router, "/api", ["mbti"]),
             _RouterMount(experts.router, "/api", ["experts"]),
             _RouterMount(teams.router, "/api", ["teams"]),

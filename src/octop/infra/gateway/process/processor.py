@@ -653,6 +653,21 @@ class GlobalProcessor:
     # -- IM channel entry (MessageEvent stream) --------------------------------
 
     async def __call__(self, msg: InboundMessage) -> AsyncIterator[MessageEvent]:
+        from octop.infra.isolation.context import actor_scope, check_message_identity, enabled
+
+        if enabled():
+            row = self._agent_repo.get(msg.tenant_id or "")
+            uid = resolve_user_id_for_message(msg, agent_owner_id=row.user_id if row else None)
+            check_message_identity(row, msg.channel_type, uid)
+            with actor_scope(uid):
+                await self._agent_manager.ensure_user_runtime(msg.tenant_id or "", uid)
+                async for event in self._call_with_actor(msg):
+                    yield event
+        else:
+            async for event in self._call_with_actor(msg):
+                yield event
+
+    async def _call_with_actor(self, msg: InboundMessage) -> AsyncIterator[MessageEvent]:
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 
         METRICS.inc("messages_total")
@@ -958,6 +973,23 @@ class GlobalProcessor:
     # IM channels (DingTalk, Feishu, …) stream via __call__ → MessageEvent instead.
 
     async def iter_turn_chunks(self, msg: InboundMessage) -> AsyncIterator[dict[str, Any]]:
+        from octop.infra.isolation.context import actor_scope, check_message_identity, enabled
+
+        if enabled():
+            row = self._agent_repo.get(msg.tenant_id or "")
+            uid = resolve_user_id_for_message(msg, agent_owner_id=row.user_id if row else None)
+            check_message_identity(row, msg.channel_type, uid)
+            with actor_scope(uid):
+                await self._agent_manager.ensure_user_runtime(msg.tenant_id or "", uid)
+                async for chunk in self._iter_turn_chunks_with_actor(msg):
+                    yield chunk
+        else:
+            async for chunk in self._iter_turn_chunks_with_actor(msg):
+                yield chunk
+
+    async def _iter_turn_chunks_with_actor(
+        self, msg: InboundMessage
+    ) -> AsyncIterator[dict[str, Any]]:
         """Run one agent turn and yield harness-native stream chunks.
 
         For transports that consume the dashboard chunk protocol (``token``,
@@ -1317,6 +1349,29 @@ class GlobalProcessor:
         thread_id: str,
         user_id: int,
         decisions: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        from octop.infra.isolation.context import actor_scope, enabled, invocation_scope
+
+        if enabled():
+            with (
+                actor_scope(user_id),
+                invocation_scope(
+                    self._agent_manager, agent_id, {"thread_id": thread_id, "user": str(user_id)}
+                ),
+            ):
+                await self._agent_manager.ensure_user_runtime(agent_id, user_id)
+                async for chunk in self._iter_hitl_resume_with_actor(
+                    agent_id=agent_id, thread_id=thread_id, user_id=user_id, decisions=decisions
+                ):
+                    yield chunk
+        else:
+            async for chunk in self._iter_hitl_resume_with_actor(
+                agent_id=agent_id, thread_id=thread_id, user_id=user_id, decisions=decisions
+            ):
+                yield chunk
+
+    async def _iter_hitl_resume_with_actor(
+        self, *, agent_id: str, thread_id: str, user_id: int, decisions: list[dict[str, Any]]
     ) -> AsyncIterator[dict[str, Any]]:
         """Resume a dashboard HITL turn with the normal history bookkeeping."""
         usage_tracker = UsageTracker()

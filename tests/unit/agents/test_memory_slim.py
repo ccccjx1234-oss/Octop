@@ -37,11 +37,13 @@ def make_manager(tmp_path):
     registry._reclaim_pending = set()
     registry._reclaim_holds = {}
     registry._reclaim_task = None
+    registry._reclaim_sweep_task = None
     registry._reclaim_wake = None
     registry.get_agent = lambda _: agent
     registry.memory_slim = MemorySlimCoordinator(registry)
     registry._lock = asyncio.Lock()
     registry._harness_manager = None
+    registry._user_runtimes = None
     registry._host_models = MagicMock()
     return registry.memory_slim, registry, memory, cfg, cp
 
@@ -163,6 +165,48 @@ async def test_manager_shutdown_waits_for_maintenance_before_closing_agents(tmp_
         assert coordinator.state["phase"] == "done"
         with pytest.raises(ValueError):
             coordinator.start("a")
+    finally:
+        release.set()
+        if closing is not None:
+            await closing
+        else:
+            await registry.shutdown()
+        memory._checkpointer.conn.close()
+        memory.backend.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_joins_idle_store_scan_before_closing_runtime(tmp_path, monkeypatch):
+    _, registry, memory, _, _ = make_manager(tmp_path)
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def scan():
+        entered.set()
+        assert release.wait(5)
+        finished.set()
+        return 0
+
+    async def close_runtime():
+        assert finished.is_set(), "SQLite reader must finish before the database can close"
+
+    harness = MagicMock()
+    harness.aclose = AsyncMock(side_effect=close_runtime)
+    registry._harness_manager = harness
+    monkeypatch.setattr(registry, "_queue_bloated_sqlite_stores", scan)
+    registry.schedule_idle_reclaim_sweep()
+    sweep = registry._reclaim_sweep_task
+    registry.schedule_idle_reclaim_sweep()
+    assert registry._reclaim_sweep_task is sweep
+    closing = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        closing = asyncio.create_task(registry.shutdown())
+        await asyncio.sleep(0.05)
+        assert not closing.done()
+        harness.aclose.assert_not_awaited()
+        release.set()
+        await closing
+        harness.aclose.assert_awaited_once()
     finally:
         release.set()
         if closing is not None:
