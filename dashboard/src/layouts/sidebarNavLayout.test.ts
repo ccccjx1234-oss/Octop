@@ -41,6 +41,7 @@ describe("sidebarNavLayout", () => {
       "token-usage",
     ]);
     expect(editor.groups.map((group) => group.id)).toEqual([
+      "workhub",
       "settings",
       "control",
       "admin",
@@ -97,7 +98,11 @@ describe("sidebarNavLayout", () => {
   it("moves a deleted group's items to the front of the ungrouped list", () => {
     const editor = editorFromCatalog(catalog(), null);
     const next = deleteGroup(editor, "settings");
-    expect(next.groups.map((group) => group.id)).toEqual(["control", "admin"]);
+    expect(next.groups.map((group) => group.id)).toEqual([
+      "workhub",
+      "control",
+      "admin",
+    ]);
     expect(next.ungrouped.slice(0, 2)).toEqual(["personalization", "channels"]);
     expect(next.ungrouped).toContain("chat");
   });
@@ -141,7 +146,7 @@ describe("sidebarNavLayout", () => {
     expect(shown).not.toContain("personalization");
     expect(
       visibleEditorGroups(editor, sections).map((group) => group.id),
-    ).toEqual(["settings", "c_aabbccdd"]);
+    ).toEqual(["c_aabbccdd"]);
   });
 
   it("keeps a new empty group only in the editor", () => {

@@ -31,11 +31,13 @@ import { collectTurnKnowledgeCitations } from "../../../utils/collectTurnKnowled
 import { KnowledgeCitationsStrip } from "./KnowledgeCitationsStrip";
 import { messageSpeakerId } from "../utils/messageGrouping";
 import { isAssistantProcessLive } from "./liveAssistantTurn";
+import ChatDeliveryCard from "./ChatDeliveryCard";
 import styles from "../index.module.less";
 
 interface AssistantTurnViewProps {
   messages: ChatMessage[];
   agentId?: string | null;
+  threadId?: string | null;
   isStreaming?: boolean;
   /** True while this assistant turn is still being generated (incl. between tool calls). */
   isTurnInProgress?: boolean;
@@ -138,6 +140,7 @@ function turnHasLiveSpeaker(
 export default function AssistantTurnView({
   messages,
   agentId: agentIdProp,
+  threadId = null,
   isTurnInProgress = false,
   afterLatestUser = false,
   liveSpeakers = [],
@@ -329,6 +332,19 @@ export default function AssistantTurnView({
             shellCommandDisabled={shellCommandDisabled}
             shellCommandDisabledTitle={shellCommandDisabledTitle}
           />
+          {!turnStreaming &&
+            !hasPendingHitl &&
+            trailingSplit.answerMessage.status !== "error" && (
+              <div className={styles.turnInset}>
+                <ChatDeliveryCard
+                  threadId={threadId}
+                  messageId={trailingSplit.answerMessage.id}
+                  answerText={
+                    toAnswerOnlyMessage(trailingSplit.answerMessage).content
+                  }
+                />
+              </div>
+            )}
         </div>
       ) : null}
       <TurnErrorBubbles

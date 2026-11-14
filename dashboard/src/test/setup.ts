@@ -58,6 +58,41 @@ afterEach(() => {
   cleanup();
 });
 
+// jsdom ships no DOMMatrix, but react-pdf/pdfjs-dist touch it at import time.
+if (typeof globalThis.DOMMatrix === "undefined") {
+  class _DOMMatrix {
+    a = 1;
+    b = 0;
+    c = 0;
+    d = 1;
+    e = 0;
+    f = 0;
+    constructor(_init?: unknown) {}
+    multiplySelf() {
+      return this;
+    }
+    preMultiplySelf() {
+      return this;
+    }
+    translateSelf() {
+      return this;
+    }
+    scaleSelf() {
+      return this;
+    }
+    rotateSelf() {
+      return this;
+    }
+    inverse() {
+      return this;
+    }
+    transformPoint(point: unknown) {
+      return point;
+    }
+  }
+  (globalThis as unknown as { DOMMatrix: unknown }).DOMMatrix = _DOMMatrix;
+}
+
 if (typeof window !== "undefined") {
   // matchMedia
   if (!window.matchMedia) {

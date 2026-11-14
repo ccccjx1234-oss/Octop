@@ -326,8 +326,13 @@ class OctopServer:
         self.subagent_catalog: SubagentCatalog | None = None
         self.plugin_manager: PluginManager | None = None
         self.wizard_tokens = WizardTokenStore(ttl_seconds=300)
+        from octop.infra.telemetry import RuntimeTelemetry
+
         self._started = False
         self._started_at: int | None = None
+        self.telemetry = RuntimeTelemetry()
+        self._telemetry_stop: asyncio.Event | None = None
+        self._telemetry_task: asyncio.Task[None] | None = None
         self.instance_id = uuid.uuid4().hex
         self._serve_background = True
         self._sso_service: SsoService | None = None
@@ -414,6 +419,7 @@ class OctopServer:
         from octop.infra.isolation.context import enabled as isolation_enabled
         from octop.infra.isolation.policy import IsolationPolicy
 
+        self._setup_logging()
         if isolation_enabled():
             self.isolation_policy = IsolationPolicy(self.paths)
             await asyncio.to_thread(self.isolation_policy.start)
@@ -440,7 +446,6 @@ class OctopServer:
                     await self._maintenance_user_manager.boot()
                 self._started = True
                 return
-        self._setup_logging()
         ensure_nofile_limit()
         from octop.infra.backend.grep_safety import install_safe_grep_fallback  # noqa: PLC0415
         from octop.infra.backend.shell_output import install_shell_output_decoding  # noqa: PLC0415
@@ -631,6 +636,33 @@ class OctopServer:
             from octop.infra.backup.auto import install_auto_backup_job
 
             install_auto_backup_job(cron_mgr, server=self)
+
+            if self._telemetry_task is None or self._telemetry_task.done():
+                stop_ev = asyncio.Event()
+                self._telemetry_stop = stop_ev
+
+                def _runtime_stats() -> dict[str, Any]:
+                    harness = getattr(registry, "_harness_manager", None)
+                    runtimes = getattr(registry, "_user_runtimes", None)
+                    return {
+                        "agents_running": len(harness.list_agents()) if harness is not None else 0,
+                        "user_runtimes": len(runtimes.last_used) if runtimes is not None else 0,
+                    }
+
+                async def _evict_idle(idle_s: float) -> int:
+                    runtimes = getattr(registry, "_user_runtimes", None)
+                    if runtimes is None:
+                        return 0
+                    return await runtimes.evict_idle(idle_s)
+
+                self._telemetry_task = asyncio.create_task(
+                    self.telemetry.run_monitor(
+                        stop_ev,
+                        stats_provider=_runtime_stats,
+                        idle_evictor=_evict_idle,
+                    ),
+                    name="octop-runtime-telemetry",
+                )
 
         registry.set_cron_manager(cron_mgr)
         registry.set_team_processor(gateway.processor.teams)
@@ -823,6 +855,13 @@ class OctopServer:
         if not self._started:
             return
         try:
+            if self._telemetry_stop is not None:
+                self._telemetry_stop.set()
+            if self._telemetry_task is not None and not self._telemetry_task.done():
+                self._telemetry_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._telemetry_task
+            self._telemetry_task = None
             from octop.infra.connectors.gateway import agently_auth
 
             await agently_auth.close()

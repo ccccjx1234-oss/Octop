@@ -110,16 +110,23 @@ class YouliAuthService:
         browser_token = secrets.token_urlsafe(32)
         now = int(time.time())
         expires_at = now + int(self._cfg.request_ttl_seconds)
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._client.register(
-                request_id=request_id,
-                audience=self._cfg.audience,
-                callback_url=self._cfg.callback_url,
-                code_challenge=challenge,
-                expires_at_epoch=expires_at,
-            ),
-        )
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._client.register(
+                    request_id=request_id,
+                    audience=self._cfg.audience,
+                    callback_url=self._cfg.callback_url,
+                    code_challenge=challenge,
+                    expires_at_epoch=expires_at,
+                ),
+            )
+        except YouliClientUnavailable as exc:
+            logger.warning("youli start unavailable: %s", exc)
+            raise OctopError(ErrorCode.NETWORK_ERROR, str(exc), status=503) from exc
+        except YouliClientError as exc:
+            logger.warning("youli start rejected: %s", exc)
+            raise OctopError(ErrorCode.AUTH_FAILED, str(exc)) from exc
         self._services.youli_login_request_repo.create(
             request_id=request_id,
             state_hash=_sha256(state),
@@ -175,7 +182,12 @@ class YouliAuthService:
                     token=token,
                 ),
             )
+        except YouliClientUnavailable as exc:
+            self._services.youli_login_request_repo.consume(started.request_id)
+            logger.warning("youli staff login unavailable: %s", exc)
+            raise OctopError(ErrorCode.NETWORK_ERROR, str(exc), status=503) from exc
         except YouliClientError as exc:
+            self._services.youli_login_request_repo.consume(started.request_id)
             logger.warning("youli staff login rejected: %s", exc)
             raise OctopError(ErrorCode.AUTH_FAILED, str(exc)) from exc
         return await self.exchange(

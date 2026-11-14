@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import threading
+import time
 from dataclasses import asdict, replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -25,6 +27,9 @@ def runtime_key(agent_id: str, user_id: int) -> str:
     return f"u{user_id}a{digest}"
 
 
+_logger = logging.getLogger(__name__)
+
+
 class UserRuntimes:
     def __init__(self, manager: Any, policy: IsolationPolicy):
         self.manager = manager
@@ -34,6 +39,7 @@ class UserRuntimes:
         self.fingerprints: dict[str, str] = {}
         self.locks: dict[str, asyncio.Lock] = {}
         self.backends: dict[str, UserWorkerBackend] = {}
+        self.last_used: dict[str, float] = {}
         self._backend_lock = threading.Lock()
 
     def source_row(self, agent_id: str) -> AgentRow:
@@ -205,6 +211,7 @@ class UserRuntimes:
             definition.pop(transient, None)
         fingerprint = json.dumps(definition, sort_keys=True)
         async with self.locks.setdefault(key, asyncio.Lock()):
+            self.last_used[key] = time.monotonic()
             harness = self.manager._harness_manager
             if harness is None or harness.shared_factory is None:
                 raise self.manager._unavailable_error(agent_id)
@@ -214,6 +221,7 @@ class UserRuntimes:
                 entry = None
             if entry is not None and self.fingerprints.get(key) == fingerprint:
                 return entry.agent
+            started = time.monotonic()
             if entry is not None:
                 if self.manager.is_agent_active(self.source_row(agent_id).agent_id):
                     return entry.agent
@@ -236,4 +244,52 @@ class UserRuntimes:
                 await harness.aremove_agent(key)
                 raise
             self.fingerprints[key] = fingerprint
+            self.last_used[key] = time.monotonic()
+            duration_ms = (time.monotonic() - started) * 1000.0
+            log_fn = _logger.info if duration_ms >= 200.0 else _logger.debug
+            source_id = self.sources.get(key, agent_id)
+            log_fn(
+                "user_runtime cold_started key=%s source=%s user_id=%s duration_ms=%.1f",
+                key,
+                source_id,
+                user_id,
+                duration_ms,
+            )
             return entry.agent
+
+    async def evict_idle(self, idle_seconds: float) -> int:
+        """Stop and unload idle isolated user runtimes without active turns."""
+        if idle_seconds <= 0:
+            return 0
+        harness = self.manager._harness_manager
+        if harness is None:
+            return 0
+        now = time.monotonic()
+        candidates = [
+            key
+            for key, last_ts in list(self.last_used.items())
+            if now - last_ts >= idle_seconds
+        ]
+        evicted = 0
+        for key in candidates:
+            lock = self.locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                last_ts = self.last_used.get(key)
+                if last_ts is None or now - last_ts < idle_seconds:
+                    continue
+                source_id = self.sources.get(key, key)
+                if self.manager.is_agent_active(key) or self.manager.is_agent_active(source_id):
+                    continue
+                backend = self.backends.pop(key, None)
+                if backend is not None:
+                    await asyncio.to_thread(backend.close)
+                await harness.aremove_agent(key)
+                self.fingerprints.pop(key, None)
+                self.last_used.pop(key, None)
+                evicted += 1
+                _logger.info(
+                    "user_runtime evicted_idle key=%s idle_s=%.0f",
+                    key,
+                    now - last_ts,
+                )
+        return evicted

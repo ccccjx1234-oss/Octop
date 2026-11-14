@@ -55,11 +55,20 @@ class YouliClient:
     def _post(self, suffix: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.enabled:
             raise YouliClientError("youli integration is not configured")
+        from octop.infra.auth.youli.http_pool import perform_request
+
         try:
-            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
-                response = client.post(self._url(suffix), json=payload)
+            response = perform_request(
+                httpx.Client,
+                "POST",
+                self._url(suffix),
+                timeout=_TIMEOUT,
+                verify=self._tls,
+                json=payload,
+                target_label=f"youli:{suffix}",
+            )
         except httpx.HTTPError as exc:
-            raise YouliClientUnavailable("youli upstream unreachable") from exc
+            raise YouliClientUnavailable(f"youli upstream unreachable ({type(exc).__name__})") from exc
         try:
             body = response.json()
         except ValueError as exc:
@@ -183,11 +192,20 @@ class YouliClient:
     ) -> dict[str, Any]:
         if not self.enabled:
             raise YouliClientError("youli integration is not configured")
+        from octop.infra.auth.youli.http_pool import perform_request
+
         try:
-            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
-                response = client.post(url, json=payload, headers=headers)
+            response = perform_request(
+                httpx.Client,
+                "POST",
+                url,
+                timeout=_TIMEOUT,
+                verify=self._tls,
+                json=payload,
+                headers=headers,
+            )
         except httpx.HTTPError as exc:
-            raise YouliClientUnavailable("youli upstream unreachable") from exc
+            raise YouliClientUnavailable(f"youli upstream unreachable ({type(exc).__name__})") from exc
         try:
             body = response.json()
         except ValueError as exc:
@@ -210,15 +228,21 @@ class YouliClient:
         """Verify the business token against MDM; fails closed on any ambiguity."""
         if not self._cfg.mdm_base_url:
             raise YouliClientError("youli MDM url is not configured")
+        from octop.infra.auth.youli.http_pool import perform_request
+
         try:
-            with httpx.Client(timeout=_TIMEOUT, verify=self._tls) as client:
-                response = client.post(
-                    f"{self._cfg.mdm_base_url.rstrip('/')}/api/auth/verify",
-                    content=token.encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
+            response = perform_request(
+                httpx.Client,
+                "POST",
+                f"{self._cfg.mdm_base_url.rstrip('/')}/api/auth/verify",
+                timeout=_TIMEOUT,
+                verify=self._tls,
+                content=token.encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                target_label="mdm:/api/auth/verify",
+            )
         except httpx.HTTPError as exc:
-            raise YouliClientUnavailable("youli MDM unreachable") from exc
+            raise YouliClientUnavailable(f"youli MDM unreachable ({type(exc).__name__})") from exc
         try:
             body = response.json()
         except ValueError as exc:

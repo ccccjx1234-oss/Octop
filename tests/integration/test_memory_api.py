@@ -411,7 +411,8 @@ async def test_extract_config_memory_switch_roundtrip(env_with_main_agent, key: 
         assert timing.status_code == 200, timing.text
         reread = await client.get(url, headers=auth)
         assert reread.json()[key] is enabled
-        assert reread.json()["memory_enabled"] is True
+        # The runtime switch keeps its stored value; only the timing changed.
+        assert reread.json()["memory_enabled"] is initial.json()["memory_enabled"]
         other = (
             "memory_recall_inject_enabled"
             if key == "memory_capture_enabled"

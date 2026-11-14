@@ -127,7 +127,7 @@ export default function OidcComplete() {
         extra={
           <Button
             type="primary"
-            onClick={() => navigate("/manageLogin", { replace: true })}
+            onClick={() => navigate("/login", { replace: true })}
           >
             {t("login.oidcComplete.backToLogin")}
           </Button>

@@ -153,6 +153,9 @@ def build_app(server: OctopServer) -> FastAPI:
     # Outermost: even JWT-exempt MCP/setup/download paths must remain closed
     # when isolation startup failed.
     app.add_middleware(IsolationMaintenanceMiddleware, server=server)
+    from octop.api.middleware.request_telemetry import RequestTelemetryMiddleware
+
+    app.add_middleware(RequestTelemetryMiddleware, server=server)
 
     if server.app_runtime is not None and server.app_runtime.bridge_manager is not None:
         from octop.api.bridge_peer import prepare_peer_dashboard_turn
@@ -244,6 +247,7 @@ def build_app(server: OctopServer) -> FastAPI:
     from octop.api.routers.storage_backends import user_router as storage_backends_user_router
     from octop.api.routers.tls import router as tls_router
     from octop.api.routers.voice import admin_router as admin_voice_router
+    from octop.api.routers.workbench import router as workbench_router
 
     _mount_routers(
         app,
@@ -324,6 +328,7 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(ollama_models.router, "/api", ["ollama"]),
             _RouterMount(onnx_models.router, "/api", ["onnx"]),
             _RouterMount(plugins.router, "/api", ["plugins"]),
+            _RouterMount(workbench_router, "/api", ["workbench"]),
         ],
     )
 

@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button, Form, Input, Select, Spin, Switch, Tag } from "antd";
-import { FlaskConical, Lock, Save } from "lucide-react";
+import { Download, FlaskConical, Lock, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { message } from "@/utils/antdMessage";
 import {
@@ -88,6 +88,7 @@ function OauthProviderCardLive({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean } | null>(null);
   const [toggling, setToggling] = useState(false);
   const [redirectUri, setRedirectUri] = useState("");
@@ -224,6 +225,33 @@ function OauthProviderCardLive({
       );
     } finally {
       setTesting(false);
+    }
+  };
+
+  const importFromChannel = async () => {
+    setImporting(true);
+    try {
+      const updated = await ssoApi.importOauthProviderFromChannel(
+        provider.kind,
+      );
+      applyConfig(updated);
+      message.success(
+        t("adminSso.importFromChannelSuccess", {
+          name: t(provider.defaultNameKey),
+        }),
+      );
+    } catch (error) {
+      message.error(
+        apiErrorMessage(
+          error,
+          t("adminSso.importFromChannelFailed", {
+            name: t(provider.defaultNameKey),
+          }),
+          t,
+        ),
+      );
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -476,6 +504,17 @@ function OauthProviderCardLive({
               >
                 {t("adminSso.testConnection")}
               </Button>
+              {(provider.kind === "feishu" ||
+                provider.kind === "dingtalk") && (
+                <Button
+                  icon={<Download size={15} />}
+                  loading={importing}
+                  disabled={saving || loading}
+                  onClick={() => void importFromChannel()}
+                >
+                  {t("adminSso.importFromChannel")}
+                </Button>
+              )}
               {dirty && (
                 <Button
                   type="link"

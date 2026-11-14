@@ -50,4 +50,17 @@ describe("useAgentFormResources", () => {
     expect(result.current.backends).toEqual([]);
     expect(result.current.backendsLoading).toBe(false);
   });
+
+  it("loads models without host storage APIs for read-only backend fields", async () => {
+    const { result } = renderHook(() =>
+      useAgentFormResources(true, "expert-1", { loadBackends: false }),
+    );
+
+    await waitFor(() => expect(result.current.modelsLoading).toBe(false));
+    expect(listResolvedModels).toHaveBeenCalledWith("expert-1");
+    expect(result.current.models).toEqual([{ id: "peer-model" }]);
+    expect(request).not.toHaveBeenCalled();
+    expect(result.current.backends).toEqual([]);
+    expect(result.current.backendsLoading).toBe(false);
+  });
 });
