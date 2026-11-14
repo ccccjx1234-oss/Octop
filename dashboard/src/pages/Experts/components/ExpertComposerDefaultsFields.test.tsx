@@ -20,7 +20,7 @@ vi.mock("../../../api/modules/knowledgeBases", () => ({
 }));
 
 vi.mock("../../../api/modules/connectors", () => ({
-  connectorsApi: { listInstances },
+  connectorsApi: { listInstances, catalog: vi.fn().mockResolvedValue([]) },
 }));
 
 import ExpertComposerDefaultsFields from "./ExpertComposerDefaultsFields";

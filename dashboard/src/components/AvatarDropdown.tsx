@@ -31,6 +31,7 @@ import cx from "classnames";
 import { authApi } from "../api/modules/auth";
 import { preferencesApi } from "../api/modules/preferences";
 import { holdDesktopLocalAutoLogin } from "../api/desktopSession";
+import { invalidateWorkbenchCache } from "../api/modules/workbench";
 import { clearAuthToken } from "../api/request";
 import { isDesktopShell } from "../utils/desktopBridge";
 import { applyGuestLocale, applyUserLocale } from "../utils/locale";
@@ -117,6 +118,7 @@ export default function AvatarDropdown({
     }
     await authApi.logout();
     clearAuthToken();
+    invalidateWorkbenchCache();
     await applyGuestLocale();
     navigate("/login", { replace: true });
   }, [navigate, user?.username]);

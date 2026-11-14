@@ -19,6 +19,9 @@ import {
   GraduationCap,
   Shield,
   PanelsTopLeft,
+  ListChecks,
+  FileCheck2,
+  BarChart3,
 } from "lucide-react";
 import type { OctopUser } from "../api/modules/auth";
 import { navAllowed, userCan } from "../utils/permissions";
@@ -69,6 +72,9 @@ export const SIDEBAR_NAV_KEYS = [
   "experts",
   "tasks",
   "token-usage",
+  "work-progress",
+  "work-deliverables",
+  "work-dashboard",
   "personalization",
   "channels",
   "connectors",
@@ -86,12 +92,18 @@ export const SIDEBAR_NAV_KEYS = [
   "admin-advanced",
 ] as const;
 
-export const BUILTIN_NAV_GROUP_IDS = ["settings", "control", "admin"] as const;
+export const BUILTIN_NAV_GROUP_IDS = [
+  "workhub",
+  "settings",
+  "control",
+  "admin",
+] as const;
 
 const BUILTIN_NAV_GROUP_LABEL_KEYS: Record<
   (typeof BUILTIN_NAV_GROUP_IDS)[number],
   string
 > = {
+  workhub: "nav.workhub",
   settings: "nav.settings",
   control: "nav.control",
   admin: "nav.admin",
@@ -123,6 +135,9 @@ export function navSectionLabel(
  * comes from {@link buildNavSections}.
  */
 export const SIDEBAR_GROUPED_NAV_KEYS = [
+  "work-progress",
+  "work-deliverables",
+  "work-dashboard",
   "personalization",
   "channels",
   "connectors",
@@ -184,6 +199,32 @@ export function buildNavSections(
     });
   }
   const sections: NavSection[] = [{ items: topItems }];
+
+  const workhubItems: NavItem[] = [
+    {
+      key: "work-progress",
+      path: "/work/progress",
+      icon: <ListChecks size={iconSize} strokeWidth={iconStroke} />,
+      labelKey: "nav.workProgress",
+    },
+    {
+      key: "work-deliverables",
+      path: "/work/deliverables",
+      icon: <FileCheck2 size={iconSize} strokeWidth={iconStroke} />,
+      labelKey: "nav.workDeliverables",
+    },
+    {
+      key: "work-dashboard",
+      path: "/work/dashboard",
+      icon: <BarChart3 size={iconSize} strokeWidth={iconStroke} />,
+      labelKey: "nav.workDashboard",
+    },
+  ];
+  sections.push({
+    id: "workhub",
+    groupKey: "nav.workhub",
+    items: workhubItems,
+  });
 
   const settingsItems: NavItem[] = [];
   if (navAllowed(user, "personalization")) {

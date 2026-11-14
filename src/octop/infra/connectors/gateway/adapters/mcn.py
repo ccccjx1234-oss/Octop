@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import time
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -117,8 +118,59 @@ def _slim(data: Any, keys: tuple[str, ...]) -> Any:
     ]
 
 
+def _normalize_date(value: Any, field_name: str, *, required: bool = False) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        if required:
+            raise McnClientError(f"{field_name} 不能为空")
+        return ""
+    candidate = raw[:10]
+    try:
+        date.fromisoformat(candidate)
+    except ValueError as exc:
+        raise McnClientError(f"{field_name} 日期格式不正确，需为 yyyy-MM-dd") from exc
+    return candidate
+
+
+def _parse_json_obj(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            return {}
+    return {}
+
+
 def _order_item(item: dict[str, Any]) -> dict[str, Any]:
-    return {
+    dynamic_raw = item.get("dynamicItemObj")
+    dynamic_obj = _parse_json_obj(dynamic_raw)
+    form_obj = item.get("formLabelAlign")
+    if not form_obj and isinstance(dynamic_obj.get("formLabelAlign"), dict):
+        form_obj = json.dumps(dynamic_obj["formLabelAlign"], ensure_ascii=False)
+    elif isinstance(form_obj, dict):
+        form_obj = json.dumps(form_obj, ensure_ascii=False)
+    form_name = (
+        item.get("formLabelAlignName")
+        or item.get("formLabelAlign_name")
+        or item.get("specName")
+        or dynamic_obj.get("formLabelAlign_name")
+        or ""
+    )
+    coupon_json = item.get("couponJson")
+    if coupon_json in (None, "") and isinstance(item.get("couponDetailVos"), list):
+        coupon_json = json.dumps(item["couponDetailVos"], ensure_ascii=False)
+    dynamic_text = (
+        dynamic_raw
+        if isinstance(dynamic_raw, str)
+        else json.dumps(dynamic_obj, ensure_ascii=False)
+        if dynamic_obj
+        else None
+    )
+    payload: dict[str, Any] = {
         "itemId": None,
         "type": item.get("type"),
         "skuId": item.get("skuId"),
@@ -127,18 +179,40 @@ def _order_item(item: dict[str, Any]) -> dict[str, Any]:
         "packageId": item.get("packageId"),
         "count": item.get("count"),
         "quantity": item.get("quantity"),
-        "price": item.get("originalPrice"),
+        "price": item.get("originalPrice") if item.get("originalPrice") is not None else item.get("price"),
         "originalPrice": item.get("originalPrice"),
         "originalMoney": item.get("originalMoney"),
         "couponMoney": item.get("couponMoney"),
-        "couponAfterMoney": item.get("baseMoney"),
+        "couponJson": coupon_json,
+        "couponAfterMoney": (
+            item.get("baseMoney") if item.get("baseMoney") is not None else item.get("couponAfterMoney")
+        ),
         "factMoney": item.get("factMoney"),
+        "factRate": item.get("factRate"),
         "modeOperation": item.get("modeOperation"),
         "noCalculate": item.get("noCalculate"),
-        "supplierId": item.get("supplierId"),
+        "supplierId": item.get("supplierId") or _item_supplier(item),
+        "supplierCooperationStatus": item.get("supplierCooperationStatus"),
+        "advertisingCategoryId": item.get("advertisingCategoryId"),
+        "costPrice": item.get("costPrice"),
+        "costPriceExcludingTax": item.get("costPriceExcludingTax"),
+        "taxRate": item.get("taxRate"),
+        "platformPrice": item.get("platformPrice"),
+        "rebate": item.get("rebate"),
+        "gift": item.get("gift"),
+        "giftTypeId": item.get("giftTypeId"),
+        "giftTypeName": item.get("giftTypeName"),
+        "distribute": item.get("distribute"),
+        "distributeSourceAccountId": item.get("distributeSourceAccountId"),
+        "distributeSourceAccountName": item.get("distributeSourceAccountName"),
+        "distributeRemark": item.get("distributeRemark"),
+        "formLabelAlign": form_obj,
+        "formLabelAlignName": form_name or None,
+        "dynamicItemObj": dynamic_text,
         "isAuditExempt": item.get("isAuditExempt"),
         "noteDescription": item.get("noteDescription"),
     }
+    return {k: v for k, v in payload.items() if k == "itemId" or v is not None}
 
 
 def _item_supplier(item: dict[str, Any]) -> str | None:
@@ -472,7 +546,7 @@ def _save_quote(client: McnClient, args: dict[str, Any]) -> str:
     if not bool(args.get("confirm")):
         return "未保存：请先把报价单内容给用户核对，用户明确确认后再以 confirm=true 调用。"
     payload = args.get("payload")
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or not payload:
         return "未保存：payload 必须是报价单对象"
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -480,7 +554,17 @@ def _save_quote(client: McnClient, args: dict[str, Any]) -> str:
     cached = _recall(client, digest)
     if cached is not None:
         return f"重复提交已忽略，上次结果：{cached}"
-    result = _json(client.post("/api/mcn/offerOrder/save", payload))
+    normalized = (
+        {
+            "isCalculate": 1,
+            "otherOffers": 0,
+            "offerExtraChargeRoList": [],
+            **payload,
+        }
+        if "itemRoList" in payload
+        else payload
+    )
+    result = _json(client.post("/api/mcn/offerOrder/save", normalized))
     _remember(client, digest, result)
     return result
 
@@ -574,6 +658,169 @@ def _quote_options(client: McnClient, path: str, filters: dict[str, Any]) -> lis
     raise McnClientError("报价候选数据超过查询上限，请缩小范围，未保存")
 
 
+def _opportunity_rows(client: McnClient, *, customer_id: str = "") -> list[dict[str, Any]]:
+    payload: dict[str, Any] = {
+        "page": {"pageNum": 1, "pageSize": 100},
+        "useDataPermission": True,
+    }
+    if customer_id:
+        payload["customerId"] = customer_id
+    try:
+        rows = client.post("/api/mcn/customer/opportunity/list", payload)
+    except McnClientError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [
+        r
+        for r in rows
+        if isinstance(r, dict)
+        and r.get("customerId") is not None
+        and (r.get("employeeId") is not None or r.get("deptOneId") is not None)
+    ]
+
+
+def _find_opportunity(
+    client: McnClient,
+    *,
+    customer_id: str = "",
+    opportunity_id: str = "",
+    multi_error: str,
+) -> dict[str, Any] | None:
+    """Resolve MCN opportunity row from either opportunity_id or unique customer_id match."""
+    rows = _opportunity_rows(client)
+    if not rows:
+        return None
+    target_opp = opportunity_id.strip()
+    target_cust = customer_id.strip()
+    if target_opp:
+        matched = next((r for r in rows if str(r.get("id")) == target_opp), None)
+        if matched:
+            return matched
+        if target_cust and len(rows) >= 100:
+            cust_rows = _opportunity_rows(client, customer_id=target_cust)
+            matched = next((r for r in cust_rows if str(r.get("id")) == target_opp), None)
+            if matched:
+                return matched
+        if not target_cust or target_cust == target_opp:
+            cm = [r for r in rows if str(r.get("customerId")) == target_opp]
+            if not cm and len(rows) >= 100:
+                cm = _opportunity_rows(client, customer_id=target_opp)
+            if len(cm) == 1:
+                return cm[0]
+            if len(cm) > 1:
+                raise McnClientError(multi_error)
+        return None
+    if target_cust:
+        by_id = [r for r in rows if str(r.get("id")) == target_cust]
+        if len(by_id) == 1:
+            return by_id[0]
+        cm = [r for r in rows if str(r.get("customerId")) == target_cust]
+        if not cm and len(rows) >= 100:
+            cm = _opportunity_rows(client, customer_id=target_cust)
+        if len(cm) == 1:
+            return cm[0]
+        if len(cm) > 1:
+            raise McnClientError(multi_error)
+    return None
+
+
+def _resolve_sub_project_for_order(
+    client: McnClient | None,
+    sub_project_id: str,
+    project_id: str,
+    opportunity_id: Any,
+) -> str:
+    """Validate sub-project opportunity ownership and inherit parentProjectId if omitted."""
+    if client is None or not sub_project_id:
+        return project_id
+    try:
+        rows = client.post(
+            "/api/mcn/customerSubProject/list",
+            {"page": {"pageNum": 1, "pageSize": 100}},
+        )
+    except McnClientError:
+        return project_id
+    if not isinstance(rows, list):
+        return project_id
+    real_rows = [
+        r
+        for r in rows
+        if isinstance(r, dict)
+        and (r.get("subProjectCode") is not None or r.get("parentProjectId") is not None)
+    ]
+    if not real_rows:
+        return project_id
+    sub = next((r for r in real_rows if str(r.get("id")) == sub_project_id), None)
+    if not sub:
+        return project_id
+    sub_cust = str(sub.get("customerId") or "").strip()
+    opp_text = str(opportunity_id or "").strip()
+    if sub_cust and opp_text and sub_cust != opp_text:
+        raise McnClientError("下单失败：所选子项目与报价单客户商机不一致，请重新选择")
+    parent_id = str(sub.get("parentProjectId") or "").strip()
+    if parent_id:
+        if project_id and project_id != parent_id:
+            raise McnClientError("下单失败：传入的 project_id 与子项目所属父项目不一致")
+        if not project_id:
+            return parent_id
+    return project_id
+
+
+def _validate_order_rebate(commit_type: int, items: list[dict[str, Any]]) -> None:
+    """Mirror OrderServiceImpl.validateLinePaymentDiscountVsFloor for commit_type in (1, 3, 4)."""
+    if commit_type not in (1, 3, 4):
+        return
+    for item in items:
+        floor_raw = (
+            item.get("baseMoney")
+            if item.get("baseMoney") is not None
+            else item.get("couponAfterMoney")
+        )
+        if item.get("factMoney") is None or floor_raw is None:
+            continue
+        fact_val = _money(item.get("factMoney"))
+        floor_val = _money(floor_raw)
+        rebate = _money(item.get("rebate"))
+        if fact_val <= floor_val:
+            if rebate != Decimal("0.00"):
+                raise McnClientError("下单失败：实付金额小于等于底价时不允许填写返点/回扣金额")
+        elif rebate > (fact_val - floor_val):
+            raise McnClientError("下单失败：返点/回扣金额不能超过实付金额与底价的差额")
+
+
+def _resolve_protect_type(
+    client: McnClient,
+    version_id: str,
+    explicit_type: Any,
+    list_path: str,
+) -> int:
+    """Resolve contract bind protectType (1=COMMON, 2=SPECIAL_DIRECT, 3=SPECIAL_COPY)."""
+    if explicit_type not in (None, ""):
+        val = int(explicit_type)
+        if val not in (1, 2, 3):
+            raise McnClientError("未创建：protectType 仅支持 1普通保价 2特客直签 3特客复签。")
+        return val
+    try:
+        rows = client.post(list_path, {"page": {"pageNum": 1, "pageSize": 100}})
+    except McnClientError:
+        return 1
+    if isinstance(rows, list):
+        matched = next(
+            (
+                r
+                for r in rows
+                if isinstance(r, dict)
+                and str(r.get("id")) == version_id
+                and r.get("isSpecialCustomer") is not None
+            ),
+            None,
+        )
+        if matched and int(matched.get("isSpecialCustomer") or 0) == 1:
+            return 2
+    return 1
+
+
 def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str, Any]:
     if any(not str(args.get(k) or "").strip() for k in ("name", "product_id", "customer_id")):
         raise McnClientError("报价名称、产品和客户不能为空，未保存")
@@ -622,7 +869,22 @@ def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str,
     if project_type in (None, ""):
         raise McnClientError("缺少项目类型；项目产品请明确业务项目类型，未保存")
 
+    raw_cust_id = str(args.get("customer_id") or "").strip()
     opportunity_id = str(args.get("customer_opportunity_id") or "").strip()
+    matched_opp = _find_opportunity(
+        client,
+        customer_id=raw_cust_id,
+        opportunity_id=opportunity_id,
+        multi_error=(
+            "该客户存在多个商机，请先调用 youli_list_opportunities 选择 customer_opportunity_id "
+            "后再创建报价，否则报价单列表无法显示客户名称，未保存"
+        ),
+    )
+    resolved_cust_id = raw_cust_id
+    if matched_opp:
+        opportunity_id = str(matched_opp["id"])
+        if matched_opp.get("customerId") not in (None, ""):
+            resolved_cust_id = str(matched_opp["customerId"]).strip()
     contract_id = str(args.get("contract_id") or "").strip()
     if opportunity_id and not contract_id:
         contracts = client.post(
@@ -710,14 +972,21 @@ def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str,
         supplier_id = str(row.get("supplierId") or "")
         if supplier_id:
             form["supplier"] = supplier_id
-        dynamic = {
+        form_json = json.dumps(form, ensure_ascii=False)
+        spec_name = row.get("specName") or ""
+        note_desc = str(spec.get("note_description") or "").strip()
+        dynamic: dict[str, Any] = {
             "formLabelAlign": form,
-            "formLabelAlign_name": row.get("specName") or "",
+            "formLabelAlign_name": spec_name,
             "accountName": row.get("accountName"),
+            "accountId": str(spec.get("account_id")),
             "platform": row.get("platform"),
             "platformsList": row.get("platformsList"),
             "linkUrl": row.get("linkUrl"),
             "supplierId": supplier_id,
+            "officialPlatformCooperation": row.get("officialPlatformCooperation"),
+            "platformAccountId": row.get("platformAccountId"),
+            "noteDescription": note_desc,
             "spanMethod": [],
         }
         item: dict[str, Any] = {
@@ -732,8 +1001,16 @@ def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str,
             "originalMoney": line_number,
             "couponAfterMoney": line_number,
             "factMoney": line_number,
+            "platformPrice": 0,
+            "rebate": "",
+            "gift": 0,
+            "distribute": 0,
             "noCalculate": 1 if attribute == 7 else 0,
             "advertisingCategoryId": [],
+            "formLabelAlign": form_json,
+            "formLabelAlignName": spec_name,
+            "linkUrl": row.get("linkUrl") or "",
+            "noteDescription": note_desc,
             "dynamicItemObj": json.dumps(dynamic, ensure_ascii=False),
             "costPrice": row.get("costPrice"),
             "costPriceExcludingTax": row.get("costPriceExcludingTax"),
@@ -741,17 +1018,41 @@ def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str,
         }
         if supplier_id:
             item["supplierId"] = supplier_id
+        if row.get("supplierCooperationStatus") not in (None, ""):
+            item["supplierCooperationStatus"] = row.get("supplierCooperationStatus")
         items.append(item)
-    payload = {
+    payload: dict[str, Any] = {
         "offerOrderName": args.get("name"),
         "productId": str(args.get("product_id") or ""),
-        "customerId": str(args.get("customer_id") or ""),
+        "customerId": resolved_cust_id,
         "priceVersion": versions["price_version_id"],
         "couponVersion": versions["coupon_version_id"],
         "projectType": int(str(project_type)),
         "orderType": int(args.get("order_type") or 1),
+        "otherOffers": 0,
+        "isCalculate": 1,
+        "exportTemplateId": None,
+        "quoteDataFields": "",
+        "offerExtraChargeRoList": [],
         "itemRoList": items,
     }
+    opp_fallbacks = {
+        "signerId": matched_opp.get("employeeId") if matched_opp else None,
+        "signerName": matched_opp.get("userName") if matched_opp else None,
+        "deptId": matched_opp.get("deptOneId") if matched_opp else None,
+        "deptName": matched_opp.get("deptOneName") if matched_opp else None,
+    }
+    for arg_key, api_key in (
+        ("signer_id", "signerId"),
+        ("signer_name", "signerName"),
+        ("dept_id", "deptId"),
+        ("dept_name", "deptName"),
+    ):
+        val = args.get(arg_key)
+        if val in (None, ""):
+            val = opp_fallbacks.get(api_key)
+        if val not in (None, ""):
+            payload[api_key] = val
     if opportunity_id:
         payload["customerOpportunityId"] = opportunity_id
     if contract_id:
@@ -779,12 +1080,99 @@ def _package_quote_payload(client: McnClient, args: dict[str, Any]) -> dict[str,
         if not amount.is_finite() or amount < 0:
             raise McnClientError("优惠试算金额不正确，未保存")
         item["couponAfterMoney"] = item["factMoney"] = _money_number(amount)
+        if result.get("couponMoney") is not None:
+            item["couponMoney"] = _money_number(_money(result["couponMoney"]))
         item["couponJson"] = json.dumps(result.get("couponDetailVos") or [], ensure_ascii=False)
         dynamic = json.loads(item["dynamicItemObj"])
         dynamic["couponNameList"] = result.get("couponNameList") or []
         item["dynamicItemObj"] = json.dumps(dynamic, ensure_ascii=False)
         total += amount
     payload["orderMoney"] = payload["factOrderMoney"] = _money_number(total)
+    return payload
+
+
+def _build_order_payload(
+    detail: dict[str, Any],
+    args: dict[str, Any],
+    items: list[dict[str, Any]],
+    *,
+    client: McnClient | None = None,
+    quote_id: str | None = None,
+    order_money: Any | None = None,
+    fact_order_money: Any | None = None,
+) -> dict[str, Any]:
+    opportunity_id = args.get("customer_opportunity_id") or detail.get("customerOpportunityId")
+    if not str(opportunity_id or "").strip():
+        raise McnClientError(
+            "报价单缺少客户商机 ID（customerOpportunityId），MCN 订单详情页需要商机关联；请先在报价单补充商机后再下单"
+        )
+    commit_type = int(args.get("commit_type") or detail.get("commitType") or 1)
+    _validate_order_rebate(commit_type, items)
+    amount_val = fact_order_money if fact_order_money is not None else detail.get("factOrderMoney")
+    money_val = order_money if order_money is not None else detail.get("orderMoney")
+    order_ro: dict[str, Any] = {
+        "customerId": str(detail.get("customerId") or ""),
+        "customerOpportunityId": opportunity_id,
+        "contractId": detail.get("contractId"),
+        "productId": str(detail.get("productId") or ""),
+        "orderType": detail.get("orderType") or 1,
+        "commitType": commit_type,
+        "priceVersionId": str(detail.get("priceVersion") or ""),
+        "couponVersionId": str(detail.get("couponVersion") or ""),
+        "projectType": detail.get("projectType"),
+        "amount": amount_val,
+    }
+    if quote_id:
+        order_ro["offerOrderId"] = quote_id
+    project_id = str(args.get("project_id") or "").strip()
+    sub_project_id = str(args.get("sub_project_id") or "").strip()
+    project_id = _resolve_sub_project_for_order(client, sub_project_id, project_id, opportunity_id)
+    if project_id:
+        order_ro["projectId"] = project_id
+    if sub_project_id:
+        order_ro["subProjectId"] = sub_project_id
+    for key in ("signerId", "signerName", "deptId", "deptName"):
+        val = detail.get(key)
+        if val not in (None, ""):
+            order_ro[key] = val
+
+    offer_save_ro: dict[str, Any] = {
+        "offerOrderName": detail.get("offerOrderName"),
+        "productId": str(detail.get("productId") or ""),
+        "customerId": str(detail.get("customerId") or ""),
+        "priceVersion": str(detail.get("priceVersion") or ""),
+        "couponVersion": str(detail.get("couponVersion") or ""),
+        "orderMoney": money_val,
+        "factOrderMoney": amount_val,
+        "orderType": detail.get("orderType") or 1,
+        "projectType": detail.get("projectType"),
+        "customerOpportunityId": opportunity_id,
+        "contractId": detail.get("contractId"),
+        "otherOffers": detail.get("otherOffers") or 0,
+        "isCalculate": 1,
+        "offerExtraChargeRoList": [],
+        **{key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")},
+        "itemRoList": [_order_item(item) for item in items],
+    }
+    if quote_id:
+        offer_save_ro["id"] = quote_id
+    for optional_key in (
+        "preferentialTypeId",
+        "preferentialReasons",
+        "directReductionMoney",
+        "directReductionRate",
+    ):
+        if detail.get(optional_key) not in (None, ""):
+            offer_save_ro[optional_key] = detail[optional_key]
+
+    payload: dict[str, Any] = {
+        "submitMethod": 2,
+        "orderRo": order_ro,
+        "offerOrderSaveRo": offer_save_ro,
+        "orderExtraChargeRoList": [],
+    }
+    if quote_id:
+        payload["offerOrderId"] = quote_id
     return payload
 
 
@@ -804,45 +1192,7 @@ def _create_order_from_quote(client: McnClient, args: dict[str, Any]) -> str:
     items = detail.get("offerOrderItemVos") or []
     if not items:
         return "下单失败：报价单没有明细"
-    payload: dict[str, Any] = {
-        "submitMethod": 2,
-        "offerOrderId": quote_id,
-        "orderRo": {
-            "customerId": str(detail.get("customerId")),
-            "customerOpportunityId": detail.get("customerOpportunityId"),
-            "contractId": detail.get("contractId"),
-            "productId": str(detail.get("productId")),
-            "offerOrderId": quote_id,
-            "orderType": detail.get("orderType") or 1,
-            "commitType": 1,
-            "priceVersionId": str(detail.get("priceVersion")),
-            "couponVersionId": str(detail.get("couponVersion")),
-            "projectType": detail.get("projectType"),
-        },
-    }
-    project_id = str(args.get("project_id") or "").strip()
-    if project_id:
-        payload["orderRo"]["projectId"] = project_id
-    sub_project_id = str(args.get("sub_project_id") or "").strip()
-    if sub_project_id:
-        payload["orderRo"]["subProjectId"] = sub_project_id
-    payload["offerOrderSaveRo"] = {
-        "id": quote_id,
-        "offerOrderName": detail.get("offerOrderName"),
-        "productId": str(detail.get("productId")),
-        "customerId": str(detail.get("customerId")),
-        "priceVersion": str(detail.get("priceVersion")),
-        "couponVersion": str(detail.get("couponVersion")),
-        "orderMoney": detail.get("orderMoney"),
-        "factOrderMoney": detail.get("factOrderMoney"),
-        "orderType": detail.get("orderType") or 1,
-        "projectType": detail.get("projectType"),
-        "customerOpportunityId": detail.get("customerOpportunityId"),
-        "contractId": detail.get("contractId"),
-        **{key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")},
-        "itemRoList": [_order_item(item) for item in items],
-    }
-    payload["orderExtraChargeRoList"] = []
+    payload = _build_order_payload(detail, args, items, client=client, quote_id=quote_id)
     result = client.post("/api/mcn/order/temporaryStorage", payload)
     text_result = _json(
         {
@@ -877,45 +1227,35 @@ def _create_combined_order(client: McnClient, args: dict[str, Any]) -> str:
     for item in items:
         key = _item_supplier(item) or "unassigned"
         groups.setdefault(key, []).append(item)
-    orders: list[dict[str, Any]] = []
+    prepared_groups: list[tuple[str, float, dict[str, Any]]] = []
     for supplier, group in groups.items():
-        mapped_items = []
-        amount = 0.0
+        group_order_money = Decimal("0.00")
+        group_fact_money = Decimal("0.00")
         for item in group:
-            mapped_items.append(_order_item(item))
-            amount += float(item.get("factMoney") or 0)
-        payload = {
-            "submitMethod": 2,
-            "orderRo": {
-                "customerId": str(detail.get("customerId")),
-                "customerOpportunityId": detail.get("customerOpportunityId"),
-                "contractId": detail.get("contractId"),
-                "productId": str(detail.get("productId")),
-                "orderType": detail.get("orderType") or 1,
-                "commitType": 1,
-                "priceVersionId": str(detail.get("priceVersion")),
-                "couponVersionId": str(detail.get("couponVersion")),
-                "projectType": detail.get("projectType"),
-            },
-            "offerOrderSaveRo": {
-                "offerOrderName": detail.get("offerOrderName"),
-                "productId": str(detail.get("productId")),
-                "customerId": str(detail.get("customerId")),
-                "priceVersion": str(detail.get("priceVersion")),
-                "couponVersion": str(detail.get("couponVersion")),
-                "orderMoney": amount,
-                "factOrderMoney": amount,
-                "orderType": detail.get("orderType") or 1,
-                "projectType": detail.get("projectType"),
-                "customerOpportunityId": detail.get("customerOpportunityId"),
-                "contractId": detail.get("contractId"),
-                **{
-                    key: detail.get(key) for key in ("signerId", "signerName", "deptId", "deptName")
-                },
-                "itemRoList": mapped_items,
-            },
-            "orderExtraChargeRoList": [],
-        }
+            fact_val = _money(item.get("factMoney"))
+            orig_val = _money(
+                item.get("baseMoney")
+                if item.get("baseMoney") is not None
+                else item.get("couponAfterMoney")
+                if item.get("couponAfterMoney") is not None
+                else item.get("factMoney")
+            )
+            group_order_money += orig_val
+            group_fact_money += fact_val
+        order_num = _money_number(group_order_money)
+        fact_num = _money_number(group_fact_money)
+        payload = _build_order_payload(
+            detail,
+            args,
+            group,
+            client=client,
+            quote_id=None,
+            order_money=order_num,
+            fact_order_money=fact_num,
+        )
+        prepared_groups.append((supplier, fact_num, payload))
+    orders: list[dict[str, Any]] = []
+    for supplier, amount, payload in prepared_groups:
         result = client.post("/api/mcn/order/temporaryStorage", payload)
         orders.append({"supplier": supplier, "amount": amount, "result": result})
     text_result = _json(
@@ -971,19 +1311,49 @@ def _list_service_items(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _update_publish_link(client: McnClient, args: dict[str, Any]) -> str:
+    service_item_id = str(args.get("service_item_id") or "").strip()
+    if not service_item_id:
+        return "未保存：service_item_id 不能为空。"
     link = str(args.get("publish_link") or "").strip()
     if not link:
         return "未保存：发布链接不能为空。"
     if not bool(args.get("confirm")):
         return "未保存：请先让用户核对服务项目、账号规格和链接，确认后再以 confirm=true 调用。"
+    existing_vo: dict[str, Any] = {}
+    try:
+        detail = client.post(
+            "/api/mcn/order/service/item/editOrderServiceGetDetail",
+            {"orderServiceItemId": service_item_id},
+        )
+        if isinstance(detail, dict) and isinstance(detail.get("orderServiceItemVo"), dict):
+            existing_vo = detail["orderServiceItemVo"]
+            if existing_vo.get("flowStatus") == 4:
+                return "未保存：该服务项目流程已终止，不能编辑发布链接。"
+            if existing_vo.get("status") == 1:
+                return "未保存：该服务项目已完结，不允许编辑发布链接。"
+    except McnClientError:
+        existing_vo = {}
     payload: dict[str, Any] = {
-        "id": str(args.get("service_item_id") or ""),
+        "id": service_item_id,
         "publishLink": link,
     }
-    publish_time = str(args.get("publish_time") or "").strip()
+    publish_time = _normalize_date(
+        args.get("publish_time") if args.get("publish_time") not in (None, "") else existing_vo.get("publishTime"),
+        "发布时间",
+    )
     if publish_time:
         # MCN parses this field as a plain date; a time suffix makes it fail.
-        payload["publishTime"] = publish_time[:10]
+        payload["publishTime"] = publish_time
+    publish_text = args.get("publish_text")
+    if publish_text in (None, "") and existing_vo.get("publishText") not in (None, ""):
+        publish_text = existing_vo.get("publishText")
+    if publish_text not in (None, ""):
+        payload["publishText"] = str(publish_text).strip()
+    platform_order_id = args.get("platform_order_id")
+    if platform_order_id in (None, "") and existing_vo.get("platformOrderId") not in (None, ""):
+        platform_order_id = existing_vo.get("platformOrderId")
+    if platform_order_id not in (None, ""):
+        payload["platformOrderId"] = str(platform_order_id).strip()
     return _json(client.post("/api/mcn/order/service/item/edit", payload))
 
 
@@ -1022,6 +1392,23 @@ def _create_sub_project(client: McnClient, args: dict[str, Any]) -> str:
     customer_name = str(args.get("customer_name") or "").strip()
     if not opportunity_id:
         return "未创建：customer_opportunity_id 不能为空。"
+    try:
+        matched_opp = _find_opportunity(
+            client,
+            opportunity_id=opportunity_id,
+            multi_error=(
+                "未创建：传入的 customer_opportunity_id 为客户主档 ID，该客户存在多个商机，"
+                "请先调用 youli_list_opportunities 选择具体商机 ID。"
+            ),
+        )
+    except McnClientError as exc:
+        return str(exc)
+    if matched_opp:
+        opportunity_id = str(matched_opp["id"])
+        if not customer_name:
+            customer_name = str(
+                matched_opp.get("name") or matched_opp.get("customerName") or ""
+            ).strip()
     if not customer_name:
         return "未创建：customer_name 不能为空。"
     payload: dict[str, Any] = {
@@ -1048,23 +1435,54 @@ def _create_coupon_version(client: McnClient, args: dict[str, Any]) -> str:
         return "未创建：版本名称不能为空。"
     if not bool(args.get("confirm")):
         return "未创建：请先和用户确认版本名称、客户和有效期，确认后再以 confirm=true 调用。"
+    opportunity_id = str(args.get("opportunity_id") or "").strip()
+    effective_time = _normalize_date(args.get("effective_time"), "生效日期")
+    expiration_time = _normalize_date(args.get("expiration_time"), "失效日期")
+    if effective_time and expiration_time and expiration_time < effective_time:
+        return "未创建：失效日期不能早于生效日期。"
     payload: dict[str, Any] = {
         "name": name,
         "isDefault": 1 if bool(args.get("is_default")) else 0,
+        "isSpecialCustomer": 1 if opportunity_id else 0,
+        "isHide": 0,
+        "lockStatus": 0,
     }
     version = str(args.get("version") or "").strip()
     if version:
         payload["version"] = version
-    opportunity_id = str(args.get("opportunity_id") or "").strip()
     if opportunity_id:
         payload["opportunityId"] = opportunity_id
-    effective_time = str(args.get("effective_time") or "").strip()
+        opportunity_name = str(args.get("opportunity_name") or "").strip()
+        if not opportunity_name:
+            try:
+                rows = client.post(
+                    "/api/mcn/customer/opportunity/list",
+                    {"page": {"pageNum": 1, "pageSize": 20}},
+                )
+                if isinstance(rows, list):
+                    matched = next(
+                        (r for r in rows if str(r.get("id")) == opportunity_id),
+                        None,
+                    )
+                    if matched and matched.get("name"):
+                        opportunity_name = str(matched["name"]).strip()
+            except McnClientError:
+                opportunity_name = ""
+        if opportunity_name:
+            payload["opportunityName"] = opportunity_name
     if effective_time:
         payload["effectiveTime"] = effective_time
-    expiration_time = str(args.get("expiration_time") or "").strip()
     if expiration_time:
         payload["expirationTime"] = expiration_time
-    return _json(client.post("/api/mcn/coupon/version/addCouponVersion", payload))
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    cached = _recall(client, f"coupon_ver:{digest}")
+    if cached is not None:
+        return f"重复提交已忽略，上次结果：{cached}"
+    result = _json(client.post("/api/mcn/coupon/version/addCouponVersion", payload))
+    _remember(client, f"coupon_ver:{digest}", result)
+    return result
 
 
 def _create_contract(client: McnClient, args: dict[str, Any]) -> str:
@@ -1074,16 +1492,27 @@ def _create_contract(client: McnClient, args: dict[str, Any]) -> str:
         )
     payload = args.get("payload")
     if payload is None:
+        contract_type = int(args.get("type") or 1)
+        effective_time = _normalize_date(args.get("effective_time"), "effective_time", required=True)
+        expiration_time = _normalize_date(args.get("expiration_time"), "expiration_time", required=True)
+        if expiration_time < effective_time:
+            return "未创建：expiration_time 不能早于 effective_time。"
+        signing_date = _normalize_date(
+            args.get("signing_date") or effective_time,
+            "signing_date",
+        )
+        cooperation_mode = int(args.get("cooperation_mode") or (1 if contract_type == 1 else 2))
         payload = {
             "enableType": int(args.get("enable_type") or 2),
-            "type": int(args.get("type") or 1),
+            "type": contract_type,
+            "cooperationMode": cooperation_mode,
             "name": str(args.get("name") or "").strip(),
             "customerId": str(args.get("customer_id") or ""),
             "customerOpportunityId": str(args.get("customer_opportunity_id") or ""),
             "issuingOffice": str(args.get("issuing_office") or ""),
-            "signingDate": str(args.get("signing_date") or args.get("effective_time") or ""),
-            "effectiveTime": str(args.get("effective_time") or ""),
-            "expirationTime": str(args.get("expiration_time") or ""),
+            "signingDate": signing_date,
+            "effectiveTime": effective_time,
+            "expirationTime": expiration_time,
             "orderNumber": 0,
             "orderAmount": 0,
             "amountReceived": 0,
@@ -1099,25 +1528,94 @@ def _create_contract(client: McnClient, args: dict[str, Any]) -> str:
             )
         if not payload["customerId"]:
             payload.pop("customerId", None)
-        if not payload["effectiveTime"] or not payload["expirationTime"]:
-            return "未创建：effective_time、expiration_time 不能为空。"
+        for arg_key, api_key in (
+            ("employee_id", "employeeId"),
+            ("user_name", "userName"),
+            ("issuing_office_name", "issuingOfficeName"),
+            ("remark", "remark"),
+        ):
+            val = str(args.get(arg_key) or "").strip()
+            if val:
+                payload[api_key] = val
+        if args.get("scale_amount") not in (None, ""):
+            payload["scaleAmount"] = _money_number(_money(args.get("scale_amount")))
+        if args.get("guaranteed_type") not in (None, ""):
+            payload["guaranteedType"] = int(args["guaranteed_type"])
         price_version = str(args.get("price_version_id") or "").strip()
         coupon_version = str(args.get("coupon_version_id") or "").strip()
         if price_version or coupon_version:
             payload["protectionPrice"] = 1
             if price_version:
+                p_start = _normalize_date(
+                    args.get("price_start_time") or effective_time, "price_start_time"
+                )
+                p_end = _normalize_date(
+                    args.get("price_end_time") or expiration_time, "price_end_time"
+                )
+                if p_end < p_start:
+                    return "未创建：保价格结束时间不能早于开始时间。"
+                if p_start < effective_time or p_end > expiration_time:
+                    return "未创建：保价格和保优惠时间都不能超出有效日期范围。"
+                p_protect_type = _resolve_protect_type(
+                    client,
+                    price_version,
+                    args.get("price_protect_type"),
+                    "/api/mcn/account/quote/version/list",
+                )
                 payload["priceVersion"] = price_version
-                payload["priceVersionBindList"] = [{"versionId": price_version}]
+                payload["priceStartTime"] = p_start
+                payload["priceEndTime"] = p_end
+                payload["priceVersionBindList"] = [
+                    {
+                        "versionId": price_version,
+                        "protectType": p_protect_type,
+                        "startTime": p_start,
+                        "endTime": p_end,
+                    }
+                ]
             if coupon_version:
+                f_start = _normalize_date(
+                    args.get("favorable_start_time") or effective_time, "favorable_start_time"
+                )
+                f_end = _normalize_date(
+                    args.get("favorable_end_time") or expiration_time, "favorable_end_time"
+                )
+                if f_end < f_start:
+                    return "未创建：保优惠结束时间不能早于开始时间。"
+                if f_start < effective_time or f_end > expiration_time:
+                    return "未创建：保价格和保优惠时间都不能超出有效日期范围。"
+                f_protect_type = _resolve_protect_type(
+                    client,
+                    coupon_version,
+                    args.get("coupon_protect_type"),
+                    "/api/mcn/coupon/version/list",
+                )
                 payload["couponVersion"] = coupon_version
-                payload["couponVersionBindList"] = [{"versionId": coupon_version}]
+                payload["favorableStartTime"] = f_start
+                payload["favorableEndTime"] = f_end
+                payload["couponVersionBindList"] = [
+                    {
+                        "versionId": coupon_version,
+                        "protectType": f_protect_type,
+                        "startTime": f_start,
+                        "endTime": f_end,
+                    }
+                ]
         else:
             payload["protectionPrice"] = 0
     if not isinstance(payload, dict):
         return "未创建：payload 必须是合同对象"
     if not payload.get("enableType"):
         return "未创建：enableType 不能为空。"
-    return _json(client.post("/api/mcn/contract/addContract", payload))
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    cached = _recall(client, f"contract:{digest}")
+    if cached is not None:
+        return f"重复提交已忽略，上次结果：{cached}"
+    result = _json(client.post("/api/mcn/contract/addContract", payload))
+    _remember(client, f"contract:{digest}", result)
+    return result
 
 
 _HANDLERS = {
@@ -1382,6 +1880,10 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "娱乐/品牌名对应的父项目 ID，可空；填了订单才能按项目统计交付",
                 },
                 "sub_project_id": {"type": "string", "description": "子项目 ID，可空"},
+                "commit_type": {
+                    "type": "integer",
+                    "description": "下单类型：1水下单 2平台单-客户下单 3平台单-代客下单 4佣金单，默认1",
+                },
                 "confirm": {"type": "boolean"},
             },
             ["quote_id", "confirm"],
@@ -1391,7 +1893,16 @@ TOOLS: list[dict[str, Any]] = [
         "name": "youli_create_combined_order",
         "description": "组合订单：按供应商把一张拉包报价拆成多张订单（写操作，需用户确认）。",
         "inputSchema": _schema(
-            {"quote_id": {"type": "string"}, "confirm": {"type": "boolean"}},
+            {
+                "quote_id": {"type": "string"},
+                "project_id": {"type": "string", "description": "父项目 ID，可空"},
+                "sub_project_id": {"type": "string", "description": "子项目 ID，可空"},
+                "commit_type": {
+                    "type": "integer",
+                    "description": "下单类型：1水下单 2平台单-客户下单 3平台单-代客下单 4佣金单，默认1",
+                },
+                "confirm": {"type": "boolean"},
+            },
             ["quote_id", "confirm"],
         ),
     },
@@ -1418,6 +1929,8 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "发布时间 yyyy-MM-dd；时分秒会被忽略",
                 },
+                "publish_text": {"type": "string", "description": "发布文案，可空（留空保留原值）"},
+                "platform_order_id": {"type": "string", "description": "平台订单 ID，可空（留空保留原值）"},
                 "confirm": {"type": "boolean"},
             },
             ["service_item_id", "publish_link", "confirm"],
@@ -1535,6 +2048,7 @@ TOOLS: list[dict[str, Any]] = [
                 "name": {"type": "string"},
                 "version": {"type": "string"},
                 "opportunity_id": {"type": "string"},
+                "opportunity_name": {"type": "string", "description": "特定客户商机名称，传入 opportunity_id 时自动回填或显式传入"},
                 "is_default": {"type": "boolean"},
                 "effective_time": {"type": "string"},
                 "expiration_time": {"type": "string"},
@@ -1556,17 +2070,29 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "客户商机 ID；填了合同才会出现在合同列表",
                 },
                 "type": {"type": "integer", "description": "合同类型 1单次 2季框 3半年框 4年框"},
+                "cooperation_mode": {"type": "integer", "description": "合作方式：1单次合作 2长线合作；缺省按合同类型自动推导"},
+                "scale_amount": {"type": "number", "description": "签约规模（万元），可空"},
+                "guaranteed_type": {"type": "integer", "description": "保量类型：1不保量 2固定保量 3梯度保量，可空"},
                 "issuing_office": {"type": "string", "description": "签约主体/开票单位 ID"},
                 "effective_time": {"type": "string", "description": "有效开始日期 yyyy-MM-dd"},
                 "expiration_time": {"type": "string", "description": "有效截止日期 yyyy-MM-dd"},
                 "signing_date": {"type": "string", "description": "签约日期 yyyy-MM-dd，可空"},
                 "price_version_id": {"type": "string", "description": "保价价格版本 ID，可空"},
+                "price_protect_type": {"type": "integer", "description": "保价类型：1普通保价 2特客直签 3特客复签，可空"},
+                "price_start_time": {"type": "string", "description": "保价开始日期 yyyy-MM-dd，可空"},
+                "price_end_time": {"type": "string", "description": "保价结束日期 yyyy-MM-dd，可空"},
                 "coupon_version_id": {"type": "string", "description": "保价优惠版本 ID，可空"},
+                "coupon_protect_type": {"type": "integer", "description": "保优惠类型：1普通保价 2特客直签 3特客复签，可空"},
+                "favorable_start_time": {"type": "string", "description": "保优惠开始日期 yyyy-MM-dd，可空"},
+                "favorable_end_time": {"type": "string", "description": "保优惠结束日期 yyyy-MM-dd，可空"},
+                "employee_id": {"type": "string", "description": "签单人 ID，可空"},
+                "user_name": {"type": "string", "description": "签单人姓名，可空"},
                 "enable_type": {"type": "integer", "description": "1临时启用 2正式启用"},
                 "contract_account_info": {
                     "type": "object",
                     "description": "账期信息，默认 {periodType:1}",
                 },
+                "remark": {"type": "string", "description": "合同备注，可空"},
                 "confirm": {"type": "boolean"},
             },
             ["confirm"],

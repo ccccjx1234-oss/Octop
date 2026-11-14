@@ -47,6 +47,7 @@ class SqlitePool:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         # WAL + FULL fsyncs every autocommit statement. On Windows that is
         # FlushFileBuffers and dominates pytest (and the app), so only Windows
         # drops to NORMAL (SQLite's recommended WAL setting): an OS crash can

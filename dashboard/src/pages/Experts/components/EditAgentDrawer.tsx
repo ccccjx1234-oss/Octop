@@ -73,17 +73,9 @@ import {
 } from "./welcomeManifest";
 import { fetchConfigMdFiles } from "./expertFileGroups";
 import {
-  buildBackendSpec,
   DEFAULT_BACKEND,
-  ensureBubblewrapAfterProbe,
-  ensureBwrapMessage,
-  ensureBwrapToastKind,
   parseBackendSpec,
-  probeRootDir,
-  rootDirProbeMessage,
-  shouldProbeRootDir,
   supportsHostSkillPackages,
-  validatePathMappings,
   type PathMapping,
 } from "./agentBackendForm";
 import AgentBackendFields from "./AgentBackendFields";
@@ -249,7 +241,7 @@ function EditAgentDrawerBody({
   const [agentSubagents, setAgentSubagents] = useState<SubagentSummary[]>([]);
   const remote = Boolean(agent.bridge) || isBridgeAgentId(agent.agent_id);
   const { models, modelsLoading, backends, backendsLoading } =
-    useAgentFormResources(true, agent.agent_id);
+    useAgentFormResources(true, agent.agent_id, { loadBackends: false });
   const [pathMappings, setPathMappings] = useState<PathMapping[]>([]);
   const [agentConfig, setAgentConfig] = useState<Record<string, unknown>>({});
   const [colorPalette, setColorPalette] = useState<string>(
@@ -418,52 +410,17 @@ function EditAgentDrawerBody({
   }, [agent.agent_id, agent.state, form, message, t]);
 
   const handleSave = useCallback(async () => {
-    const values = await form.validateFields();
-    if (values.backend_choice === "composite") {
-      const pathError = validatePathMappings(pathMappings, t);
-      if (pathError) {
-        message.error(pathError);
-        return;
-      }
-    }
-    if (!remote && shouldProbeRootDir(values.backend_choice, values.root_dir)) {
-      const probe = await probeRootDir(values.root_dir ?? "/");
-      if (!probe.ok) {
-        message.error(
-          `${rootDirProbeMessage(probe, t)}\n${t(
-            "experts.rootDirProbe.guidance",
-          )}`,
-        );
-        return;
-      }
-    }
+    if (loading || saving) return;
     setSaving(true);
-    let bwrapToast: { kind: "success" | "warning"; text: string } | null = null;
     try {
-      if (
-        !remote &&
-        shouldProbeRootDir(values.backend_choice, values.root_dir)
-      ) {
-        const bwrap = await ensureBubblewrapAfterProbe();
-        const kind = ensureBwrapToastKind(bwrap.status);
-        if (kind !== "none") {
-          bwrapToast = { kind, text: ensureBwrapMessage(bwrap, t) };
-        }
-      }
-
-      const backendSpec = buildBackendSpec(
-        values.backend_choice,
-        values.composite_default ?? DEFAULT_BACKEND,
-        pathMappings,
-        values.root_dir,
-      );
-
+      const values = await form.validateFields();
       const nextColor = isCuratedPalette(colorPalette)
         ? expertPaletteColor(colorPalette)
         : colorPalette;
       const nextConfig = omitAgentRuntimeConfig({
         ...agentConfig,
-        backend: backendSpec,
+        // The backend is immutable in this editor. Preserve the full stored
+        // spec without probing host APIs unavailable under user isolation.
         enable_trajectory: values.enable_trajectory === true,
         conversation_mode: values.conversation_mode,
       });
@@ -532,11 +489,6 @@ function EditAgentDrawerBody({
       }
 
       message.success(t("common.saveSuccess"));
-      if (bwrapToast?.kind === "success") {
-        message.success(bwrapToast.text);
-      } else if (bwrapToast?.kind === "warning") {
-        message.warning(bwrapToast.text);
-      }
       const defaultModel = defaultModelFromForm(values.default_model);
       onSaved({
         agent_id: agent.agent_id,
@@ -549,7 +501,16 @@ function EditAgentDrawerBody({
       });
       onClose();
     } catch (err) {
-      message.error(apiErrorMessage(err, t("experts.patchFailed"), t));
+      const validationError = err as {
+        errorFields?: { name: (string | number)[]; errors: string[] }[];
+      } | null;
+      const firstError = validationError?.errorFields?.[0];
+      if (firstError) {
+        message.error(firstError.errors[0] || t("experts.patchFailed"));
+        form.scrollToField(firstError.name, { focus: true });
+      } else {
+        message.error(apiErrorMessage(err, t("experts.patchFailed"), t));
+      }
     } finally {
       setSaving(false);
     }
@@ -563,9 +524,11 @@ function EditAgentDrawerBody({
     expertVisibility,
     form,
     iconUrl,
+    loading,
+    message,
     onClose,
     onSaved,
-    pathMappings,
+    saving,
     skillPackagesSupported,
     t,
   ]);
@@ -943,7 +906,7 @@ function EditAgentDrawerBody({
                 pathMappings={pathMappings}
                 rootDirMode="edit"
                 disabled
-                skipHostFilesystem={remote}
+                skipHostFilesystem
                 onAddPathMapping={addPathMapping}
                 onRemovePathMapping={removePathMapping}
                 onUpdatePathMapping={updatePathMapping}

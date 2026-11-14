@@ -228,6 +228,14 @@ export default function LoginPage({
         // Employee passwords are checked by MCN; its endpoint does not use
         // the local-account captcha or the platform's OAuth/LDAP providers.
         if (isStaff) {
+          authApi
+            .getOauthStatus?.()
+            .then((next) => {
+              if (!cancelled) {
+                setProviders(next.providers.filter((item) => item.enabled));
+              }
+            })
+            .catch(() => {});
           // Standalone deployments have no Youli endpoint. Send the visitor to
           // the system-account form instead of letting a login hit a missing
           // MCN service and fail with a server error.
@@ -298,8 +306,8 @@ export default function LoginPage({
         defaultValue: t("login.oidcError.generic"),
       }),
     );
-    navigate("/manageLogin", { replace: true });
-  }, [navigate, searchParams, t]);
+    navigate(isStaff ? "/login" : "/manageLogin", { replace: true });
+  }, [isStaff, navigate, searchParams, t]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -435,8 +443,7 @@ export default function LoginPage({
         }, 400);
       } else {
         popup?.close();
-        message.error(t("account.ssoPopupBlocked"));
-        setSsoLoadingKind(null);
+        window.location.href = authorization_url;
       }
     } catch (err) {
       popup?.close();
@@ -1039,7 +1046,7 @@ export default function LoginPage({
                 )}
               </Button>
             )}
-            {!isStaff && providers.length > 0 && (
+            {providers.length > 0 && (
               <>
                 <div
                   style={{

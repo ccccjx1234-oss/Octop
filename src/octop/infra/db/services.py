@@ -46,6 +46,7 @@ from octop.infra.db.repos.user_totp import UserTotpRepo
 from octop.infra.db.repos.user_webauthn import UserWebauthnRepo
 from octop.infra.db.repos.users import UserRepo
 from octop.infra.db.repos.voice_providers import VoiceProviderRepo
+from octop.infra.db.repos.workbench import WorkbenchRepo
 from octop.infra.db.repos.youli import (
     YouliAgentBindingRepo,
     YouliBusinessTemplateRepo,
@@ -97,6 +98,7 @@ class RepoBundle:
     auth_challenge_repo: AuthChallengeRepo
     profile_avatar_repo: ProfileAvatarRepo
     control_file_repo: ControlFileRepo
+    workbench_repo: WorkbenchRepo
 
     @classmethod
     def from_pool(cls, db: DatabasePool) -> RepoBundle:
@@ -141,6 +143,7 @@ class RepoBundle:
             auth_challenge_repo=AuthChallengeRepo(db),
             profile_avatar_repo=ProfileAvatarRepo(db),
             control_file_repo=ControlFileRepo(db),
+            workbench_repo=WorkbenchRepo(db),
         )
 
 
@@ -293,6 +296,10 @@ class SharedServices:
     @property
     def control_file_repo(self) -> ControlFileRepo:
         return self.repos.control_file_repo
+
+    @property
+    def workbench_repo(self) -> WorkbenchRepo:
+        return self.repos.workbench_repo
 
     def avatars(self, kind: str) -> Any:
         from octop.infra.users.profile_avatar import AvatarNamespace

@@ -1,0 +1,58 @@
+-- Schema v27: Business workbench tasks, deliverables (from chat/manual), and role goals.
+
+CREATE TABLE IF NOT EXISTS workbench_tasks (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_key     TEXT NOT NULL,
+  module_key   TEXT NOT NULL,
+  module_title TEXT NOT NULL,
+  target_type  TEXT NOT NULL DEFAULT '',
+  target_name  TEXT NOT NULL DEFAULT '',
+  title        TEXT NOT NULL,
+  due_label    TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'pending',
+  progress     INTEGER NOT NULL DEFAULT 0,
+  source       TEXT NOT NULL DEFAULT 'manual',
+  external_ref TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_tasks_user_role
+  ON workbench_tasks(user_id, role_key, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS workbench_deliverables (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_key          TEXT NOT NULL DEFAULT 'customer_service',
+  deliverable_type  TEXT NOT NULL DEFAULT 'document',
+  target_name       TEXT NOT NULL DEFAULT '',
+  title             TEXT NOT NULL,
+  summary           TEXT NOT NULL DEFAULT '',
+  content           TEXT NOT NULL DEFAULT '',
+  review_status     TEXT NOT NULL DEFAULT 'pending_review',
+  source_thread_id  TEXT NOT NULL DEFAULT '',
+  source_message_id TEXT NOT NULL DEFAULT '',
+  linked_task_id    INTEGER REFERENCES workbench_tasks(id) ON DELETE SET NULL,
+  delivered_at      INTEGER NOT NULL,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_deliverables_user_time
+  ON workbench_deliverables(user_id, delivered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workbench_deliverables_user_type
+  ON workbench_deliverables(user_id, deliverable_type);
+
+CREATE TABLE IF NOT EXISTS workbench_goals (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_key      TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  target_value  REAL NOT NULL DEFAULT 100,
+  current_value REAL NOT NULL DEFAULT 0,
+  unit          TEXT NOT NULL DEFAULT '',
+  period        TEXT NOT NULL DEFAULT 'month',
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_goals_user_role
+  ON workbench_goals(user_id, role_key, sort_order);

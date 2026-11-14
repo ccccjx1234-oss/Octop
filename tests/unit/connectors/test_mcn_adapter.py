@@ -628,7 +628,25 @@ def test_create_contract_fills_issuing_office_and_period(monkeypatch) -> None:
     assert payload["issuingOffice"] == "147372"
     assert payload["contractAccountInfo"] == {"periodType": 1}
     assert payload["protectionPrice"] == 1
-    assert payload["priceVersionBindList"] == [{"versionId": "v1"}]
+    assert payload["cooperationMode"] == 1
+    assert payload["priceStartTime"] == "2026-11-10"
+    assert payload["priceEndTime"] == "2027-11-10"
+    assert payload["priceVersionBindList"] == [
+        {
+            "versionId": "v1",
+            "protectType": 1,
+            "startTime": "2026-11-10",
+            "endTime": "2027-11-10",
+        }
+    ]
+    assert payload["couponVersionBindList"] == [
+        {
+            "versionId": "v2",
+            "protectType": 1,
+            "startTime": "2026-11-10",
+            "endTime": "2027-11-10",
+        }
+    ]
 
 
 def test_create_contract_can_use_opportunity(monkeypatch) -> None:
@@ -718,3 +736,372 @@ def test_combined_order_groups_by_supplier(monkeypatch) -> None:
     # 拆单后每张订单都保留项目类型和商机，后续才能按项目统计。
     assert all(p["offerOrderSaveRo"]["projectType"] == 6 for p in posts)
     assert all(p["offerOrderSaveRo"]["customerOpportunityId"] == "opp1" for p in posts)
+
+
+def test_order_requires_opportunity_and_preserves_dynamic_fields(monkeypatch) -> None:
+    fake = FakeClient()
+    _use(monkeypatch, fake)
+
+    def missing_opp_detail(path: str, params: Any = None) -> Any:
+        fake.calls.append((path, params))
+        return {
+            "offerOrderNo": "BJ2",
+            "customerId": "c1",
+            "productId": "p1",
+            "priceVersion": "v1",
+            "couponVersion": "v2",
+            "orderMoney": 100,
+            "factOrderMoney": 100,
+            "offerOrderItemVos": [{"id": "item-1", "factMoney": 100, "originalPrice": 100}],
+        }
+
+    monkeypatch.setattr(fake, "get", missing_opp_detail)
+    err = mcn.call_tool(
+        {"token": "t"}, "youli_create_order_from_quote", {"quote_id": "q-no-opp", "confirm": True}
+    )
+    assert "customerOpportunityId" in err
+    assert not any(path.endswith("/temporaryStorage") for path, _ in fake.calls)
+
+    def rich_detail(path: str, params: Any = None) -> Any:
+        fake.calls.append((path, params))
+        return {
+            "offerOrderNo": "BJ3",
+            "customerId": "c1",
+            "customerOpportunityId": "opp1",
+            "productId": "p1",
+            "priceVersion": "v1",
+            "couponVersion": "v2",
+            "orderMoney": 200,
+            "factOrderMoney": 180,
+            "offerOrderItemVos": [
+                {
+                    "id": "i1",
+                    "type": 0,
+                    "skuId": "s1",
+                    "accountId": "a1",
+                    "accountName": "测试账号",
+                    "quantity": 1,
+                    "originalPrice": 200,
+                    "originalMoney": 200,
+                    "couponMoney": 20,
+                    "couponJson": '[{"couponMoney":20}]',
+                    "baseMoney": 180,
+                    "factMoney": 180,
+                    "costPrice": 90,
+                    "dynamicItemObj": json.dumps(
+                        {"formLabelAlign": {"supplier": "sup1"}, "formLabelAlign_name": "视频"}
+                    ),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(fake, "get", rich_detail)
+    mcn.call_tool({"token": "t"}, "youli_create_order_from_quote", {"quote_id": "q-rich", "confirm": True})
+    saved = next(p for path, p in fake.calls if path.endswith("/temporaryStorage"))
+    assert saved["orderRo"]["amount"] == 180
+    saved_item = saved["offerOrderSaveRo"]["itemRoList"][0]
+    assert saved_item["couponJson"] == '[{"couponMoney":20}]'
+    assert saved_item["formLabelAlignName"] == "视频"
+    assert saved_item["costPrice"] == 90
+    assert "formLabelAlign_name" in saved_item["dynamicItemObj"]
+
+
+def test_create_coupon_version_sets_special_customer_and_validates_dates(monkeypatch) -> None:
+    class OppClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            self.calls.append((path, payload))
+            if path.endswith("/opportunity/list"):
+                return [{"id": "opp-99", "name": "特客商机"}]
+            return {"id": "cv1"}
+
+    fake = OppClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_create_coupon_version",
+        {
+            "name": "客户专享政策",
+            "opportunity_id": "opp-99",
+            "effective_time": "2026-11-10 00:00:00",
+            "expiration_time": "2026-12-31 23:59:59",
+            "confirm": True,
+        },
+    )
+    path, payload = fake.calls[-1]
+    assert path == "/api/mcn/coupon/version/addCouponVersion"
+    assert payload["isSpecialCustomer"] == 1
+    assert payload["opportunityName"] == "特客商机"
+    assert payload["isHide"] == 0
+    assert payload["lockStatus"] == 0
+    assert payload["effectiveTime"] == "2026-11-10"
+    assert payload["expirationTime"] == "2026-12-31"
+
+    bad = mcn.call_tool(
+        {"token": "t"},
+        "youli_create_coupon_version",
+        {
+            "name": "错误日期",
+            "effective_time": "2026-12-31",
+            "expiration_time": "2026-11-10",
+            "confirm": True,
+        },
+    )
+    assert "不能早于" in bad
+
+
+def test_publish_link_preserves_existing_fields_and_blocks_terminated(monkeypatch) -> None:
+    class PublishClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            self.calls.append((path, payload))
+            if path.endswith("/editOrderServiceGetDetail"):
+                return {
+                    "orderServiceItemVo": {
+                        "id": "s1",
+                        "flowStatus": 2,
+                        "publishText": "已有文案",
+                        "platformOrderId": "PO-123",
+                    }
+                }
+            return True
+
+    fake = PublishClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_update_publish_link",
+        {"service_item_id": "s1", "publish_link": "https://example.com/v1", "confirm": True},
+    )
+    path, payload = fake.calls[-1]
+    assert path == "/api/mcn/order/service/item/edit"
+    assert payload["publishText"] == "已有文案"
+    assert payload["platformOrderId"] == "PO-123"
+
+
+def test_package_quote_resolves_opportunity_and_signer_from_customer(monkeypatch) -> None:
+    class OppQuoteClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            if path == "/api/mcn/customer/opportunity/list":
+                self.calls.append((path, payload))
+                return [
+                    {
+                        "id": "opp-100",
+                        "customerId": "cust-2",
+                        "name": "测试商机客户",
+                        "employeeId": "u-9",
+                        "userName": "张三",
+                        "deptOneId": "d-5",
+                        "deptOneName": "品牌销售部",
+                    }
+                ]
+            if path == "/api/mcn/contract/list":
+                self.calls.append((path, payload))
+                return [{"id": "con-77"}]
+            return super().post(path, payload)
+
+    fake = OppQuoteClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_create_package_quote",
+        {
+            "name": "商机补全报价",
+            "product_id": "1",
+            "customer_id": "cust-2",
+            "price_version_id": "3",
+            "coupon_version_id": "4",
+            "account_specs": [{"account_id": "10", "sku_id": "100", "price": "10", "quantity": 1}],
+            "confirm": True,
+        },
+    )
+    save_payload = next(p for p_path, p in fake.calls if p_path.endswith("/offerOrder/save"))
+    assert save_payload["customerId"] == "cust-2"
+    assert save_payload["customerOpportunityId"] == "opp-100"
+    assert save_payload["contractId"] == "con-77"
+    assert save_payload["signerId"] == "u-9"
+    assert save_payload["signerName"] == "张三"
+    assert save_payload["deptId"] == "d-5"
+    assert save_payload["deptName"] == "品牌销售部"
+
+
+def test_package_quote_rejects_ambiguous_multi_opportunity_customer(monkeypatch) -> None:
+    class MultiOppClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            if path == "/api/mcn/customer/opportunity/list":
+                self.calls.append((path, payload))
+                return [
+                    {"id": "opp-1", "customerId": "cust-2", "employeeId": "u-1"},
+                    {"id": "opp-2", "customerId": "cust-2", "employeeId": "u-2"},
+                ]
+            return super().post(path, payload)
+
+    fake = MultiOppClient()
+    _use(monkeypatch, fake)
+    result = mcn.call_tool(
+        {"token": "t"},
+        "youli_create_package_quote",
+        {
+            "name": "多商机歧义",
+            "product_id": "1",
+            "customer_id": "cust-2",
+            "price_version_id": "3",
+            "coupon_version_id": "4",
+            "account_specs": [{"account_id": "10", "sku_id": "100", "price": "10", "quantity": 1}],
+            "confirm": True,
+        },
+    )
+    assert "存在多个商机" in result
+
+
+def test_order_from_quote_inherits_subproject_parent_and_checks_rebate_floor(monkeypatch) -> None:
+    class OrderAlignmentClient(FakeClient):
+        def __init__(self, rebate: float = 0) -> None:
+            super().__init__()
+            self.rebate = rebate
+
+        def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+            self.calls.append((path, params))
+            return {
+                "id": "q1",
+                "offerOrderNo": "BJ001",
+                "customerId": "cust-2",
+                "customerOpportunityId": "opp-100",
+                "productId": "1",
+                "priceVersion": "3",
+                "couponVersion": "4",
+                "orderMoney": 100.0,
+                "factOrderMoney": 100.0,
+                "projectType": 1,
+                "offerOrderItemVos": [
+                    {
+                        "type": 1,
+                        "skuId": "100",
+                        "accountId": "10",
+                        "count": 1,
+                        "quantity": 1,
+                        "originalPrice": 100.0,
+                        "baseMoney": 100.0,
+                        "factMoney": 100.0,
+                        "rebate": self.rebate,
+                    }
+                ],
+            }
+
+        def post(self, path: str, payload: Any = None) -> Any:
+            if path == "/api/mcn/customerSubProject/list":
+                self.calls.append((path, payload))
+                return [
+                    {
+                        "id": "sub-1",
+                        "subProjectCode": "ZXM001",
+                        "customerId": "opp-100",
+                        "parentProjectId": "parent-9",
+                    }
+                ]
+            return super().post(path, payload)
+
+    fake_ok = OrderAlignmentClient(rebate=0)
+    _use(monkeypatch, fake_ok)
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_create_order_from_quote",
+        {"quote_id": "q1", "sub_project_id": "sub-1", "confirm": True},
+    )
+    saved = next(p for p_path, p in fake_ok.calls if p_path == "/api/mcn/order/temporaryStorage")
+    assert saved["orderRo"]["subProjectId"] == "sub-1"
+    assert saved["orderRo"]["projectId"] == "parent-9"
+
+    fake_bad_rebate = OrderAlignmentClient(rebate=10)
+    _use(monkeypatch, fake_bad_rebate)
+    err = mcn.call_tool(
+        {"token": "t"},
+        "youli_create_order_from_quote",
+        {"quote_id": "q1", "commit_type": 1, "confirm": True},
+    )
+    assert "不允许填写返点/回扣金额" in err
+
+
+def test_publish_link_blocks_completed_service_item(monkeypatch) -> None:
+    class CompletedItemClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            self.calls.append((path, payload))
+            if path.endswith("/editOrderServiceGetDetail"):
+                return {"orderServiceItemVo": {"id": "s1", "flowStatus": 3, "status": 1}}
+            return True
+
+    fake = CompletedItemClient()
+    _use(monkeypatch, fake)
+    res = mcn.call_tool(
+        {"token": "t"},
+        "youli_update_publish_link",
+        {"service_item_id": "s1", "publish_link": "https://example.com/v1", "confirm": True},
+    )
+    assert "已完结" in res
+    assert all(p_path != "/api/mcn/order/service/item/edit" for p_path, _ in fake.calls)
+
+
+def test_sub_project_promotes_customer_id_and_contract_validates_protect_bounds(monkeypatch) -> None:
+    class SpecialClient(FakeClient):
+        def post(self, path: str, payload: Any = None) -> Any:
+            if path == "/api/mcn/customer/opportunity/list":
+                self.calls.append((path, payload))
+                return [
+                    {
+                        "id": "opp-99",
+                        "customerId": "cust-88",
+                        "name": "自动补全客户名",
+                        "employeeId": "u-1",
+                    }
+                ]
+            if path == "/api/mcn/account/quote/version/list":
+                self.calls.append((path, payload))
+                return [{"id": "v-special", "isSpecialCustomer": 1}]
+            return super().post(path, payload)
+
+    fake = SpecialClient()
+    _use(monkeypatch, fake)
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_create_sub_project",
+        {
+            "project_name": "误传客户ID纠正",
+            "customer_opportunity_id": "cust-88",
+            "confirm": True,
+        },
+    )
+    sub_payload = next(p for p_path, p in fake.calls if p_path == "/api/mcn/customerSubProject/add")
+    assert sub_payload["customerId"] == "opp-99"
+    assert sub_payload["customerName"] == "自动补全客户名"
+
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_create_contract",
+        {
+            "name": "特客保价合同",
+            "customer_opportunity_id": "opp-99",
+            "type": 2,
+            "issuing_office": "147372",
+            "effective_time": "2026-11-10",
+            "expiration_time": "2027-11-10",
+            "price_version_id": "v-special",
+            "confirm": True,
+        },
+    )
+    con_payload = next(p for p_path, p in fake.calls if p_path == "/api/mcn/contract/addContract")
+    assert con_payload["priceVersionBindList"][0]["protectType"] == 2
+
+    out_of_bounds = mcn.call_tool(
+        {"token": "t"},
+        "youli_create_contract",
+        {
+            "name": "越界合同",
+            "customer_opportunity_id": "opp-99",
+            "type": 1,
+            "issuing_office": "147372",
+            "effective_time": "2026-11-10",
+            "expiration_time": "2027-11-10",
+            "price_version_id": "v-special",
+            "price_end_time": "2027-12-31",
+            "confirm": True,
+        },
+    )
+    assert "超出有效日期范围" in out_of_bounds

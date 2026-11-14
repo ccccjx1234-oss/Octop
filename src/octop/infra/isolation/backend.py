@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import socket
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,8 @@ from deepagents.backends.protocol import (
 from octop.infra.isolation.codec import decode, encode
 from octop.infra.isolation.policy import IsolationPolicy, WorkerIdentity
 
+_stderr_logger = logging.getLogger(__name__)
+
 
 class UserWorkerBackend(SandboxBackendProtocol):
     # Deliberately expose no cwd/root_dir/_resolve_path. BackendWorkspace must
@@ -43,6 +47,7 @@ class UserWorkerBackend(SandboxBackendProtocol):
         self._lock = threading.Lock()
         self._process: subprocess.Popen[bytes] | None = None
         self._socket: socket.socket | None = None
+        self._stderr_tail: deque[str] = deque(maxlen=30)
 
     @property
     def id(self) -> str:
@@ -70,7 +75,13 @@ class UserWorkerBackend(SandboxBackendProtocol):
                     self._socket.settimeout(remaining)
                     chunk = self._socket.recv(65536)
                     if not chunk:
-                        raise PermissionError("isolated worker closed its transport")
+                        tail = " | ".join(list(self._stderr_tail)[-5:])
+                        msg = (
+                            f"isolated worker closed its transport: {tail}"
+                            if tail
+                            else "isolated worker closed its transport"
+                        )
+                        raise PermissionError(msg)
                     chunks.append(chunk)
                     size += len(chunk)
                     if size > 150 * 1024 * 1024:
@@ -98,16 +109,42 @@ class UserWorkerBackend(SandboxBackendProtocol):
         )
         parent, child = socket.socketpair()
         try:
+            self._stderr_tail.clear()
             self._process = subprocess.Popen(
                 argv,
                 stdin=child.fileno(),
                 stdout=child.fileno(),
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 env=self.policy.environment(self.identity),
                 cwd="/",
                 close_fds=True,
                 start_new_session=True,
             )
+            if self._process.stderr is not None:
+                uid = self.identity.user_id
+                tail = self._stderr_tail
+                pipe = self._process.stderr
+
+                def _drain_stderr() -> None:
+                    try:
+                        for raw_line in pipe:
+                            text = raw_line.decode("utf-8", errors="replace").rstrip()
+                            if text:
+                                tail.append(text)
+                                _stderr_logger.warning(
+                                    "isolated_worker stderr uid=%s: %s", uid, text
+                                )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    finally:
+                        with suppress(OSError):
+                            pipe.close()
+
+                threading.Thread(
+                    target=_drain_stderr,
+                    name=f"worker-stderr-{uid}",
+                    daemon=True,
+                ).start()
         except BaseException:
             parent.close()
             raise

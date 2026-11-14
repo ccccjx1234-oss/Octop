@@ -27,7 +27,9 @@ export interface AgentFormResources {
 export function useAgentFormResources(
   enabled: boolean,
   agentId?: string | null,
+  options?: { loadBackends?: boolean },
 ): AgentFormResources {
+  const loadBackends = options?.loadBackends !== false;
   const [models, setModels] = useState<ModelPickerOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [backends, setBackends] = useState<AgentStorageBackend[]>([]);
@@ -56,8 +58,9 @@ export function useAgentFormResources(
         if (!cancelled) setModelsLoading(false);
       });
 
-    // Storage backends are not in the Bridge tunnel allowlist.
-    if (isBridgeAgentId(agentId)) {
+    // Read-only backend fields need no host storage catalog. Bridge peers
+    // also cannot access it through the tunnel allowlist.
+    if (!loadBackends || isBridgeAgentId(agentId)) {
       setBackends([]);
       setBackendsLoading(false);
     } else {
@@ -82,7 +85,7 @@ export function useAgentFormResources(
     return () => {
       cancelled = true;
     };
-  }, [enabled, agentId]);
+  }, [enabled, agentId, loadBackends]);
 
   return { models, modelsLoading, backends, backendsLoading };
 }

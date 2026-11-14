@@ -151,9 +151,12 @@ class FeishuAdapter:
     def to_claims(identity: dict[str, Any]) -> dict[str, Any]:
         name = identity.get("name")
         email = identity.get("email") or identity.get("enterprise_email")
+        mobile = identity.get("mobile")
         claims: dict[str, Any] = {}
         if isinstance(name, str) and name.strip():
             claims["name"] = name.strip()
         if isinstance(email, str) and email.strip():
             claims["email"] = email.strip()
+        if isinstance(mobile, str) and mobile.strip():
+            claims["mobile"] = mobile.strip()
         return claims

@@ -53,6 +53,7 @@ describe("sidebarNav", () => {
       (section) => section.id,
     );
     expect(grouped.map((section) => section.id)).toEqual([
+      "workhub",
       "settings",
       "control",
       "admin",

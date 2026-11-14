@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -133,9 +134,10 @@ def _decode(server: OctopServer, token: str) -> dict[str, Any]:
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid token") from exc
 
 
-def resolve_user_from_token(server: OctopServer, token: str) -> User:
-    payload = _decode(server, token)
-    _require_active_session(server, payload)
+_INFLIGHT_REVALIDATIONS: dict[tuple[int, str], asyncio.Task[None]] = {}
+
+
+def _resolve_user_from_payload(server: OctopServer, payload: dict[str, Any]) -> User:
     try:
         purpose = token_purpose(payload)
     except InvalidToken as exc:
@@ -167,6 +169,18 @@ def resolve_user_from_token(server: OctopServer, token: str) -> User:
     return user
 
 
+def resolve_user_from_token(server: OctopServer, token: str) -> User:
+    payload = _decode(server, token)
+    _require_active_session(server, payload)
+    return _resolve_user_from_payload(server, payload)
+
+
+async def async_resolve_user_from_token(server: OctopServer, token: str) -> User:
+    payload = _decode(server, token)
+    await _async_require_active_session(server, payload)
+    return _resolve_user_from_payload(server, payload)
+
+
 def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> str | None:
     """Return a fresh access token when ``token`` is past the sliding renew threshold.
 
@@ -188,7 +202,7 @@ def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> st
     ttl = int(server.services.config.access_token_ttl_seconds)
     sid = payload.get("sid")
     if sid:
-        session = _require_active_session(server, payload)
+        session = _require_active_session(server, payload, revalidate=False)
         assert session is not None  # noqa: S101 - sid claim implies a session row
         remaining_abs = int(session.abs_expires_at) - int(time.time())
         if remaining_abs <= 0:
@@ -217,8 +231,7 @@ def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> st
     )
 
 
-def _require_active_session(server: OctopServer, payload: dict[str, Any]) -> Any | None:
-    """Reject revoked/expired Youli session tokens; other auth sources have no sid."""
+def _lookup_active_session(server: OctopServer, payload: dict[str, Any]) -> Any | None:
     sid = payload.get("sid")
     if not sid:
         return None
@@ -226,24 +239,55 @@ def _require_active_session(server: OctopServer, payload: dict[str, Any]) -> Any
     session = server.services.youli_session_repo.get_active(str(sid))
     if session is None or session.user_id != int(payload["sub"]):
         raise OctopError(ErrorCode.AUTH_FAILED, "session revoked")
-    _revalidate_youli_session(server, session)
     from octop.infra.auth.youli.context import set_current_youli_sid
 
     set_current_youli_sid(str(sid))
     return session
 
 
-def _revalidate_youli_session(server: OctopServer, session: Any) -> None:
-    """Re-check the delegated business token, throttled per sid."""
+def _require_active_session(
+    server: OctopServer, payload: dict[str, Any], *, revalidate: bool = True
+) -> Any | None:
+    """Reject revoked/expired Youli session tokens; other auth sources have no sid."""
+    session = _lookup_active_session(server, payload)
+    if session is not None and revalidate:
+        _revalidate_youli_session(server, session)
+    return session
+
+
+async def _async_require_active_session(
+    server: OctopServer, payload: dict[str, Any], *, revalidate: bool = True
+) -> Any | None:
+    """Non-blocking variant of ``_require_active_session`` for async middleware."""
+    session = _lookup_active_session(server, payload)
+    if session is not None and revalidate:
+        await _async_revalidate_youli_session(server, session)
+    return session
+
+
+def _need_revalidation(server: OctopServer, session: Any) -> Any | None:
     assert server.services is not None
     cfg = server.services.config.youli
+    if not cfg.enabled or not cfg.mdm_base_url:
+        return None
     interval = max(1, int(cfg.revalidate_seconds))
     now = time.time()
     with _YOULI_REVALIDATE_LOCK:
+        if len(_YOULI_REVALIDATED_AT) > 4096:
+            _YOULI_REVALIDATED_AT.clear()
         last = _YOULI_REVALIDATED_AT.get(session.sid, 0.0)
         if now - last < interval:
-            return
+            return None
         _YOULI_REVALIDATED_AT[session.sid] = now
+    return cfg
+
+
+def _revalidate_youli_session(server: OctopServer, session: Any) -> None:
+    """Re-check the delegated business token, throttled per sid."""
+    cfg = _need_revalidation(server, session)
+    if cfg is None:
+        return
+    assert server.services is not None
     from octop.infra.auth.youli.service import revalidate_business_session
 
     try:
@@ -252,6 +296,44 @@ def _revalidate_youli_session(server: OctopServer, session: Any) -> None:
         with _YOULI_REVALIDATE_LOCK:
             _YOULI_REVALIDATED_AT.pop(session.sid, None)
         raise
+
+
+async def _async_revalidate_youli_session(server: OctopServer, session: Any) -> None:
+    """Offload blocking MDM verify off the event loop and coalesce concurrent checks per sid."""
+    assert server.services is not None
+    cfg = server.services.config.youli
+    if not cfg.enabled or not cfg.mdm_base_url:
+        return
+    loop = asyncio.get_running_loop()
+    inflight_key = (id(loop), str(session.sid))
+    existing = _INFLIGHT_REVALIDATIONS.get(inflight_key)
+    if existing is not None and not existing.done():
+        await asyncio.shield(existing)
+        return
+    cfg = _need_revalidation(server, session)
+    if cfg is None:
+        return
+    from octop.infra.auth.youli.service import revalidate_business_session
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(
+                revalidate_business_session,
+                services=server.services,
+                cfg=cfg,
+                session=session,
+            )
+        except Exception:
+            with _YOULI_REVALIDATE_LOCK:
+                _YOULI_REVALIDATED_AT.pop(session.sid, None)
+            raise
+
+    task = loop.create_task(_run())
+    _INFLIGHT_REVALIDATIONS[inflight_key] = task
+    try:
+        await asyncio.shield(task)
+    finally:
+        _INFLIGHT_REVALIDATIONS.pop(inflight_key, None)
 
 
 def authenticate_request(request: Request, server: OctopServer) -> User:
@@ -264,6 +346,31 @@ def authenticate_request(request: Request, server: OctopServer) -> User:
     return resolve_user_from_token(server, raw)
 
 
+async def async_authenticate_request(request: Request, server: OctopServer) -> User:
+    cached = getattr(request.state, "octop_user", None)
+    if cached is not None:
+        cached_sid = getattr(request.state, "octop_youli_sid", None)
+        if cached_sid:
+            from octop.infra.auth.youli.context import set_current_youli_sid
+
+            set_current_youli_sid(str(cached_sid))
+        return cast("User", cached)
+    raw = extract_raw_token(
+        authorization=request.headers.get("authorization"),
+        access_token=request.query_params.get("access_token"),
+    )
+    if not raw:
+        raise OctopError(ErrorCode.AUTH_FAILED, "missing credentials")
+    user = await async_resolve_user_from_token(server, raw)
+    from octop.infra.auth.youli.context import current_youli_sid
+
+    request.state.octop_user = user
+    sid = current_youli_sid()
+    if sid:
+        request.state.octop_youli_sid = sid
+    return user
+
+
 async def current_user(
     request: Request,
     server: OctopServer = Depends(get_server),
@@ -272,11 +379,16 @@ async def current_user(
 ) -> User:
     cached = getattr(request.state, "octop_user", None)
     if cached is not None:
+        cached_sid = getattr(request.state, "octop_youli_sid", None)
+        if cached_sid:
+            from octop.infra.auth.youli.context import set_current_youli_sid
+
+            set_current_youli_sid(str(cached_sid))
         return cast("User", cached)
     raw = extract_raw_token(authorization=authorization, access_token=access_token)
     if not raw:
         raise OctopError(ErrorCode.AUTH_FAILED, "missing credentials")
-    return resolve_user_from_token(server, raw)
+    return await async_resolve_user_from_token(server, raw)
 
 
 def require_permission(key: str) -> Callable[..., Awaitable[User]]:

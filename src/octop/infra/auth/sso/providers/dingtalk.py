@@ -131,8 +131,11 @@ class DingTalkAdapter:
         claims: dict[str, Any] = {}
         nick = identity.get("nick")
         email = identity.get("email")
+        mobile = identity.get("mobile")
         if isinstance(nick, str) and nick.strip():
             claims["name"] = nick.strip()
         if isinstance(email, str) and email.strip():
             claims["email"] = email.strip()
+        if isinstance(mobile, str) and mobile.strip():
+            claims["mobile"] = mobile.strip()
         return claims

@@ -29,7 +29,7 @@ interface AgentBackendFieldsProps {
   /** ``create`` fills empty root_dir with the filesystem default; ``edit`` leaves existing values. */
   rootDirMode?: "create" | "edit";
   disabled?: boolean;
-  /** Skip local ``/filesystem/defaults`` (peer experts have no host tree here). */
+  /** Skip host defaults and directory browsing for read-only or peer backends. */
   skipHostFilesystem?: boolean;
   onAddPathMapping: () => void;
   onRemovePathMapping: (index: number) => void;
@@ -246,7 +246,11 @@ export default function AgentBackendFields({
                 : undefined
             }
           >
-            <RootDirSelect treeRoots={treeRoots} disabled={pathLocked} />
+            {skipHostFilesystem ? (
+              <Input disabled />
+            ) : (
+              <RootDirSelect treeRoots={treeRoots} disabled={pathLocked} />
+            )}
           </Form.Item>
           <div style={{ margin: "-8px 0 12px" }}>
             {rootDirMode === "edit" ? (

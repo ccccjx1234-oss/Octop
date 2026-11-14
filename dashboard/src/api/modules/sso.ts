@@ -152,6 +152,14 @@ export const ssoApi = {
       method: "POST",
     });
   },
+  importOauthProviderFromChannel(kind: string): Promise<OauthAppConfig> {
+    return request<OauthAppConfig>(
+      `/auth/oauth/providers/${kind}/import-channel`,
+      {
+        method: "POST",
+      },
+    );
+  },
   /** @deprecated Prefer getOauthProvider("feishu") */
   getFeishuConfig(): Promise<OauthAppConfig> {
     return ssoApi.getOauthProvider("feishu");

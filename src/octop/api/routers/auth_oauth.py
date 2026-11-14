@@ -253,3 +253,23 @@ async def test_oauth_provider(
         )
     except ValueError as exc:
         raise _bad_request(exc) from exc
+
+
+@router.post(
+    "/oauth/providers/{kind}/import-channel",
+    summary="Import OAuth credentials from configured gateway channel",
+)
+async def import_oauth_provider_from_channel(
+    kind: SsoKind,
+    request: Request,
+    user: User = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> dict[str, Any]:
+    """Copy app credentials from a configured Feishu/DingTalk channel into SSO."""
+    _require_sso_kind(user, kind)
+    try:
+        return _service(server).import_from_channel_for_kind(
+            kind, public_base=_public_base(request)
+        )
+    except ValueError as exc:
+        raise _bad_request(exc) from exc

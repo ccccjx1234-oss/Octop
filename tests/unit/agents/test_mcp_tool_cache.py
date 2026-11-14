@@ -79,6 +79,7 @@ async def test_get_or_load_caches_and_reuses() -> None:
     from octop.infra.agents.manager import AgentManager
 
     mgr = object.__new__(AgentManager)
+    mgr._user_runtimes = None
     mgr._mcp_tool_cache = {}
     mgr._mcp_tool_cache_locks = {}
     mgr._mcp_tool_cache_guard = asyncio.Lock()
@@ -108,6 +109,7 @@ async def test_get_or_load_misses_on_fingerprint_change() -> None:
     from octop.infra.agents.manager import AgentManager
 
     mgr = object.__new__(AgentManager)
+    mgr._user_runtimes = None
     mgr._mcp_tool_cache = {}
     mgr._mcp_tool_cache_locks = {}
     mgr._mcp_tool_cache_guard = asyncio.Lock()
@@ -143,6 +145,7 @@ async def test_prepare_chat_mcp_injects_custom_from_cache() -> None:
     from octop.infra.agents.manager import AgentManager
 
     mgr = object.__new__(AgentManager)
+    mgr._user_runtimes = None
     mgr._mcp_tool_cache = {}
     mgr._mcp_tool_cache_locks = {}
     mgr._mcp_tool_cache_guard = asyncio.Lock()
@@ -227,6 +230,7 @@ async def test_prepare_chat_mcp_attaches_gateway_tools_without_reload() -> None:
     agent.inject_mcp_tools = MagicMock(side_effect=_inject)
 
     mgr = object.__new__(AgentManager)
+    mgr._user_runtimes = None
     mgr._repos = MagicMock()
     mgr._repos.connector_repo.list_visible.return_value = [inst]
     mgr._connector_svc = MagicMock()

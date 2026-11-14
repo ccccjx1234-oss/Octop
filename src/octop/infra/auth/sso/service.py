@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
 import time
@@ -210,6 +211,56 @@ class SsoService:
         if provider is None or not adapter.is_configured(provider):
             raise ValueError("SSO is misconfigured")
         return adapter.test_connection(provider)
+
+    def import_from_channel_for_kind(
+        self, kind: str, *, public_base: str
+    ) -> dict[str, Any]:
+        """Populate Feishu/DingTalk SSO credentials from an existing gateway channel."""
+        if kind not in {"feishu", "dingtalk"}:
+            raise ValueError("Channel import only supports feishu or dingtalk")
+        rows = [
+            row
+            for row in self._services.channel_repo.list_all(include_disabled=True)
+            if row.kind == kind
+        ]
+        rows.sort(key=lambda row: (0 if row.enabled else 1, -row.updated_at))
+        selected: tuple[str, str] | None = None
+        for row in rows:
+            try:
+                cfg = json.loads(row.config_json or "{}")
+            except ValueError:
+                continue
+            if not isinstance(cfg, Mapping):
+                continue
+            client_id = str(
+                cfg.get("app_id") if kind == "feishu" else cfg.get("client_id") or ""
+            ).strip()
+            if not client_id:
+                client_id = str(cfg.get("client_id") or cfg.get("app_id") or "").strip()
+            client_secret = str(
+                cfg.get("app_secret") if kind == "feishu" else cfg.get("client_secret") or ""
+            ).strip()
+            if not client_secret:
+                client_secret = str(
+                    cfg.get("client_secret")
+                    or cfg.get("app_secret")
+                    or cfg.get("secret")
+                    or ""
+                ).strip()
+            if client_id and client_secret:
+                selected = (client_id, client_secret)
+                break
+        if selected is None:
+            raise ValueError(f"No configured {kind} channel credentials found")
+        return self.put_config_for_kind(
+            kind,
+            {
+                "enabled": True,
+                "client_id": selected[0],
+                "client_secret": selected[1],
+            },
+            public_base=public_base,
+        )
 
     def start_login(self, *, redirect_after: str | None, public_base: str) -> dict[str, str]:
         return self.start_login_for_kind(

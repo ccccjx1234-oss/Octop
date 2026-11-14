@@ -123,6 +123,7 @@ interface MessageListProps {
 
 interface GroupRenderContext {
   agentId?: string | null;
+  threadId?: string | null;
   composerLookups?: ComposerTagLookups;
   isStreaming?: boolean;
   liveSpeakers?: ReadonlyArray<string>;
@@ -235,6 +236,7 @@ function renderMessageGroup(
       <AssistantTurnView
         messages={group.messages}
         agentId={ctx.agentId}
+        threadId={ctx.threadId}
         isTurnInProgress={isTurnInProgress}
         afterLatestUser={afterLatestUser}
         liveSpeakers={ctx.liveSpeakers}
@@ -754,6 +756,7 @@ export default function MessageList(props: MessageListProps) {
   const groupContext = useMemo<GroupRenderContext>(
     () => ({
       agentId,
+      threadId: sessionKey ?? null,
       composerLookups,
       isStreaming,
       liveSpeakers,
@@ -779,6 +782,7 @@ export default function MessageList(props: MessageListProps) {
     }),
     [
       agentId,
+      sessionKey,
       composerLookups,
       isStreaming,
       liveSpeakers,

@@ -18,15 +18,18 @@ from fastapi.responses import JSONResponse
 
 from octop.api.deps import (
     ACCESS_TOKEN_RESPONSE_HEADER,
+    async_authenticate_request,
     authenticate_request,
     extract_raw_token,
     is_jwt_exempt_request,
     maybe_sliding_renew_token,
 )
+from octop.infra.auth.youli.context import current_youli_sid, set_current_youli_sid
 from octop.infra.errors import OctopError
 from octop.infra.utils.locale import resolve_request_locale
 
 _INSTALL_ATTR = "_octop_jwt_auth_installed"
+_ORIG_AUTHENTICATE = authenticate_request
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +52,17 @@ def install(app: Any, server: Any) -> None:
             access_token=request.query_params.get("access_token"),
         )
         try:
-            request.state.octop_user = authenticate_request(request, server)
+            if getattr(request.state, "octop_user", None) is not None:
+                cached_sid = getattr(request.state, "octop_youli_sid", None)
+                if cached_sid:
+                    set_current_youli_sid(str(cached_sid))
+            elif authenticate_request is not _ORIG_AUTHENTICATE:
+                request.state.octop_user = authenticate_request(request, server)
+                sid = current_youli_sid()
+                if sid:
+                    request.state.octop_youli_sid = sid
+            else:
+                request.state.octop_user = await async_authenticate_request(request, server)
         except OctopError as exc:
             # Middleware returns directly (skips FastAPI exception handlers).
             if exc.status >= 500:
