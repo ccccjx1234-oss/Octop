@@ -54,4 +54,35 @@ describe("finalizeStreamingMessages stream-error promotion", () => {
     expect(errors[0]?.content).toContain("鉴权失败");
     expect(state.isStreaming).toBe(false);
   });
+
+  it("keeps a later answer separate from an earlier resume error", () => {
+    ingestHarnessChunk(SESSION, {
+      type: "error",
+      message: "HITL resume failed (502)",
+    });
+    ingestHarnessChunk(SESSION, {
+      type: "token",
+      node: "agent",
+      content:
+        "报价单已经创建完成。\n\n| 账号 | 金额 |\n| --- | --- |\n| A | 7500 |",
+    });
+    ingestHarnessChunk(SESSION, {
+      type: "token",
+      node: "agent",
+      content: "\n\n合计 7500 元。",
+    });
+    ingestHarnessChunk(SESSION, { type: "done" });
+
+    const messages = getSnapshot(SESSION).messages;
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({
+      status: "error",
+      content: "HITL resume failed (502)",
+    });
+    expect(messages[1]).toMatchObject({
+      status: "done",
+      content:
+        "报价单已经创建完成。\n\n| 账号 | 金额 |\n| --- | --- |\n| A | 7500 |\n\n合计 7500 元。",
+    });
+  });
 });

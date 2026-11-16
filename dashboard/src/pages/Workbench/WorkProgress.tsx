@@ -208,7 +208,9 @@ export default function WorkProgressPage() {
         message.success(res.detail || `已同步 ${res.synced} 项 ERP 数据`);
         await loadData(roleKey, range);
       } else {
-        message.warning(res.detail || "当前未绑定 MCN 会话，展示本地工作台数据");
+        message.warning(
+          res.detail || "当前未绑定 MCN 会话，展示本地工作台数据",
+        );
         await loadData(roleKey, range);
       }
     } catch (err) {
@@ -297,8 +299,8 @@ export default function WorkProgressPage() {
                     {range === "today"
                       ? "今日已交付 / 完成"
                       : range === "month"
-                        ? "本月已交付 / 完成"
-                        : "本周已交付 / 完成"}
+                      ? "本月已交付 / 完成"
+                      : "本周已交付 / 完成"}
                   </span>
                   <span className={styles.kpiValue}>
                     {data.kpis.delivered_this_week}
@@ -334,7 +336,9 @@ export default function WorkProgressPage() {
                       <button
                         key={tab.key}
                         type="button"
-                        className={`${styles.rangeTab} ${range === tab.key ? styles.rangeTabActive : ""}`}
+                        className={`${styles.rangeTab} ${
+                          range === tab.key ? styles.rangeTabActive : ""
+                        }`}
                         onClick={() => setRange(tab.key)}
                       >
                         {tab.label}
@@ -347,7 +351,8 @@ export default function WorkProgressPage() {
                     icon={<Plus size={14} />}
                     onClick={() => {
                       createForm.setFieldsValue({
-                        module_key: data.modules[0]?.module_key ?? "project_progress",
+                        module_key:
+                          data.modules[0]?.module_key ?? "project_progress",
                         target_name: "",
                         title: "",
                         due_label: "本周内",
@@ -376,7 +381,8 @@ export default function WorkProgressPage() {
 
                     {mod.items.length === 0 ? (
                       <div className={styles.emptyModuleState}>
-                        当前暂无任务，可点击右上角新建，或授权经贝账号后自动拉取 ERP 业务数据
+                        当前暂无任务，可点击右上角新建，或授权经贝账号后自动拉取
+                        ERP 业务数据
                       </div>
                     ) : (
                       <div className={styles.taskList}>
@@ -390,8 +396,8 @@ export default function WorkProgressPage() {
                             item.source === "chat"
                               ? `${styles.sourcePill} ${styles.sourcePillChat}`
                               : item.readonly
-                                ? `${styles.sourcePill} ${styles.sourcePillLive}`
-                                : styles.sourcePill;
+                              ? `${styles.sourcePill} ${styles.sourcePillLive}`
+                              : styles.sourcePill;
                           return (
                             <button
                               key={`${item.id}-${item.external_ref}`}
@@ -405,12 +411,16 @@ export default function WorkProgressPage() {
                                     isDone
                                       ? `${styles.statusRing} ${styles.statusRingDone}`
                                       : isActive
-                                        ? `${styles.statusRing} ${styles.statusRingActive}`
-                                        : styles.statusRing
+                                      ? `${styles.statusRing} ${styles.statusRingActive}`
+                                      : styles.statusRing
                                   }
                                 >
                                   {isDone ? (
-                                    <Check size={9} color="#fff" strokeWidth={3} />
+                                    <Check
+                                      size={9}
+                                      color="#fff"
+                                      strokeWidth={3}
+                                    />
                                   ) : isActive ? (
                                     <span className={styles.statusDot} />
                                   ) : null}
@@ -486,7 +496,14 @@ export default function WorkProgressPage() {
         }
       >
         {inspectingTask && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              fontSize: 13,
+            }}
+          >
             <div>
               <strong>来源：</strong>
               {inspectingTask.source_label || inspectingTask.source}
@@ -503,27 +520,31 @@ export default function WorkProgressPage() {
               <strong>当前状态：</strong>
               {statusLabel(inspectingTask.status)}（{inspectingTask.progress}%）
             </div>
-            {inspectingTask.meta && Object.keys(inspectingTask.meta).length > 0 && (
-              <div
-                style={{
-                  background: "#f8fafc",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                }}
-              >
-                {Object.entries(inspectingTask.meta)
-                  .filter(([, val]) => val !== null && val !== undefined && val !== "")
-                  .map(([k, val]) => (
-                    <div key={k}>
-                      <span style={{ color: "#6b7280" }}>{k}：</span>
-                      <span>{String(val)}</span>
-                    </div>
-                  ))}
-              </div>
-            )}
+            {inspectingTask.meta &&
+              Object.keys(inspectingTask.meta).length > 0 && (
+                <div
+                  style={{
+                    background: "#f8fafc",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  {Object.entries(inspectingTask.meta)
+                    .filter(
+                      ([, val]) =>
+                        val !== null && val !== undefined && val !== "",
+                    )
+                    .map(([k, val]) => (
+                      <div key={k}>
+                        <span style={{ color: "#6b7280" }}>{k}：</span>
+                        <span>{String(val)}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
           </div>
         )}
       </Modal>

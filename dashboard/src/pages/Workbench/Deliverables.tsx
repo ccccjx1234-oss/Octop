@@ -230,7 +230,14 @@ export default function DeliverablesPage() {
 
       <section className={styles.panelCard}>
         <div className={styles.filterBar}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
             <Segmented
               value={filterType}
               onChange={(val) => setFilterType(String(val))}
@@ -308,13 +315,18 @@ export default function DeliverablesPage() {
                   item.source === "chat"
                     ? `${styles.sourcePill} ${styles.sourcePillChat}`
                     : isReadonly
-                      ? `${styles.sourcePill} ${styles.sourcePillLive}`
-                      : styles.sourcePill;
+                    ? `${styles.sourcePill} ${styles.sourcePillLive}`
+                    : styles.sourcePill;
                 return (
-                  <article key={`${item.id}-${item.source_message_id}`} className={styles.delivCard}>
+                  <article
+                    key={`${item.id}-${item.source_message_id}`}
+                    className={styles.delivCard}
+                  >
                     <div className={styles.delivCardTop}>
                       <div className={styles.delivCardHeadLeft}>
-                        <div className={`${styles.typeIconBox} ${tMeta.badgeClass}`}>
+                        <div
+                          className={`${styles.typeIconBox} ${tMeta.badgeClass}`}
+                        >
                           {renderTypeIcon(item.deliverable_type)}
                         </div>
                         <div style={{ minWidth: 0 }}>
@@ -343,7 +355,9 @@ export default function DeliverablesPage() {
                       </div>
 
                       <div className={styles.statusActions}>
-                        <span className={`${styles.reviewBadge} ${rMeta.className}`}>
+                        <span
+                          className={`${styles.reviewBadge} ${rMeta.className}`}
+                        >
                           {rMeta.label}
                         </span>
                         <Dropdown
@@ -466,10 +480,19 @@ export default function DeliverablesPage() {
         }
       >
         {inspectingItem && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              fontSize: 13,
+            }}
+          >
             <div>
               <strong>来源：</strong>
-              {inspectingItem.source_label || inspectingItem.source || "外部系统"}
+              {inspectingItem.source_label ||
+                inspectingItem.source ||
+                "外部系统"}
             </div>
             <div>
               <strong>交付对象：</strong>
@@ -554,7 +577,10 @@ export default function DeliverablesPage() {
             label="成果正文 / 摘要"
             rules={[{ required: true, message: "请输入交付成果内容" }]}
           >
-            <Input.TextArea rows={5} placeholder="填写可直接交付的正文内容..." />
+            <Input.TextArea
+              rows={5}
+              placeholder="填写可直接交付的正文内容..."
+            />
           </Form.Item>
         </Form>
       </Modal>

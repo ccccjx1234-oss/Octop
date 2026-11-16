@@ -5,6 +5,9 @@ export {
   setAuthToken,
   getAuthToken,
   clearAuthToken,
+  consumeAuthNotice,
+  triggerUnauthorizedRedirect,
+  UNAUTHORIZED_EVENT,
   setRememberLoginPreference,
   getRememberLoginPreference,
   isSessionOnlyAuth,
@@ -12,6 +15,7 @@ export {
   clearSetupRequired,
   isSetupRequiredKnown,
   SetupRequiredError,
+  type AuthNotice,
 } from "./request";
 
 export { getApiUrl, getWsUrl } from "./config";

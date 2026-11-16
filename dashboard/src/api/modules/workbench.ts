@@ -97,7 +97,12 @@ async function workbenchRequest<T>(
       timedOut || isAbortError(err)
         ? new Error("请求超时，请检查网络或稍后重试")
         : err;
-    if (retries > 0 && shouldRetryWorkbenchRequest(normalizedErr)) {
+    const retryable = shouldRetryWorkbenchRequest(normalizedErr);
+    const method = (options?.method || "GET").toUpperCase();
+    if (retryable && method !== "GET" && method !== "HEAD") {
+      throw new Error("操作结果暂不确定，请刷新核对后再决定是否重试");
+    }
+    if (retries > 0 && retryable) {
       await new Promise((resolve) => setTimeout(resolve, 350));
       return workbenchRequest<T>(path, options, retries - 1);
     }
@@ -229,7 +234,9 @@ export interface WorkbenchDashboardResponse {
 }
 
 function progressPath(role = "customer_service", range = "week"): string {
-  return `/workbench/progress?role=${encodeURIComponent(role)}&range=${encodeURIComponent(range)}`;
+  return `/workbench/progress?role=${encodeURIComponent(
+    role,
+  )}&range=${encodeURIComponent(range)}`;
 }
 
 function deliverablesPath(params?: {
@@ -246,7 +253,9 @@ function deliverablesPath(params?: {
 }
 
 function dashboardPath(role = "business", range = "7d"): string {
-  return `/workbench/dashboard?role=${encodeURIComponent(role)}&range=${encodeURIComponent(range)}`;
+  return `/workbench/dashboard?role=${encodeURIComponent(
+    role,
+  )}&range=${encodeURIComponent(range)}`;
 }
 
 export const workbenchApi = {
@@ -259,7 +268,10 @@ export const workbenchApi = {
     options?: { signal?: AbortSignal },
   ) => {
     const path = progressPath(role, range);
-    const res = await workbenchRequest<WorkbenchProgressResponse>(path, options);
+    const res = await workbenchRequest<WorkbenchProgressResponse>(
+      path,
+      options,
+    );
     writeCached(path, res);
     return res;
   },
@@ -418,13 +430,12 @@ export const workbenchApi = {
     goalId: number,
     body: { current_value?: number; target_value?: number },
   ) => {
-    const res = await workbenchRequest<WorkbenchDashboardResponse["goals"][number]>(
-      `/workbench/goals/${goalId}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      },
-    );
+    const res = await workbenchRequest<
+      WorkbenchDashboardResponse["goals"][number]
+    >(`/workbench/goals/${goalId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
     invalidateWorkbenchCache();
     return res;
   },

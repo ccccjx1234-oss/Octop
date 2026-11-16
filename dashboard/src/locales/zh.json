@@ -1768,11 +1768,108 @@
         "wait": "等待",
         "element_ref": "目标元素",
         "full_page": "整页",
-        "tab_id": "标签页"
+        "tab_id": "标签页",
+        "name": "名称",
+        "product_id": "产品 ID",
+        "customer_id": "客户 ID",
+        "customer_name": "客户名称",
+        "customer_opportunity_id": "客户商机 ID",
+        "opportunity_id": "商机 ID",
+        "opportunity_name": "商机名称",
+        "contract_id": "合同 ID",
+        "price_version_id": "价格版本 ID",
+        "coupon_version_id": "优惠政策版本 ID",
+        "expected_amount": "试算应付金额",
+        "account_specs": "账号规格明细",
+        "quote_id": "报价单 ID",
+        "project_id": "父项目 ID",
+        "sub_project_id": "子项目 ID",
+        "project_name": "项目名称",
+        "parent_project_id": "父项目 ID",
+        "project_type": "项目类型",
+        "main_platform": "主平台",
+        "project_budget": "项目预算",
+        "project_leader_ids": "项目负责人",
+        "commit_type": "下单类型",
+        "order_type": "报价类型",
+        "service_item_id": "服务项目 ID",
+        "publish_link": "发布链接",
+        "publish_time": "发布时间",
+        "publish_text": "发布文案",
+        "platform_order_id": "平台订单 ID",
+        "mode": "导出方式",
+        "export_template_id": "导出模板 ID",
+        "type": "合同类型",
+        "issuing_office": "签约主体",
+        "effective_time": "开始日期",
+        "expiration_time": "截止日期",
+        "signing_date": "签约日期",
+        "scale_amount": "签约规模（万元）",
+        "enable_type": "启用方式",
+        "version": "版本号",
+        "is_default": "是否默认",
+        "remark": "备注",
+        "payload": "提交明细"
       },
       "bool": {
         "true": "是",
         "false": "否"
+      },
+      "mcn": {
+        "tools": {
+          "youli_save_quote": "保存报价单",
+          "youli_create_package_quote": "创建拉包报价单",
+          "youli_create_order_from_quote": "从报价单创建销售订单",
+          "youli_create_combined_order": "创建组合销售订单",
+          "youli_update_publish_link": "填写服务项目发布链接",
+          "youli_export_delivery": "导出交付数据",
+          "youli_create_project": "创建客户父项目",
+          "youli_create_sub_project": "创建客户子项目",
+          "youli_create_coupon_version": "创建优惠政策版本",
+          "youli_create_contract": "创建销售合同"
+        },
+        "commitTypes": {
+          "1": "水下单",
+          "2": "平台单-客户下单",
+          "3": "平台单-代客下单",
+          "4": "佣金单"
+        },
+        "contractTypes": {
+          "1": "单次合同",
+          "2": "季框合同",
+          "3": "半年框合同",
+          "4": "年框合同"
+        },
+        "exportModes": {
+          "project": "按项目",
+          "link": "按发布链接"
+        },
+        "platforms": {
+          "1": "抖音",
+          "2": "快手",
+          "3": "小红书",
+          "4": "微博",
+          "5": "微信",
+          "6": "今日头条",
+          "7": "B站"
+        },
+        "enableTypes": {
+          "1": "临时启用",
+          "2": "正式启用"
+        },
+        "summaries": {
+          "createPackageQuote": "创建拉包报价「{{name}}」",
+          "createPackageQuoteWithAmount": "创建拉包报价「{{name}}」，试算应付 ¥{{amount}}",
+          "createOrder": "基于报价单 {{quoteId}} 创建销售订单",
+          "createCombinedOrder": "基于报价单 {{quoteId}} 拆分组合销售订单",
+          "updatePublishLink": "更新发布链接：{{link}}",
+          "exportDeliveryProject": "导出项目「{{project}}」的交付数据",
+          "exportDeliveryMode": "按{{mode}}导出交付数据",
+          "createProject": "创建客户父项目「{{name}}」",
+          "createSubProject": "创建客户子项目「{{name}}」",
+          "createCouponVersion": "创建优惠政策版本「{{name}}」",
+          "createContract": "创建销售合同「{{name}}」"
+        }
       },
       "browser": {
         "actions": {
@@ -1827,6 +1924,10 @@
     },
     "ask": {
       "title": "先问几个问题",
+      "filterPlaceholder": "搜索选项…",
+      "optionCount": "共 {{total}} 项",
+      "filteredOptionCount": "{{matched}} / {{total}} 项",
+      "noMatchingOptions": "没有匹配的选项，可使用下方“其他”输入",
       "other": "其他…",
       "freeTextPlaceholder": "输入你的答案",
       "next": "下一个",
@@ -6060,6 +6161,9 @@
     "or": "或",
     "oidcWith": "使用 {{name}} 继续",
     "oidcStartFailed": "无法启动单点登录",
+    "sessionRevokedTitle": "登录状态已失效",
+    "sessionReplaced": "当前账号已在其他设备或窗口登录，当前会话已下线，请重新登录。",
+    "sessionExpired": "当前登录会话已过期或失效，请重新登录。",
     "ldapHint": "使用{{name}}账号登录",
     "oidcError": {
       "denied": "已取消单点登录。",

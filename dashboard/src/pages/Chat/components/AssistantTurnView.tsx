@@ -31,7 +31,7 @@ import { collectTurnKnowledgeCitations } from "../../../utils/collectTurnKnowled
 import { KnowledgeCitationsStrip } from "./KnowledgeCitationsStrip";
 import { messageSpeakerId } from "../utils/messageGrouping";
 import { isAssistantProcessLive } from "./liveAssistantTurn";
-import ChatDeliveryCard from "./ChatDeliveryCard";
+import ChatDeliveryCard, { inferDeliveryDefaults } from "./ChatDeliveryCard";
 import styles from "../index.module.less";
 
 interface AssistantTurnViewProps {
@@ -216,6 +216,13 @@ export default function AssistantTurnView({
   const showOpenBrowser = usedBrowser && !!onOpenBrowser;
   const usedFileTool = turnUsedFileTool(fullSplit);
   const showEditFile = usedFileTool && !!onEditFile;
+  const turnToolNames = useMemo(
+    () =>
+      (fullSplit.tools ?? [])
+        .map((msg) => msg.toolData?.name ?? "")
+        .filter(Boolean),
+    [fullSplit.tools],
+  );
   const turnFileCount = useMemo(() => {
     const fromPaths = collectChatFilePaths(messages, agentId).length;
     if (fromPaths > 0) return fromPaths;
@@ -334,11 +341,17 @@ export default function AssistantTurnView({
           />
           {!turnStreaming &&
             !hasPendingHitl &&
-            trailingSplit.answerMessage.status !== "error" && (
+            trailingSplit.answerMessage.status !== "error" &&
+            inferDeliveryDefaults(
+              toAnswerOnlyMessage(trailingSplit.answerMessage).content,
+              { toolNames: turnToolNames },
+            ).shouldRender && (
               <div className={styles.turnInset}>
                 <ChatDeliveryCard
+                  key={trailingSplit.answerMessage.id}
                   threadId={threadId}
                   messageId={trailingSplit.answerMessage.id}
+                  toolNames={turnToolNames}
                   answerText={
                     toAnswerOnlyMessage(trailingSplit.answerMessage).content
                   }

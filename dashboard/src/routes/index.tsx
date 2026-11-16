@@ -16,7 +16,9 @@ const ACPPage = lazy(() => import("../pages/Agent/ACP"));
 const TokenUsagePage = lazy(() => import("../pages/Control/TokenUsage"));
 const WorkProgressPage = lazy(() => import("../pages/Workbench/WorkProgress"));
 const DeliverablesPage = lazy(() => import("../pages/Workbench/Deliverables"));
-const DataDashboardPage = lazy(() => import("../pages/Workbench/DataDashboard"));
+const DataDashboardPage = lazy(
+  () => import("../pages/Workbench/DataDashboard"),
+);
 
 // Lazy-loaded pages — Control
 const RemoteDesktopPage = lazy(() => import("../pages/Control/RemoteDesktop"));

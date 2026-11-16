@@ -238,7 +238,15 @@ def _lookup_active_session(server: OctopServer, payload: dict[str, Any]) -> Any 
     assert server.services is not None
     session = server.services.youli_session_repo.get_active(str(sid))
     if session is None or session.user_id != int(payload["sub"]):
-        raise OctopError(ErrorCode.AUTH_FAILED, "session revoked")
+        from octop.infra.auth.youli.service import resolve_youli_revocation_reason
+
+        reason = resolve_youli_revocation_reason(
+            server.services.youli_session_repo,
+            sid=str(sid),
+            user_id=int(payload["sub"]),
+        )
+        details = {"reason": reason} if reason else {}
+        raise OctopError(ErrorCode.AUTH_FAILED, "session revoked", details=details)
     from octop.infra.auth.youli.context import set_current_youli_sid
 
     set_current_youli_sid(str(sid))

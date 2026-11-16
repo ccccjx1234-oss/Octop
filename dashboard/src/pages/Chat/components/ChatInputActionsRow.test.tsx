@@ -56,6 +56,25 @@ const baseProps = {
 };
 
 describe("ChatInputActionsRow plus menu", () => {
+  it("waits for resources and keeps menu rows stable until closed", async () => {
+    const renderRow = (loading: boolean, modelList: ResolvedModel[]) => (
+      <MemoryRouter>
+        <ChatInputActionsRow
+          {...baseProps}
+          composerMenuLoading={loading}
+          availableModels={modelList}
+        />
+      </MemoryRouter>
+    );
+    const { rerender } = render(renderRow(true, models));
+    fireEvent.click(screen.getByTestId("composer-plus"));
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.queryByText("Model")).not.toBeInTheDocument();
+    rerender(renderRow(false, models));
+    expect(await screen.findByText("Model")).toBeInTheDocument();
+    rerender(renderRow(false, []));
+    expect(screen.getByText("Model")).toBeInTheDocument();
+  });
   it("keeps approval, shortcuts, and attachments on the toolbar", () => {
     render(
       <MemoryRouter>

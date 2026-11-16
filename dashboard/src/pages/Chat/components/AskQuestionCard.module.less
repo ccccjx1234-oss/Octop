@@ -225,6 +225,38 @@
   }
 }
 
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.filterInput {
+  flex: 1;
+  min-width: 0;
+
+  &:global(.octop-input-affix-wrapper),
+  &:global(.octop-input) {
+    border-color: var(--fn-border-input);
+    border-radius: var(--fn-radius-md);
+    background: var(--fn-bg-primary);
+  }
+}
+
+.filterCount {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fn-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.filterEmpty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fn-text-tertiary);
+}
+
 .doneAnswer {
   padding-left: 20px;
   font-size: 13px;

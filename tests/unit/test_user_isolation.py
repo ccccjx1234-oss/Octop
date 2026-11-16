@@ -354,3 +354,30 @@ async def test_share_is_explicit_read_only_snapshot_and_revocable(tmp_path: Path
 def test_cannot_share_system_or_escape_paths(path: str) -> None:
     with pytest.raises(OctopError):
         share_path(path)
+
+
+def test_configure_preserves_core_middleware_behind_isolation_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from octop.infra.agents.middleware.ask_user_options import AskUserOptionsMiddleware
+    from octop.infra.agents.middleware.workspace_image import WorkspaceImageMaterializeMiddleware
+    from octop.infra.isolation.tool_guard import IsolationToolGuard
+
+    runtimes, source = _runtimes(tmp_path)
+    monkeypatch.setattr("octop.infra.isolation.runtimes.expert_visible_to", lambda *a, **kw: True)
+    scoped = runtimes.row(source.agent_id, 1)
+    image_mw = WorkspaceImageMaterializeMiddleware(workspace=MagicMock())
+    ask_mw = AskUserOptionsMiddleware()
+
+    class ThirdPartyPluginMiddleware:
+        pass
+
+    cfg = SimpleNamespace(
+        tools=["host_tool"],
+        mcp_server_configs={},
+        tools_disabled=frozenset(),
+        middleware=[ThirdPartyPluginMiddleware(), image_mw, ask_mw],
+    )
+    configured = runtimes.configure(cfg, scoped)  # type: ignore[arg-type]
+    assert isinstance(configured.middleware[0], IsolationToolGuard)
+    assert configured.middleware[1:] == [image_mw, ask_mw]

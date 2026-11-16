@@ -19,5 +19,4 @@ export function turnEndedWithoutReply(messages: SilentTurnMessage[]): boolean {
   return false;
 }
 
-export const SILENT_TURN_MESSAGE =
-  "没有收到回复，连接可能中断了。请再发一次。";
+export const SILENT_TURN_MESSAGE = "没有收到回复，连接可能中断了。请再发一次。";

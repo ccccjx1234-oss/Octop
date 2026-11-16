@@ -247,7 +247,7 @@ def test_list_accounts_sends_filters(monkeypatch) -> None:
     assert fake.calls[-1] == (
         "/api/mcn/account/list",
         {
-            "page": {"pageNum": 2, "pageSize": 20},
+            "page": {"pageNum": 2, "pageSize": 50},
             "accountName": "会火",
             "platforms": [1],
         },
@@ -523,7 +523,8 @@ def test_opportunities_use_customer_opportunity_list(monkeypatch) -> None:
     mcn.call_tool({"token": "t"}, "youli_list_opportunities", {"keyword": "超级飞侠"})
     path, payload = fake.calls[-1]
     assert path == "/api/mcn/customer/opportunity/list"
-    assert payload["keyword"] == "超级飞侠"
+    assert payload["name"] == "超级飞侠"
+    assert payload["useDataPermission"] is True
 
 
 def test_customers_use_data_permission(monkeypatch) -> None:
@@ -549,7 +550,7 @@ def test_customer_ownerships_use_data_permission(monkeypatch) -> None:
     assert payload["name"] == "茶颜"
     assert payload["customerId"] == "c1"
     assert payload["useDataPermission"] is True
-    assert payload["page"] == {"pageNum": 2, "pageSize": 20}
+    assert payload["page"] == {"pageNum": 2, "pageSize": 50}
 
 
 def test_dictionaries_and_projects(monkeypatch) -> None:
@@ -796,7 +797,9 @@ def test_order_requires_opportunity_and_preserves_dynamic_fields(monkeypatch) ->
         }
 
     monkeypatch.setattr(fake, "get", rich_detail)
-    mcn.call_tool({"token": "t"}, "youli_create_order_from_quote", {"quote_id": "q-rich", "confirm": True})
+    mcn.call_tool(
+        {"token": "t"}, "youli_create_order_from_quote", {"quote_id": "q-rich", "confirm": True}
+    )
     saved = next(p for path, p in fake.calls if path.endswith("/temporaryStorage"))
     assert saved["orderRo"]["amount"] == 180
     saved_item = saved["offerOrderSaveRo"]["itemRoList"][0]
@@ -1039,7 +1042,9 @@ def test_publish_link_blocks_completed_service_item(monkeypatch) -> None:
     assert all(p_path != "/api/mcn/order/service/item/edit" for p_path, _ in fake.calls)
 
 
-def test_sub_project_promotes_customer_id_and_contract_validates_protect_bounds(monkeypatch) -> None:
+def test_sub_project_promotes_customer_id_and_contract_validates_protect_bounds(
+    monkeypatch,
+) -> None:
     class SpecialClient(FakeClient):
         def post(self, path: str, payload: Any = None) -> Any:
             if path == "/api/mcn/customer/opportunity/list":
@@ -1105,3 +1110,176 @@ def test_sub_project_promotes_customer_id_and_contract_validates_protect_bounds(
         },
     )
     assert "超出有效日期范围" in out_of_bounds
+
+
+def test_list_tools_preserve_page_meta_clamp_100_and_filter_projects(monkeypatch) -> None:
+    calls: list[tuple[str, Any]] = []
+
+    class PagedClient(FakeClient):
+        def post_with_meta(self, path: str, payload: Any = None) -> dict[str, Any]:
+            calls.append((path, payload))
+            if path == "/api/mcn/customer-management/list":
+                return {
+                    "code": 0,
+                    "data": [{"id": "c1", "name": "客户一"}, {"id": "c2", "name": "客户二"}],
+                    "page": {"pageNum": 2, "pageSize": 100, "totalCount": 150, "totalPage": 2},
+                }
+            req_page = (payload or {}).get("page") or {}
+            return {
+                "code": 0,
+                "data": [],
+                "page": {
+                    "pageNum": req_page.get("pageNum", 1),
+                    "pageSize": req_page.get("pageSize", 20),
+                    "totalCount": 0,
+                },
+            }
+
+    fake = PagedClient()
+    _use(monkeypatch, fake)
+
+    cust_res = json.loads(
+        mcn.call_tool(
+            {"token": "t"},
+            "youli_list_customers",
+            {"keyword": "客户", "page": 2, "page_size": 200},
+        )
+    )
+    assert calls[-1] == (
+        "/api/mcn/customer-management/list",
+        {"page": {"pageNum": 2, "pageSize": 100}, "useDataPermission": True, "name": "客户"},
+    )
+    assert len(cust_res["items"]) == 2
+    assert cust_res["page"] == {
+        "pageNum": 2,
+        "pageSize": 100,
+        "totalCount": 150,
+        "totalPage": 2,
+        "hasMore": False,
+    }
+
+    proj_res = json.loads(
+        mcn.call_tool(
+            {"token": "t"},
+            "youli_list_projects",
+            {"keyword": "杜甫", "page": 3, "page_size": 30},
+        )
+    )
+    assert calls[-1] == (
+        "/api/mcn/customerSubProject/list",
+        {"page": {"pageNum": 3, "pageSize": 30}, "projectName": "杜甫"},
+    )
+    assert proj_res["page"]["pageNum"] == 3
+    assert proj_res["page"]["pageSize"] == 30
+
+
+def test_internal_lookups_paginate_past_first_page(monkeypatch) -> None:
+    class MultiPageClient(FakeClient):
+        def post_with_meta(self, path: str, payload: Any = None) -> dict[str, Any]:
+            page_num = (payload or {}).get("page", {}).get("pageNum", 1)
+            if path == "/api/mcn/customer/opportunity/list":
+                if page_num == 1:
+                    return {
+                        "data": [
+                            {
+                                "id": f"o{i}",
+                                "customerId": f"c{i}",
+                                "name": f"客户{i}",
+                                "employeeId": "u1",
+                            }
+                            for i in range(100)
+                        ],
+                        "page": {"pageNum": 1, "pageSize": 100, "totalCount": 101, "totalPage": 2},
+                    }
+                return {
+                    "data": [
+                        {
+                            "id": "opp-p2",
+                            "customerId": "cust-p2",
+                            "name": "第二页客户",
+                            "employeeId": "u1",
+                        }
+                    ],
+                    "page": {"pageNum": 2, "pageSize": 100, "totalCount": 101, "totalPage": 2},
+                }
+            if path == "/api/mcn/customerSubProject/list":
+                if page_num == 1:
+                    return {
+                        "data": [{"id": f"s{i}", "subProjectCode": f"SC{i}"} for i in range(100)],
+                        "page": {"pageNum": 1, "pageSize": 100, "totalCount": 101, "totalPage": 2},
+                    }
+                return {
+                    "data": [
+                        {
+                            "id": "sub-p2",
+                            "subProjectCode": "SC101",
+                            "customerId": "opp-p2",
+                            "parentProjectId": "parent-p2",
+                        }
+                    ],
+                    "page": {"pageNum": 2, "pageSize": 100, "totalCount": 101, "totalPage": 2},
+                }
+            if path == "/api/mcn/account/quote/version/list":
+                if page_num == 1:
+                    return {
+                        "data": [{"id": "v-p1", "isSpecialCustomer": 0}],
+                        "page": {"pageNum": 1, "pageSize": 100, "totalCount": 101, "totalPage": 2},
+                    }
+                return {
+                    "data": [{"id": "v-p2", "isSpecialCustomer": 1}],
+                    "page": {"pageNum": 2, "pageSize": 100, "totalCount": 101, "totalPage": 2},
+                }
+            return {"data": super().post(path, payload)}
+
+    fake = MultiPageClient()
+    _use(monkeypatch, fake)
+
+    resolved = mcn._find_opportunity(fake, customer_id="cust-p2", multi_error="dup")
+    assert resolved is not None
+    assert resolved["id"] == "opp-p2"
+
+    parent_id = mcn._resolve_sub_project_for_order(fake, "sub-p2", "", "opp-p2")
+    assert parent_id == "parent-p2"
+
+    protect_type = mcn._resolve_protect_type(
+        fake, "v-p2", None, "/api/mcn/account/quote/version/list"
+    )
+    assert protect_type == 2
+
+    mcn.call_tool(
+        {"token": "t"},
+        "youli_create_coupon_version",
+        {"name": "二页商机政策", "opportunity_id": "opp-p2", "confirm": True},
+    )
+    coupon_payload = next(
+        p for p_path, p in fake.calls if p_path == "/api/mcn/coupon/version/addCouponVersion"
+    )
+    assert coupon_payload["opportunityName"] == "第二页客户"
+
+
+def test_write_interrupt_on_covers_all_mcn_writes_and_gates_on_confirm() -> None:
+    from types import SimpleNamespace
+
+    names = mcn.write_tool_names("mcn")
+    assert len(names) == 10
+    assert set(names) == {
+        "mcn_youli_save_quote",
+        "mcn_youli_create_package_quote",
+        "mcn_youli_create_order_from_quote",
+        "mcn_youli_create_combined_order",
+        "mcn_youli_update_publish_link",
+        "mcn_youli_export_delivery",
+        "mcn_youli_create_project",
+        "mcn_youli_create_sub_project",
+        "mcn_youli_create_coupon_version",
+        "mcn_youli_create_contract",
+    }
+
+    rules = mcn.write_interrupt_on(["mcn"])
+    assert set(rules.keys()) == set(names)
+    for cfg in rules.values():
+        assert cfg["allowed_decisions"] == ["approve", "reject"]
+        when = cfg["when"]
+        assert when(SimpleNamespace(tool_call={"name": "x", "args": {"confirm": True}})) is True
+        assert when(SimpleNamespace(tool_call={"name": "x", "args": {"confirm": False}})) is False
+        assert when(SimpleNamespace(tool_call={"name": "x", "args": {}})) is False

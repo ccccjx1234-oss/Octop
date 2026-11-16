@@ -35,7 +35,9 @@ vi.mock("../../api/modules/workbench", () => ({
   isAbortError: (err: unknown) =>
     err instanceof Error && err.name === "AbortError",
   workbenchErrorMessage: (err: unknown, fallback: string) =>
-    err instanceof Error && err.message ? `${fallback}：${err.message}` : fallback,
+    err instanceof Error && err.message
+      ? `${fallback}：${err.message}`
+      : fallback,
   workbenchApi: {
     getProgress: mocks.getProgress,
     listDeliverables: mocks.listDeliverables,
@@ -159,7 +161,11 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
       data_sources: ["MCN 经营概览", "MCN 商机与报价"],
       trend_metric_label: "商单与报价数",
       kpis: [
-        { label: "累计成单金额", value: "¥ 1,327,353", delta: "MCN 经营概览实时" },
+        {
+          label: "累计成单金额",
+          value: "¥ 1,327,353",
+          delta: "MCN 经营概览实时",
+        },
         { label: "有效合作客户", value: "5", delta: "本月新增 2" },
         { label: "待办待完结", value: "8", delta: "MCN 工作台待办" },
         { label: "订单利润率", value: "31.6%", delta: "回款 ¥ 500,000" },
@@ -199,9 +205,7 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
   it("renders WorkProgress live ERP items, empty module hint, and ERP detail modal", async () => {
     const user = userEvent.setup();
     render(<WorkProgressPage />);
-    await waitFor(() =>
-      expect(screen.getByText("茶颜")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("茶颜")).toBeInTheDocument());
     expect(screen.getAllByText("72%").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/已直连：MCN 订单/)).toBeInTheDocument();
     expect(screen.getByText(/当前暂无任务/)).toBeInTheDocument();
@@ -210,7 +214,9 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
     await waitFor(() =>
       expect(screen.getByText(/ERP \/ 外部系统明细/)).toBeInTheDocument(),
     );
-    await user.click(screen.getByRole("button", { name: "转为本地可编辑任务" }));
+    await user.click(
+      screen.getByRole("button", { name: "转为本地可编辑任务" }),
+    );
     await waitFor(() => expect(mocks.createTask).toHaveBeenCalled());
   });
 
@@ -259,9 +265,7 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText("对话交付")).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: /保存为交付成果/i }),
-    );
+    await user.click(screen.getByRole("button", { name: /保存为交付成果/i }));
     await waitFor(() => expect(mocks.createDeliverable).toHaveBeenCalled());
     expect(mocks.createDeliverable).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -271,11 +275,87 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
       }),
     );
 
-    mocks.createDeliverable.mockRejectedValueOnce(new Error("HTTP 503: 后端忙"));
-    await user.click(screen.getByRole("button", { name: /再次保存/i }));
-    await waitFor(() =>
-      expect(mocks.msgError).toHaveBeenCalledWith("保存交付成果失败：HTTP 503: 后端忙"),
+    expect(screen.getByRole("button", { name: "已保存" })).toBeDisabled();
+    await user.type(screen.getByPlaceholderText("成果标题"), "修订");
+    mocks.createDeliverable.mockRejectedValueOnce(
+      new Error("HTTP 503: 后端忙"),
     );
+    await user.click(screen.getByRole("button", { name: /保存为交付成果/i }));
+    await waitFor(() =>
+      expect(mocks.msgError).toHaveBeenCalledWith(
+        "保存交付成果失败：HTTP 503: 后端忙",
+      ),
+    );
+  });
+
+  it("hides ChatDeliveryCard on model identity Q&A, file lists, receipts, and tool queries, while keeping collapsed trigger for real candidates", async () => {
+    const user = userEvent.setup();
+    const irrelevantReplies: Array<{ text: string; toolNames?: string[] }> = [
+      { text: "到点啦，该吃东西了 🥪 别忘了好好吃一顿。" },
+      {
+        text: "已为你设置每周二 12:00 吃东西提醒：\n- **时间**：每周二 12:00\n- **内容**：「到点啦，该吃东西了 🥪 别忘了好好吃一顿。」",
+      },
+      {
+        text: "你好！很高兴为你服务，你可以随时让我查客户、看报价或安排日程。",
+      },
+      {
+        // Exact model identity answer from live screenshot
+        text: "我运行在 **Octop harness** 里的通用 AI Agent，底层的具体模型标识（厂商、版本号）运行时并没有直接暴露给我，所以我没法凭「自我感知」给你一个可靠的型号——任何这类自报都容易编。\n\n能确定的是：\n- 记忆：受结构化记忆规则约束，长期信息写进 `USER.md` / `MEMORY.md`。\n- 不知道的：参数规模、训练数据截止日、具体版本号。\n\n如果你需要确切型号，最靠谱的办法是看运行这套 Octop 的服务端配置或启动日志——需要我去工作区或环境变量里找找看吗？",
+      },
+      {
+        // Markdown heading + table for model/config explanation must NOT trigger deliverable card
+        text: "### 模型信息说明\n| 维度 | 当前状态 |\n| --- | --- |\n| 运行环境 | Octop harness |\n| 具体型号 | 未暴露 |",
+      },
+      {
+        // Workspace file listing mentioning .xlsx/.pdf/.docx must NOT trigger deliverable card
+        text: "你的工作区中有以下文件：\n- 客户报价单.xlsx (12 KB)\n- 合作方案.docx (320 KB)\n- 品牌介绍.pdf (1.4 MB)",
+        toolNames: ["ls"],
+      },
+      {
+        // MCN quote/order creation receipt must NOT trigger deliverable card
+        text: "瑞幸咖啡的报价单已创建并保存（报价单号 BJ202611160001），总金额 ¥18,000，已同步到 MCN ERP。",
+        toolNames: ["mcn_youli_create_package_quote"],
+      },
+      {
+        // Clarifying question mentioning deliverable keywords must NOT trigger deliverable card
+        text: "好的，制作报价单前请先提供以下信息：\n1. 目标客户名称\n2. 投放平台与预算范围\n3. 期望交付时间",
+      },
+    ];
+    for (const item of irrelevantReplies) {
+      const { container, unmount } = render(
+        <MemoryRouter>
+          <ChatDeliveryCard
+            threadId="thread-chat"
+            messageId="msg-irrelevant"
+            answerText={item.text}
+            toolNames={item.toolNames}
+          />
+        </MemoryRouter>,
+      );
+      expect(container.firstChild).toBeNull();
+      unmount();
+    }
+
+    const mediumCandidate =
+      "针对青禾科技本季度抖音达人投放的报价方案说明如下，目前已完成达人筛选、档期确认与成本核算，整体预算控制在客户预期范围内并预留了返点空间，以下为执行阶段建议与交付清单明细，如需调整账号组合可随时告知。";
+    render(
+      <MemoryRouter>
+        <ChatDeliveryCard
+          threadId="thread-work"
+          messageId="msg-candidate"
+          answerText={mediumCandidate}
+        />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole("button", { name: /整理为对话交付成果/i });
+    expect(trigger).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /保存为交付成果/i }),
+    ).toBeNull();
+    await user.click(trigger);
+    expect(
+      screen.getByRole("button", { name: /保存为交付成果/i }),
+    ).toBeInTheDocument();
   });
 
   it("ignores stale out-of-order WorkProgress responses during fast role switching", async () => {
@@ -404,7 +484,7 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
     });
   });
 
-  it("retries transient Request failed 502 Bad Gateway once in workbenchApi", async () => {
+  it("does not retry a write after an uncertain gateway failure", async () => {
     vi.stubGlobal("BASE_URL", "");
     const actual = await vi.importActual<
       typeof import("../../api/modules/workbench")
@@ -413,29 +493,47 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         new Response("Bad Gateway", { status: 502, statusText: "Bad Gateway" }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: 321, title: "ok" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
       );
 
     try {
-      const created = await actual.workbenchApi.createTask({
-        role_key: "business",
-        module_key: "contract_sign",
-        target_name: "测试",
-        title: "重试创建任务",
-      });
-      expect(created.id).toBe(321);
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      await expect(
+        actual.workbenchApi.createTask({
+          role_key: "business",
+          module_key: "contract_sign",
+          target_name: "测试",
+          title: "重试创建任务",
+        }),
+      ).rejects.toThrow("操作结果暂不确定");
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(
         actual.workbenchErrorMessage(
           new Error("Request failed: 502 Bad Gateway"),
           "保存失败",
         ),
       ).toBe("保存失败：Bad Gateway");
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("retries a read after a transient gateway failure", async () => {
+    vi.stubGlobal("BASE_URL", "");
+    const actual = await vi.importActual<
+      typeof import("../../api/modules/workbench")
+    >("../../api/modules/workbench");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("Bad Gateway", { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    try {
+      await actual.workbenchApi.listDeliverables();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     } finally {
       fetchSpy.mockRestore();
       vi.unstubAllGlobals();
@@ -465,12 +563,16 @@ describe("Workbench UI pages & ChatDeliveryCard", () => {
       ).toMatchObject({ role: { key: "planning" } });
 
       await actual.workbenchApi.syncMcn("planning");
-      expect(actual.workbenchApi.getCachedDashboard("planning", "7d")).toBeNull();
+      expect(
+        actual.workbenchApi.getCachedDashboard("planning", "7d"),
+      ).toBeNull();
 
       const ac = new AbortController();
       ac.abort();
       await expect(
-        actual.workbenchApi.getDashboard("planning", "7d", { signal: ac.signal }),
+        actual.workbenchApi.getDashboard("planning", "7d", {
+          signal: ac.signal,
+        }),
       ).rejects.toMatchObject({ name: "AbortError" });
       expect(fetchSpy).toHaveBeenCalledTimes(2);
     } finally {

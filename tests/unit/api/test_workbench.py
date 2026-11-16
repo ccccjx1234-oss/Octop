@@ -40,7 +40,9 @@ def workbench_app(tmp_path):
         password_hash="x",
         role="user",
     )
-    state = {"user": User(id=uid1, username="alice", role="user", display_name="Alice", permissions=[])}
+    state = {
+        "user": User(id=uid1, username="alice", role="user", display_name="Alice", permissions=[])
+    }
     users = {
         uid1: state["user"],
         uid2: User(id=uid2, username="bob", role="user", display_name="Bob", permissions=[]),
@@ -104,6 +106,23 @@ async def test_chat_deliverable_upsert_syncs_progress_and_isolates_users(workben
         deliv_id = payload["deliverable"]["id"]
         task_id = payload["updated_task"]["id"]
 
+        repeated = await client.post(
+            "/api/workbench/deliverables",
+            json={
+                "role_key": "customer_service",
+                "deliverable_type": "document",
+                "target_name": "青禾科技",
+                "title": "青禾科技合作方案（V1.0）",
+                "content": "交付目标：围绕客户当前需求整理可直接执行的合作方案。",
+                "review_status": "pending_review",
+                "source_thread_id": "thread-1",
+                "source_message_id": "msg-1",
+            },
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["deliverable"]["id"] == deliv_id
+        assert repeated.json()["updated_task"]["progress"] == payload["updated_task"]["progress"]
+
         # Re-saving the same message updates the existing record instead of duplicating
         updated_again = await client.post(
             "/api/workbench/deliverables",
@@ -144,6 +163,17 @@ async def test_chat_deliverable_upsert_syncs_progress_and_isolates_users(workben
             await client.get("/api/workbench/deliverables", params={"q": "青禾科技"})
         ).json()
         assert user2_list["items"] == []
+
+        # Deleting a deliverable does not delete a task that may have been edited or reused.
+        uid1 = [k for k in users if k != uid2][0]
+        state["user"] = users[uid1]
+        deleted = await client.delete(f"/api/workbench/deliverables/{deliv_id}")
+        assert deleted.status_code == 200
+        after_delete = (
+            await client.get("/api/workbench/progress", params={"role": "customer_service"})
+        ).json()
+        remaining_ids = [it["id"] for m in after_delete["modules"] for it in m["items"]]
+        assert task_id in remaining_ids
 
 
 @pytest.mark.asyncio
@@ -351,7 +381,10 @@ async def test_workbench_live_mcn_erp_integration_and_expiry(workbench_app, monk
     assert any(it["target_name"] == "茶颜" and it["readonly"] is True for it in items)
     assert any(it["target_name"] == "超级飞侠" and it["source"] == "mcn" for it in items)
     assert deliverables["mcn_connected"] is True
-    assert any(d["source"] == "mcn" and d["external_url"] == "https://example.com/v/501" for d in deliverables["items"])
+    assert any(
+        d["source"] == "mcn" and d["external_url"] == "https://example.com/v/501"
+        for d in deliverables["items"]
+    )
     assert any(d["source"] == "ai_creator" for d in deliverables["items"])
     assert dashboard["mcn_connected"] is True
     assert any("1,327,353" in k["value"] for k in dashboard["kpis"])
@@ -397,8 +430,8 @@ def test_format_delivered_label_uses_shanghai_tz() -> None:
 
 def test_erp_role_mappers_numerical_contracts_and_status_semantics() -> None:
     from octop.infra.workbench.erp_source import (
-        _CACHE_MAX_ENTRIES,
         _CACHE_LOCK,
+        _CACHE_MAX_ENTRIES,
         _ENDPOINT_CACHE,
         _map_ad_buy,
         _map_business,
@@ -415,12 +448,18 @@ def test_erp_role_mappers_numerical_contracts_and_status_semantics() -> None:
 
     cs_slice = _map_customer_service(
         {
-            "pending": {"waitComplete": 4, "waitPending": 1, "waitInvoiced": 2, "waitCollected": 1, "waitClaimed": 3},
+            "pending": {
+                "waitComplete": 4,
+                "waitPending": 1,
+                "waitInvoiced": 2,
+                "waitCollected": 1,
+                "waitClaimed": 3,
+            },
             "orders": {
                 "data": [
                     {"id": 1, "customerName": "甲", "status": 10},  # done
-                    {"id": 2, "customerName": "乙", "status": 3},   # in_progress
-                    {"id": 3, "customerName": "丙", "status": 9},   # cancelled (excluded!)
+                    {"id": 2, "customerName": "乙", "status": 3},  # in_progress
+                    {"id": 3, "customerName": "丙", "status": 9},  # cancelled (excluded!)
                 ],
                 "page": {"totalCount": 120},
             },
@@ -431,16 +470,27 @@ def test_erp_role_mappers_numerical_contracts_and_status_semantics() -> None:
     )
     assert cs_slice.kpis[0]["value"] == "120"
     assert cs_slice.kpis[3]["value"] == "50%"  # 1 done / 2 non-cancelled
-    assert all("丙" != it["target_name"] for it in cs_slice.tasks)
+    assert all(it["target_name"] != "丙" for it in cs_slice.tasks)
     assert cs_slice.goal_progress["order_close"] == (1.0, 2.0)
     assert "quote_follow" not in cs_slice.goal_progress
 
     # Business offer status (1=已生成订单 -> done/100)
     biz_slice = _map_business(
         {
-            "offers": {"data": [{"id": 1, "customerName": "甲", "status": 1}, {"id": 2, "customerName": "乙", "status": 0}]},
-            "contracts": {"data": [{"id": 3, "customerName": "甲", "signingDate": "2026-11-10"}], "page": {"totalCount": 139}},
-            "orders": {"data": [{"id": 4, "status": 10}, {"id": 5, "status": 9}], "page": {"totalCount": 80}},
+            "offers": {
+                "data": [
+                    {"id": 1, "customerName": "甲", "status": 1},
+                    {"id": 2, "customerName": "乙", "status": 0},
+                ]
+            },
+            "contracts": {
+                "data": [{"id": 3, "customerName": "甲", "signingDate": "2026-11-10"}],
+                "page": {"totalCount": 139},
+            },
+            "orders": {
+                "data": [{"id": 4, "status": 10}, {"id": 5, "status": 9}],
+                "page": {"totalCount": 80},
+            },
             "perf": {"orderAmount": 1000, "receiveAmount": 500},
         },
         "7d",
@@ -473,9 +523,27 @@ def test_erp_role_mappers_numerical_contracts_and_status_semantics() -> None:
     ad_slice = _map_ad_buy(
         {
             "customer_dist": [
-                {"advertisingCategoryId": 1, "parentId": 0, "advertisingCategoryName": "美妆一级", "settlementAmount": 600, "rate": 0.3},
-                {"advertisingCategoryId": 2, "parentId": 1, "advertisingCategoryName": "美妆二级", "settlementAmount": 600, "rate": 1.0},
-                {"advertisingCategoryId": 3, "parentId": "0", "advertisingCategoryName": "3C单层", "settlementAmount": 400, "rate": 0.2},
+                {
+                    "advertisingCategoryId": 1,
+                    "parentId": 0,
+                    "advertisingCategoryName": "美妆一级",
+                    "settlementAmount": 600,
+                    "rate": 0.3,
+                },
+                {
+                    "advertisingCategoryId": 2,
+                    "parentId": 1,
+                    "advertisingCategoryName": "美妆二级",
+                    "settlementAmount": 600,
+                    "rate": 1.0,
+                },
+                {
+                    "advertisingCategoryId": 3,
+                    "parentId": "0",
+                    "advertisingCategoryName": "3C单层",
+                    "settlementAmount": 400,
+                    "rate": 0.2,
+                },
             ],
             "orders": {"data": [{"id": 1, "status": 10}, {"id": 2, "status": 9}]},
         },
@@ -532,7 +600,9 @@ async def test_workbench_meta_pagination_goal_preservation_and_permission_degrad
             services,
             config=dataclasses.replace(
                 services.config,
-                youli=dataclasses.replace(services.config.youli, mcn_base_url="https://mcn.example"),
+                youli=dataclasses.replace(
+                    services.config.youli, mcn_base_url="https://mcn.example"
+                ),
             ),
         ),
     )
@@ -575,7 +645,12 @@ async def test_workbench_meta_pagination_goal_preservation_and_permission_degrad
             return {
                 "code": 200,
                 "data": [
-                    {"id": 901, "customerName": "今日完成单", "status": 10, "signerTime": today_str},
+                    {
+                        "id": 901,
+                        "customerName": "今日完成单",
+                        "status": 10,
+                        "signerTime": today_str,
+                    },
                     {"id": 902, "customerName": "历史完成单", "status": 10, "signerTime": old_str},
                 ],
                 "page": {"pageNum": 1, "totalCount": 50},
@@ -588,7 +663,11 @@ async def test_workbench_meta_pagination_goal_preservation_and_permission_degrad
         return {}
 
     monkeypatch.setattr(McnClient, "post_with_meta", fake_post_meta)
-    monkeypatch.setattr(McnClient, "post", lambda self, path, payload=None: {"orderAmount": 1000, "receiveAmount": 500})
+    monkeypatch.setattr(
+        McnClient,
+        "post",
+        lambda self, path, payload=None: {"orderAmount": 1000, "receiveAmount": 500},
+    )
     monkeypatch.setattr(McnClient, "get", fake_get)
 
     transport = httpx.ASGITransport(app=app)
@@ -600,7 +679,9 @@ async def test_workbench_meta_pagination_goal_preservation_and_permission_degrad
         assert "管理员" in delivs["mcn_error"]
 
         # Dashboard goal contract_count keeps default target 5 while current_value reflects page.totalCount=139
-        dash = (await client.get("/api/workbench/dashboard", params={"role": "business", "range": "7d"})).json()
+        dash = (
+            await client.get("/api/workbench/dashboard", params={"role": "business", "range": "7d"})
+        ).json()
         contract_goal = next(g for g in dash["goals"] if g["title"] == "合同签署数量")
         assert contract_goal["current_value"] == 139.0
         assert contract_goal["target_value"] == 5.0
@@ -621,10 +702,14 @@ async def test_workbench_meta_pagination_goal_preservation_and_permission_degrad
             },
         )
         prog_today = (
-            await client.get("/api/workbench/progress", params={"role": "customer_service", "range": "today"})
+            await client.get(
+                "/api/workbench/progress", params={"role": "customer_service", "range": "today"}
+            )
         ).json()
         prog_month = (
-            await client.get("/api/workbench/progress", params={"role": "customer_service", "range": "month"})
+            await client.get(
+                "/api/workbench/progress", params={"role": "customer_service", "range": "month"}
+            )
         ).json()
         # In "today": 1 chat deliverable (its linked done task is excluded from double count) + 1 ERP done order from today = 2; historical order excluded
         assert prog_today["kpis"]["delivered_this_week"] == 2

@@ -30,10 +30,13 @@ class YouliStaffLoginBody(BaseModel):
 
 
 def _service(server: Any) -> YouliAuthService:
+    app_runtime = getattr(server, "app_runtime", None)
+    gateway = getattr(app_runtime, "gateway", None) if app_runtime is not None else None
     return YouliAuthService(
         services=server.services,
         users=server.user_manager,
         cfg=server.services.config.youli,
+        ws_hub=getattr(gateway, "ws_hub", None),
     )
 
 

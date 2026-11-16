@@ -10,6 +10,36 @@ import { markNavigatingAway } from "../utils/reloadOnStaleChunk";
 const AUTH_TOKEN_KEY = "auth_token";
 /** sessionStorage handoff for SSO redirects / popups (default = remember). */
 const AUTH_REMEMBER_PREF_KEY = "auth_remember_pref";
+const AUTH_NOTICE_STORAGE_KEY = "octop:auth_notice";
+
+export interface AuthNotice {
+  reason?: string;
+  message?: string;
+}
+
+export function setAuthNotice(notice: AuthNotice | null): void {
+  try {
+    if (!notice || (!notice.reason && !notice.message)) {
+      sessionStorage.removeItem(AUTH_NOTICE_STORAGE_KEY);
+      return;
+    }
+    sessionStorage.setItem(AUTH_NOTICE_STORAGE_KEY, JSON.stringify(notice));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function consumeAuthNotice(): AuthNotice | null {
+  try {
+    const raw = sessionStorage.getItem(AUTH_NOTICE_STORAGE_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(AUTH_NOTICE_STORAGE_KEY);
+    const parsed = JSON.parse(raw) as AuthNotice;
+    return parsed && (parsed.reason || parsed.message) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Fired when the session is no longer valid. Cancelable: a listener inside the
@@ -84,6 +114,8 @@ export function setAuthToken(token: string, remember: boolean = true) {
     sessionStorage.setItem(AUTH_TOKEN_KEY, token);
     localStorage.removeItem(AUTH_TOKEN_KEY);
   }
+  _redirectingToLogin = false;
+  setAuthNotice(null);
   clearSetupRequired();
 }
 
@@ -314,7 +346,10 @@ const SESSION_UNAUTHORIZED_CODES = new Set(["AUTH_FAILED", "TOKEN_EXPIRED"]);
  * Send the user to the login screen exactly once, no matter how many parallel
  * requests report an expired session.
  */
-function handleUnauthorized(): void {
+function handleUnauthorized(notice?: AuthNotice): void {
+  if (notice && (notice.reason || notice.message)) {
+    setAuthNotice(notice);
+  }
   if (_redirectingToLogin) return;
   const path = window.location.pathname;
   if (
@@ -326,7 +361,10 @@ function handleUnauthorized(): void {
   _redirectingToLogin = true;
 
   const takenOver = !window.dispatchEvent(
-    new CustomEvent(UNAUTHORIZED_EVENT, { cancelable: true }),
+    new CustomEvent(UNAUTHORIZED_EVENT, {
+      cancelable: true,
+      detail: notice,
+    }),
   );
   if (takenOver) return;
 
@@ -334,19 +372,61 @@ function handleUnauthorized(): void {
   window.location.replace("/login");
 }
 
-/**
- * Handle 401 responses: clear token, redirect to login, and throw.
- * Shared by request(), requestBlob(), and requestUpload().
- */
-async function errorCodeOf(response: Response): Promise<string | undefined> {
+/** Clear local auth state and redirect to login with an optional kick/expiry notice. */
+export function triggerUnauthorizedRedirect(notice?: AuthNotice): void {
+  clearAuthToken();
+  handleUnauthorized(notice);
+}
+
+/** Extract an AuthNotice when a WebSocket closes with auth code 4001. */
+export function parseWsAuthCloseNotice(event?: {
+  code?: number;
+  reason?: string;
+}): AuthNotice | null {
+  if (event?.code !== 4001) return null;
+  const rawReason = event.reason?.startsWith("auth:")
+    ? event.reason.slice(5).trim()
+    : "";
+  const reason =
+    rawReason && rawReason !== "AUTH_FAILED" && rawReason !== "TOKEN_EXPIRED"
+      ? rawReason
+      : "session_revoked";
+  return { reason };
+}
+
+interface UnauthorizedBody {
+  code?: string;
+  reason?: string;
+  message?: string;
+}
+
+async function parseUnauthorizedBody(
+  response: Response,
+): Promise<UnauthorizedBody> {
   try {
     const body = (await response.clone().json()) as {
-      error?: { code?: string };
+      error?: {
+        code?: string;
+        message?: string;
+        details?: { reason?: string };
+      };
     };
-    const code = body?.error?.code;
-    return typeof code === "string" && code.trim() ? code : undefined;
+    const code =
+      typeof body?.error?.code === "string" && body.error.code.trim()
+        ? body.error.code
+        : undefined;
+    const reason =
+      typeof body?.error?.details?.reason === "string" &&
+      body.error.details.reason.trim()
+        ? body.error.details.reason.trim()
+        : undefined;
+    const message =
+      typeof body?.error?.message === "string" && body.error.message.trim()
+        ? body.error.message.trim()
+        : undefined;
+    return { code, reason, message };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -357,7 +437,11 @@ async function throwIfUnauthorized(
   if (response.status !== 401 || path.startsWith("/auth/")) {
     return;
   }
-  const code = await errorCodeOf(response);
+  const {
+    code,
+    reason,
+    message: bodyMessage,
+  } = await parseUnauthorizedBody(response);
   // Business 401s (peer login, etc.) are not a dead local session.
   if (
     code &&
@@ -367,19 +451,12 @@ async function throwIfUnauthorized(
     return;
   }
   clearAuthToken();
-  handleUnauthorized();
+  handleUnauthorized(
+    reason || bodyMessage ? { reason, message: bodyMessage } : undefined,
+  );
   let message = "Unauthorized";
-  if (path.startsWith("/setup/")) {
-    try {
-      const body = (await response.clone().json()) as {
-        error?: { message?: string };
-      };
-      if (body?.error?.message) {
-        message = body.error.message;
-      }
-    } catch {
-      /* keep generic message */
-    }
+  if (path.startsWith("/setup/") && bodyMessage) {
+    message = bodyMessage;
   }
   throw new Error(message);
 }
@@ -404,7 +481,7 @@ async function retryWithDesktopSession(
     return null;
   }
   // Business 401s (peer login, setup guards) would only be retried in vain.
-  const code = await errorCodeOf(response);
+  const { code } = await parseUnauthorizedBody(response);
   if (code && !SESSION_UNAUTHORIZED_CODES.has(code)) return null;
   const current = getAuthToken();
   // A password account's expired token must land on the login page. Only the

@@ -60,10 +60,7 @@ export default function DataDashboardPage() {
     };
   }, [loadData, roleKey, range]);
 
-  const maxTrend = Math.max(
-    1,
-    ...(data?.trend.map((pt) => pt.value) ?? [1]),
-  );
+  const maxTrend = Math.max(1, ...(data?.trend.map((pt) => pt.value) ?? [1]));
 
   const handleSaveGoal = async () => {
     if (!editingGoal) return;
@@ -80,7 +77,10 @@ export default function DataDashboardPage() {
     }
   };
 
-  const colTemplate = `repeat(${Math.max(1, data?.trend.length ?? 7)}, minmax(0, 1fr))`;
+  const colTemplate = `repeat(${Math.max(
+    1,
+    data?.trend.length ?? 7,
+  )}, minmax(0, 1fr))`;
 
   return (
     <div className={styles.pageWrap}>
@@ -133,13 +133,16 @@ export default function DataDashboardPage() {
                 const deltaClass = delta.startsWith("-")
                   ? `${styles.kpiDelta} ${styles.kpiDeltaNeg}`
                   : delta.startsWith("+")
-                    ? styles.kpiDelta
-                    : `${styles.kpiDelta} ${styles.kpiDeltaNeutral}`;
+                  ? styles.kpiDelta
+                  : `${styles.kpiDelta} ${styles.kpiDeltaNeutral}`;
                 return (
                   <div
                     key={kpi.label}
                     className={styles.kpiCard}
-                    style={{ flexDirection: "column", alignItems: "flex-start" }}
+                    style={{
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                    }}
                   >
                     <span className={styles.kpiLabel}>{kpi.label}</span>
                     <span className={styles.kpiValue}>{kpi.value}</span>
@@ -166,7 +169,10 @@ export default function DataDashboardPage() {
                       const heightPct =
                         pt.value <= 0
                           ? 6
-                          : Math.max(14, Math.round((pt.value / maxTrend) * 84));
+                          : Math.max(
+                              14,
+                              Math.round((pt.value / maxTrend) * 84),
+                            );
                       return (
                         <div key={pt.label} className={styles.chartCol}>
                           {pt.value > 0 && (

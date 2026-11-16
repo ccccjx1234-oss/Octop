@@ -179,6 +179,7 @@ function renderMessageGroup(
           <AssistantTurnView
             messages={[msg]}
             agentId={ctx.agentId}
+            threadId={ctx.threadId}
             isTurnInProgress={isTurnInProgress}
             afterLatestUser={afterLatestUser}
             liveSpeakers={ctx.liveSpeakers}

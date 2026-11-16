@@ -119,9 +119,10 @@ class McnClient:
         code = body.get("code")
         int_code = _parse_int_code(code)
         message = str(body.get("msg") or body.get("message") or "")
-        is_non_ok_code = (
-            (int_code is not None and int_code != 200)
-            or (code is not None and int_code is None and str(code).strip().upper() not in {"200", "OK", "SUCCESS"})
+        is_non_ok_code = (int_code is not None and int_code != 200) or (
+            code is not None
+            and int_code is None
+            and str(code).strip().upper() not in {"200", "OK", "SUCCESS"}
         )
         if response.status_code >= 400 or is_non_ok_code:
             logger.warning(
@@ -172,14 +173,18 @@ class McnClient:
         """POST keeping outer pagination metadata (e.g. top-level ``page.totalCount``)."""
         if "post" in self.__dict__ or type(self).post is not _ORIG_MCN_POST:
             res = self.post(path, payload)
-            return res if isinstance(res, dict) and ("data" in res or "page" in res) else {"data": res}
+            return (
+                res if isinstance(res, dict) and ("data" in res or "page" in res) else {"data": res}
+            )
         return self._request_envelope("POST", path, payload=payload)
 
     def get_with_meta(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """GET keeping outer pagination metadata when available."""
         if "get" in self.__dict__ or type(self).get is not _ORIG_MCN_GET:
             res = self.get(path, params)
-            return res if isinstance(res, dict) and ("data" in res or "page" in res) else {"data": res}
+            return (
+                res if isinstance(res, dict) and ("data" in res or "page" in res) else {"data": res}
+            )
         return self._request_envelope("GET", path, params=params)
 
 

@@ -8,7 +8,11 @@
  */
 
 import { getApiUrl } from "../../../api/config";
-import { getAuthToken } from "../../../api/request";
+import {
+  getAuthToken,
+  parseWsAuthCloseNotice,
+  triggerUnauthorizedRedirect,
+} from "../../../api/request";
 import type { TokenUsage } from "../../../api/types";
 import { octopThreadsApi } from "../../../api/modules/octopThreads";
 import { buildDashboardChatWsUrl } from "../../../api/modules/wsChat";
@@ -3103,7 +3107,7 @@ export async function attachThread(
       settleOpen();
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (liveSockets.has(sessionId) && liveSockets.get(sessionId)?.ws !== ws) {
         settleOpen();
         return;
@@ -3114,6 +3118,11 @@ export async function attachThread(
       const stillStreaming = state.isStreaming;
       clearLiveSocket(sessionId, ws);
       settleOpen();
+      const authNotice = parseWsAuthCloseNotice(event);
+      if (authNotice) {
+        triggerUnauthorizedRedirect(authNotice);
+        return;
+      }
       // Socket replaced by a newer live for this session without user cancel —
       // keep sticky isStreaming so thread switch / rebind does not seal bubbles.
       if (wasIntentional && !userCancelled && stillStreaming) {
@@ -3410,7 +3419,7 @@ async function sendTurnWebSocket(
       // Prefer onclose to decide resume vs fail — browsers almost always fire both.
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (liveSockets.has(sessionId) && liveSockets.get(sessionId)?.ws !== ws) {
         settle(true);
         return;
@@ -3421,6 +3430,13 @@ async function sendTurnWebSocket(
       const focused = isSessionFocused(sessionId);
       clearLiveSocket(sessionId, ws);
       controller.signal.removeEventListener("abort", onAbort);
+      const authNotice = parseWsAuthCloseNotice(event);
+      if (authNotice) {
+        finish();
+        settle(true);
+        triggerUnauthorizedRedirect(authNotice);
+        return;
+      }
 
       // Failed to open (unit tests / offline) — seal without resume thrash.
       if (!openedForTurn && !userCancelled) {

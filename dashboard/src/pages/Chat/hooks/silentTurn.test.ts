@@ -24,13 +24,21 @@ describe("turnEndedWithoutReply", () => {
     expect(
       turnEndedWithoutReply([
         { role: "user", content: "查客户" },
-        { role: "assistant", content: "", toolData: { name: "youli_list_customers" } },
+        {
+          role: "assistant",
+          content: "",
+          toolData: { name: "youli_list_customers" },
+        },
       ]),
     ).toBe(false);
     expect(
       turnEndedWithoutReply([
         { role: "user", content: "查客户" },
-        { role: "assistant", content: "失败", errorInfo: { code: "stream_error" } },
+        {
+          role: "assistant",
+          content: "失败",
+          errorInfo: { code: "stream_error" },
+        },
       ]),
     ).toBe(false);
   });

@@ -2904,7 +2904,7 @@ class AgentManager:
                 )
         for name in server_names:
             agent.config.mcp_server_configs.setdefault(name, {})
-        extra = self._agently_write_interrupts(user_id)
+        extra = self._connector_write_interrupts(user_id)
         if extra:
             current = {**(getattr(agent.config, "interrupt_on", None) or {}), **extra}
             store = getattr(self, "_hitl_session_store", None)
@@ -4446,6 +4446,10 @@ class AgentManager:
         agent_override = cfg.get("security") if isinstance(cfg.get("security"), dict) else None
         policy = SecurityPolicy.merge(global_policy, agent_override)
 
+        from octop.infra.agents.middleware.ask_user_options import (
+            AskUserOptionsMiddleware,
+            McnWriteHitlMiddleware,
+        )
         from octop.infra.agents.middleware.binary_read_guard import BinaryReadGuardMiddleware
         from octop.infra.agents.middleware.browser_profile import BrowserProfileMiddleware
         from octop.infra.agents.middleware.mcp_output_schema import (
@@ -4474,6 +4478,8 @@ class AgentManager:
                 policy_repo=self._repos.user_policy_repo,
                 usage_repo=self._repos.usage_repo,
             ),
+            AskUserOptionsMiddleware(),
+            McnWriteHitlMiddleware(session_store=self._hitl_session_store),
             ReasoningRequestMiddleware(),
             KnowledgeSearchHintMiddleware(),
             BrowserProfileMiddleware(),
@@ -4738,25 +4744,32 @@ class AgentManager:
             or getattr(proc, "take_team_peer_prompt", None),
         )
 
-    def _agently_write_interrupts(self, user_id: int | None) -> dict[str, Any]:
-        from octop.infra.connectors.gateway.adapters.agently_cli import write_interrupt_on
+    def _connector_write_interrupts(self, user_id: int | None) -> dict[str, Any]:
+        from octop.infra.connectors.gateway.adapters.agently_cli import (
+            write_interrupt_on as agently_write_interrupt_on,
+        )
 
         if user_id is None:
             return {}
         if not self._repos.connector_repo.connector_feature_allows(user_id):
             return {}
-        return write_interrupt_on(
-            [
-                inst.mcp_server_name
-                for inst in self._repos.connector_repo.list_visible(user_id)
-                if inst.kind == "agently-cli" and inst.status == "active"
-            ]
-        )
+        visible = self._repos.connector_repo.list_visible(user_id)
+        agently_servers = [
+            inst.mcp_server_name
+            for inst in visible
+            if inst.kind == "agently-cli" and inst.status == "active"
+        ]
+        if not agently_servers:
+            return {}
+        return agently_write_interrupt_on(agently_servers)
+
+    def _agently_write_interrupts(self, user_id: int | None) -> dict[str, Any]:
+        return self._connector_write_interrupts(user_id)
 
     def _merge_agently_write_interrupts(
         self, cfg: HarnessAgentConfig, user_id: int | None
     ) -> HarnessAgentConfig:
-        extra = self._agently_write_interrupts(user_id)
+        extra = self._connector_write_interrupts(user_id)
         if not extra:
             return cfg
         return replace(cfg, interrupt_on={**(cfg.interrupt_on or {}), **extra})

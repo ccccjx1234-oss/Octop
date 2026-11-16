@@ -199,7 +199,9 @@ async def test_isolation_middleware_skips_heavy_runtime_for_avatar(
 def test_runtime_telemetry_records_events_and_snapshot() -> None:
     t = RuntimeTelemetry()
     t.record_request(req_id="abc", method="GET", path="/api/x", status=200, duration_ms=10.0)
-    t.record_request(req_id="def", method="POST", path="/api/y", status=500, duration_ms=650.0, user_id=2)
+    t.record_request(
+        req_id="def", method="POST", path="/api/y", status=500, duration_ms=650.0, user_id=2
+    )
     t.record_loop_lag(250.5)
     snap = t.snapshot(extra={"agents_running": 3})
     assert snap["total_requests"] == 2

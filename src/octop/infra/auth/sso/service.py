@@ -212,9 +212,7 @@ class SsoService:
             raise ValueError("SSO is misconfigured")
         return adapter.test_connection(provider)
 
-    def import_from_channel_for_kind(
-        self, kind: str, *, public_base: str
-    ) -> dict[str, Any]:
+    def import_from_channel_for_kind(self, kind: str, *, public_base: str) -> dict[str, Any]:
         """Populate Feishu/DingTalk SSO credentials from an existing gateway channel."""
         if kind not in {"feishu", "dingtalk"}:
             raise ValueError("Channel import only supports feishu or dingtalk")
@@ -242,10 +240,7 @@ class SsoService:
             ).strip()
             if not client_secret:
                 client_secret = str(
-                    cfg.get("client_secret")
-                    or cfg.get("app_secret")
-                    or cfg.get("secret")
-                    or ""
+                    cfg.get("client_secret") or cfg.get("app_secret") or cfg.get("secret") or ""
                 ).strip()
             if client_id and client_secret:
                 selected = (client_id, client_secret)

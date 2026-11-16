@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -38,6 +39,55 @@ YOULI_ROLE_ASSIGNMENT: tuple[str, str | None, list[str], list[tuple[str, str]]] 
     ["connector_enabled", "connector_builtin"],
     [],
 )
+
+REASON_SESSION_REPLACED = "session_replaced"
+REASON_UPSTREAM_EXPIRED = "upstream_expired"
+_SESSION_REPLACED_MESSAGE = "当前账号已在其他设备或窗口登录，当前会话已下线，请重新登录。"
+
+_REVOKED_REASONS_LOCK = threading.Lock()
+_REVOKED_SID_REASONS: dict[str, str] = {}
+
+
+def record_sid_revocation_reason(sid: str, reason: str) -> None:
+    """Remember why a Youli sid was revoked (bounded in-memory cache)."""
+    clean_sid = sid.strip()
+    if not clean_sid or not reason:
+        return
+    with _REVOKED_REASONS_LOCK:
+        if len(_REVOKED_SID_REASONS) >= 4096:
+            _REVOKED_SID_REASONS.clear()
+        _REVOKED_SID_REASONS[clean_sid] = reason
+
+
+def get_sid_revocation_reason(sid: str) -> str | None:
+    clean_sid = sid.strip()
+    if not clean_sid:
+        return None
+    with _REVOKED_REASONS_LOCK:
+        return _REVOKED_SID_REASONS.get(clean_sid)
+
+
+def resolve_youli_revocation_reason(
+    repo: Any,
+    *,
+    sid: str,
+    user_id: int,
+) -> str | None:
+    """Infer whether *sid* was replaced by a newer login or otherwise revoked."""
+    recorded = get_sid_revocation_reason(sid)
+    if recorded is not None:
+        return recorded
+    row = repo.get(sid)
+    if row is not None and not row.active:
+        newer = [
+            s
+            for s in repo.list_active_for_user(user_id)
+            if s.sid != sid and s.created_at >= row.created_at
+        ]
+        if newer:
+            return REASON_SESSION_REPLACED
+        return REASON_UPSTREAM_EXPIRED
+    return None
 
 
 def _sha256(value: str) -> str:
@@ -75,10 +125,12 @@ class YouliAuthService:
         services: SharedServices,
         users: UserManager,
         cfg: YouliConfig,
+        ws_hub: Any = None,
     ) -> None:
         self._services = services
         self._users = users
         self._cfg = cfg
+        self._ws_hub = ws_hub
         self._client = YouliClient(cfg)
 
     @property
@@ -250,7 +302,7 @@ class YouliAuthService:
         sid = uuid.uuid4().hex
         ttl = int(self._cfg.token_ttl_seconds)
         abs_expires = now + min(int(self._services.config.access_token_ttl_seconds), ttl)
-        session = self._services.youli_session_repo.create(
+        session, replaced_sids = self._services.youli_session_repo.create_replacing(
             sid=sid,
             user_id=user.id,
             account_user_id=issued.user_id,
@@ -262,6 +314,20 @@ class YouliAuthService:
             token_expires_at=now + ttl,
             abs_expires_at=abs_expires,
         )
+        for old_sid in replaced_sids:
+            record_sid_revocation_reason(old_sid, REASON_SESSION_REPLACED)
+            if self._ws_hub is not None:
+                try:
+                    await self._ws_hub.push_to_sid(
+                        old_sid,
+                        {
+                            "type": "session_revoked",
+                            "reason": REASON_SESSION_REPLACED,
+                            "message": _SESSION_REPLACED_MESSAGE,
+                        },
+                    )
+                except Exception:  # noqa: BLE001 - best-effort notification
+                    logger.debug("youli session_revoked push failed for sid %s", old_sid)
         secret = self._services.secret_repo.get("jwt")
         if secret is None:
             raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
@@ -421,7 +487,17 @@ def revalidate_business_session(
         return
     except YouliClientError as exc:
         services.youli_session_repo.revoke(session.sid)
-        raise OctopError(ErrorCode.TOKEN_EXPIRED, "请重新登录") from exc
+        reason = (
+            resolve_youli_revocation_reason(
+                services.youli_session_repo,
+                sid=session.sid,
+                user_id=session.user_id,
+            )
+            or REASON_UPSTREAM_EXPIRED
+        )
+        record_sid_revocation_reason(session.sid, reason)
+        msg = _SESSION_REPLACED_MESSAGE if reason == REASON_SESSION_REPLACED else "请重新登录"
+        raise OctopError(ErrorCode.TOKEN_EXPIRED, msg, details={"reason": reason}) from exc
     failure = _admission_failure(
         payload,
         user_id=session.account_user_id,
@@ -430,4 +506,9 @@ def revalidate_business_session(
     )
     if failure:
         services.youli_session_repo.revoke(session.sid)
-        raise OctopError(ErrorCode.TOKEN_EXPIRED, f"请重新登录：{failure}")
+        record_sid_revocation_reason(session.sid, REASON_UPSTREAM_EXPIRED)
+        raise OctopError(
+            ErrorCode.TOKEN_EXPIRED,
+            f"请重新登录：{failure}",
+            details={"reason": REASON_UPSTREAM_EXPIRED},
+        )

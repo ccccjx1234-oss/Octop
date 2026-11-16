@@ -279,12 +279,13 @@ function ChatPageInner() {
 
   const { quickCards: expertQuickCards, welcomeSuffix } =
     useExpertChatWelcome(activeAgent);
-  const { skills: chatSkills } = useSkills(
+  const { skills: chatSkills, loading: chatSkillsLoading } = useSkills(
     chatSkillCatalogAgentId(resolvedAgentId, agentChatReady, agentsLoading),
   );
-  const chatSubagents = useChatSubagents(
-    chatSkillCatalogAgentId(resolvedAgentId, agentChatReady, agentsLoading),
-  );
+  const { subagents: chatSubagents, loading: chatSubagentsLoading } =
+    useChatSubagents(
+      chatSkillCatalogAgentId(resolvedAgentId, agentChatReady, agentsLoading),
+    );
   const [trajectoryDrawerOpen, setTrajectoryDrawerOpen] = useState(false);
   const [turnRailVisible, setTurnRailVisible] = useState(false);
   const {
@@ -586,6 +587,7 @@ function ChatPageInner() {
     chatKnowledgeBases,
     availableModels,
     modelsReady,
+    composerResourcesLoading,
     activeModelRef,
     preferredModel,
     reasoningMode,
@@ -1931,6 +1933,12 @@ function ChatPageInner() {
                 prefillInputRef.current = "";
               }}
               availableModels={availableModels}
+              composerMenuLoading={
+                agentsLoading ||
+                composerResourcesLoading ||
+                chatSkillsLoading ||
+                chatSubagentsLoading
+              }
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
               reasoningMode={reasoningMode}

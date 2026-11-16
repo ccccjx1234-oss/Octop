@@ -223,9 +223,7 @@ async def test_oauth_import_channel_populates_feishu_and_dingtalk(client) -> Non
 
     status = await c.get("/api/auth/oauth/status")
     assert status.status_code == 200
-    enabled_kinds = {
-        item["kind"] for item in status.json()["providers"] if item["enabled"] is True
-    }
+    enabled_kinds = {item["kind"] for item in status.json()["providers"] if item["enabled"] is True}
     assert {"feishu", "dingtalk"}.issubset(enabled_kinds)
 
 

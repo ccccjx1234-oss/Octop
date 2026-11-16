@@ -68,7 +68,9 @@ class YouliClient:
                 target_label=f"youli:{suffix}",
             )
         except httpx.HTTPError as exc:
-            raise YouliClientUnavailable(f"youli upstream unreachable ({type(exc).__name__})") from exc
+            raise YouliClientUnavailable(
+                f"youli upstream unreachable ({type(exc).__name__})"
+            ) from exc
         try:
             body = response.json()
         except ValueError as exc:
@@ -205,7 +207,9 @@ class YouliClient:
                 headers=headers,
             )
         except httpx.HTTPError as exc:
-            raise YouliClientUnavailable(f"youli upstream unreachable ({type(exc).__name__})") from exc
+            raise YouliClientUnavailable(
+                f"youli upstream unreachable ({type(exc).__name__})"
+            ) from exc
         try:
             body = response.json()
         except ValueError as exc:

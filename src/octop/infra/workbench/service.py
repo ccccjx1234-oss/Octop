@@ -357,9 +357,7 @@ class WorkbenchService:
         updated_rows: list[WorkbenchGoalRow] = []
         for idx, row in enumerate(rows):
             template_entry = (
-                profile.goal_templates[idx]
-                if idx < len(profile.goal_templates)
-                else None
+                profile.goal_templates[idx] if idx < len(profile.goal_templates) else None
             )
             metric_key = template_entry[3] if template_entry else ""
             default_target = template_entry[1] if template_entry else row.target_value
@@ -568,7 +566,9 @@ class WorkbenchService:
         updated = self._repo.update_task(
             user_id,
             task_id,
-            title=str(payload["title"]).strip() if "title" in payload and payload["title"] is not None else None,
+            title=str(payload["title"]).strip()
+            if "title" in payload and payload["title"] is not None
+            else None,
             target_name=(
                 str(payload["target_name"]).strip()
                 if "target_name" in payload and payload["target_name"] is not None
@@ -600,9 +600,7 @@ class WorkbenchService:
     ) -> dict[str, Any]:
         local_rows = self._repo.list_deliverables(user_id)
         local_dicts = [_deliverable_to_dict(r) for r in local_rows]
-        local_ext_ids = {
-            r["source_message_id"] for r in local_dicts if r.get("source_message_id")
-        }
+        local_ext_ids = {r["source_message_id"] for r in local_dicts if r.get("source_message_id")}
 
         client, has_session, client_err = self._active_mcn_client(user_id)
         erp_items, auth_expired, erp_err = fetch_erp_deliverables(
@@ -677,17 +675,52 @@ class WorkbenchService:
             else None
         )
 
+        if (
+            existing is not None
+            and existing.deliverable_type == dtype
+            and existing.target_name == target_name
+            and existing.title == title
+            and existing.summary == summary
+            and existing.content == content
+            and existing.review_status == review_status
+            and existing.source_thread_id == source_thread_id
+        ):
+            task = (
+                self._repo.get_task(user_id, existing.linked_task_id)
+                if existing.linked_task_id is not None
+                else None
+            )
+            return {
+                "deliverable": _deliverable_to_dict(existing),
+                "progress_synced": task is not None,
+                "updated_task": _task_to_dict(task) if task is not None else None,
+                "updated": True,
+            }
+
         tasks = self._repo.list_tasks(user_id, role_key, include_seed=False)
         matched_task: WorkbenchTaskRow | None = None
         if existing and existing.linked_task_id is not None:
             matched_task = self._repo.get_task(user_id, existing.linked_task_id)
-        if matched_task is None and target_name:
+        if (
+            matched_task is None
+            and target_name
+            and target_name not in {"当前客户", "对话交付客户", "未指定对象"}
+            and len(target_name) >= 2
+        ):
             for t in tasks:
-                if t.target_name == target_name or target_name in t.target_name or t.target_name in target_name:
+                if (
+                    t.target_name == target_name
+                    or target_name in t.target_name
+                    or t.target_name in target_name
+                ):
                     matched_task = t
                     break
         if matched_task is not None:
-            next_progress = 100 if review_status == "approved" else min(100, max(matched_task.progress + 12, 85))
+            next_progress = (
+                100
+                if review_status == "approved"
+                else min(100, max(matched_task.progress + 12, 85))
+            )
             next_status = "done" if next_progress >= 100 else "pending_delivery"
             matched_task = self._repo.update_task(
                 user_id,
@@ -863,7 +896,9 @@ class WorkbenchService:
                 {
                     "label": "ERP 数据联动",
                     "value": "已连接" if mcn_connected else "未连接",
-                    "delta": "无独立人事接口" if (mcn_connected and profile.key == "hr") else (mcn_error or "授权经贝员工后自动同步"),
+                    "delta": "无独立人事接口"
+                    if (mcn_connected and profile.key == "hr")
+                    else (mcn_error or "授权经贝员工后自动同步"),
                 },
             ]
             local_pts = [(d.delivered_at, 1.0) for d in deliverables] + [
@@ -909,7 +944,9 @@ class WorkbenchService:
             raise OctopError(ErrorCode.NOT_FOUND, "goal not found")
         return _goal_to_dict(updated)
 
-    def sync_mcn_orders(self, user_id: int, *, role_key: str = "customer_service") -> dict[str, Any]:
+    def sync_mcn_orders(
+        self, user_id: int, *, role_key: str = "customer_service"
+    ) -> dict[str, Any]:
         """Force-refresh live ERP/AI Creator data for this user and clean legacy mock seed rows."""
         self._repo.purge_seed_tasks(user_id)
         invalidate_user_erp_cache(user_id)
