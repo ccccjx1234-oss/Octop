@@ -103,6 +103,9 @@ export function useChatComposerResources(
   const [chatConnectors, setChatConnectors] = useState<ChatConnectorOption[]>(
     [],
   );
+  const [connectorsLoading, setConnectorsLoading] = useState(true);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const knowledgeCatalogRef = useRef<{
     agentId: string | null;
     bases: KnowledgeBase[];
@@ -241,9 +244,11 @@ export function useChatComposerResources(
       connectorCatalogRef.current = null;
       setSelectedConnectors([]);
       setChatConnectors([]);
+      setConnectorsLoading(false);
       return;
     }
     let cancelled = false;
+    let latestConnectorRequest = 0;
     const agentKey = resolvedAgentId ?? null;
     const applyConnectorOptions = (options: ChatConnectorOption[]) => {
       connectorCatalogRef.current = { agentId: agentKey, options };
@@ -289,10 +294,12 @@ export function useChatComposerResources(
       applyConnectorOptions(cachedConnectors.options);
     }
     const loadConnectors = () => {
+      const request = ++latestConnectorRequest;
+      setConnectorsLoading(true);
       void connectorsApi
         .listInstances(remoteBridge ? resolvedAgentId : undefined)
         .then((instances) => {
-          if (cancelled) return;
+          if (cancelled || request !== latestConnectorRequest) return;
           const options = (instances ?? [])
             .filter(
               (i) =>
@@ -318,6 +325,11 @@ export function useChatComposerResources(
                 : i.default_open === true && i.owner_user_id === currentUserId,
             }));
           applyConnectorOptions(options);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!cancelled && request === latestConnectorRequest)
+            setConnectorsLoading(false);
         });
     };
     loadConnectors();
@@ -345,6 +357,7 @@ export function useChatComposerResources(
       knowledgeCatalogRef.current = null;
       setSelectedKnowledgeBaseIds([]);
       setChatKnowledgeBases(undefined);
+      setKnowledgeLoading(false);
       return;
     }
     let cancelled = false;
@@ -411,6 +424,7 @@ export function useChatComposerResources(
     const loadBases = (): Promise<KnowledgeBase[]> =>
       knowledgeBasesApi.list(resolvedAgentId);
 
+    setKnowledgeLoading(true);
     void loadCapability()
       .then((capability) => {
         if (cancelled) return;
@@ -431,6 +445,9 @@ export function useChatComposerResources(
         if (knowledgeCatalogRef.current?.agentId !== agentKey) {
           setChatKnowledgeBases(undefined);
         }
+      })
+      .finally(() => {
+        if (!cancelled) setKnowledgeLoading(false);
       });
     return () => {
       cancelled = true;
@@ -451,6 +468,7 @@ export function useChatComposerResources(
     setModelCatalog(null);
     const loadModels = () => {
       const request = ++latestRequest;
+      setModelsLoading(true);
       void providerApi
         .listResolvedModels(resolvedAgentId)
         .then((data) => {
@@ -459,7 +477,10 @@ export function useChatComposerResources(
           }
         })
         // An unavailable catalog is not proof that a saved model was disabled.
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          if (!cancelled && request === latestRequest) setModelsLoading(false);
+        });
     };
     loadModels();
     const onFocus = () => loadModels();
@@ -696,6 +717,8 @@ export function useChatComposerResources(
     chatKnowledgeBases,
     availableModels,
     modelsReady,
+    composerResourcesLoading:
+      connectorsLoading || knowledgeLoading || modelsLoading,
     activeModelRef,
     preferredModel,
     handleConnectorsChange,

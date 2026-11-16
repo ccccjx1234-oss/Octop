@@ -868,8 +868,6 @@ async def create_instance(
                 details={"login_url": "/aiwork/staff-login.html"},
             )
         cred_input["token"] = token
-        if not str(cred_input.get("base_url") or "").strip():
-            cred_input["base_url"] = server.services.config.youli.mcn_base_url
 
     try:
         cred_payload = await _prepare_credentials(

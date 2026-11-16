@@ -29,7 +29,7 @@ import {
   Info,
   Search,
 } from "lucide-react";
-import { Tooltip, Popover } from "antd";
+import { Tooltip, Popover, Spin } from "antd";
 import cx from "classnames";
 import { message } from "@/utils/antdMessage";
 import type { ResolvedModel } from "../../../api/types";
@@ -145,6 +145,7 @@ interface ChatInputActionsRowProps {
   contextMaxTokens?: number;
   decisionSaved?: number;
   availableModels?: ResolvedModel[];
+  composerMenuLoading?: boolean;
   selectedModel?: string | null;
   defaultModel?: string | null;
   onModelChange?: (model: string | null) => void;
@@ -213,6 +214,7 @@ export default function ChatInputActionsRow({
   decisionSaved = 0,
   contextMaxTokens = 128_000,
   availableModels,
+  composerMenuLoading = false,
   selectedModel,
   onModelChange,
   reasoningMode = "auto",
@@ -384,6 +386,44 @@ export default function ChatInputActionsRow({
   );
   const activeSkillSlugs = parseSkillSlugsInText(text, skillTokenRefs);
   const showModePicker = Boolean(onConversationModeChange);
+  const [menuItems, setMenuItems] = useState<{
+    mode: boolean;
+    model: boolean;
+    connector: boolean;
+    knowledge: boolean;
+    skill: boolean;
+    expert: boolean;
+    subagent: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (!overflowPopoverOpen) {
+      setMenuItems(null);
+      return;
+    }
+    if (composerMenuLoading) return;
+    setMenuItems(
+      (current) =>
+        current ?? {
+          mode: showModePicker,
+          model: showModelPicker,
+          connector: showConnectorPicker,
+          knowledge: showKnowledgePicker,
+          skill: showSkillPicker,
+          expert: showExpertPicker,
+          subagent: showSubagentPicker,
+        },
+    );
+  }, [
+    overflowPopoverOpen,
+    composerMenuLoading,
+    showModePicker,
+    showModelPicker,
+    showConnectorPicker,
+    showKnowledgePicker,
+    showSkillPicker,
+    showExpertPicker,
+    showSubagentPicker,
+  ]);
   const showOverflowMenu =
     showModePicker ||
     showModelPicker ||
@@ -742,7 +782,12 @@ export default function ChatInputActionsRow({
 
   const renderPlusMenu = () => (
     <div className={styles.mobileOverflowMenu}>
-      {showModePicker && (
+      {!menuItems ? (
+        <div role="status" style={{ padding: 24, textAlign: "center" }}>
+          <Spin size="small" /> {t("common.loading", "加载中...")}
+        </div>
+      ) : null}
+      {menuItems?.mode && (
         <button
           type="button"
           className={cx(
@@ -767,7 +812,7 @@ export default function ChatInputActionsRow({
           </span>
         </button>
       )}
-      {showModelPicker && (
+      {menuItems?.model && (
         <button
           type="button"
           className={cx(
@@ -794,7 +839,7 @@ export default function ChatInputActionsRow({
           </span>
         </button>
       )}
-      {showConnectorPicker && (
+      {menuItems?.connector && (
         <button
           type="button"
           className={cx(
@@ -813,7 +858,7 @@ export default function ChatInputActionsRow({
           </span>
         </button>
       )}
-      {showKnowledgePicker && (
+      {menuItems?.knowledge && (
         <button
           type="button"
           className={cx(
@@ -832,7 +877,7 @@ export default function ChatInputActionsRow({
           </span>
         </button>
       )}
-      {showSkillPicker && (
+      {menuItems?.skill && (
         <button
           type="button"
           className={cx(
@@ -851,7 +896,7 @@ export default function ChatInputActionsRow({
           </span>
         </button>
       )}
-      {showExpertPicker && (
+      {menuItems?.expert && (
         <button
           type="button"
           className={cx(
@@ -873,7 +918,7 @@ export default function ChatInputActionsRow({
           </span>
         </button>
       )}
-      {showSubagentPicker && (
+      {menuItems?.subagent && (
         <button
           type="button"
           className={cx(

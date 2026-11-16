@@ -113,6 +113,8 @@ export function findSpeakerTextToContinue(
       if (lastTool < 0) lastTool = i;
       continue;
     }
+    // An error is a separate bubble and must not receive later answer tokens.
+    if (message.status === "error") break;
     if (lastText < 0) lastText = i;
   }
   if (lastText < 0 || lastTool > lastText) return -1;

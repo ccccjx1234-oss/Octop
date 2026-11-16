@@ -213,6 +213,49 @@ class YouliSessionRepo:
     def __init__(self, db: DatabasePool) -> None:
         self._db = db
 
+    def create_replacing(self, **values: Any) -> tuple[YouliSessionRow, list[str]]:
+        """Serialize logins for one user and replace their sessions atomically."""
+        user_id = values["user_id"]
+        sid = values["sid"]
+        with self._db.transaction() as conn:
+            if self._db.dialect == "postgresql":
+                conn.execute("SELECT id FROM users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
+            rows = conn.execute(
+                "SELECT sid FROM youli_session WHERE user_id = ? AND status = 'active'",
+                (user_id,),
+            ).fetchall()
+            replaced = [str(row["sid"] if isinstance(row, dict) else row[0]) for row in rows]
+            conn.execute(
+                "UPDATE youli_session SET status = 'revoked', revoked_at = ?, token_blob = NULL "
+                "WHERE user_id = ? AND status = 'active'",
+                (now_ts(), user_id),
+            )
+            conn.execute(
+                "INSERT INTO youli_session("
+                "sid, user_id, account_user_id, account_username, company_id, employee_id, "
+                "industry, token_blob, token_expires_at, abs_expires_at, status, created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+                tuple(
+                    values[k]
+                    for k in (
+                        "sid",
+                        "user_id",
+                        "account_user_id",
+                        "account_username",
+                        "company_id",
+                        "employee_id",
+                        "industry",
+                        "token_blob",
+                        "token_expires_at",
+                        "abs_expires_at",
+                    )
+                )
+                + (now_ts(),),
+            )
+            row = conn.execute("SELECT * FROM youli_session WHERE sid = ?", (sid,)).fetchone()
+            assert row is not None  # noqa: S101
+            return YouliSessionRow.from_row(row), replaced
+
     def create(
         self,
         *,
@@ -283,6 +326,23 @@ class YouliSessionRepo:
                 (now_ts(), user_id),
             )
             return int(getattr(cur, "rowcount", 0) or 0)
+
+    def revoke_other_for_user(self, user_id: int, *, keep_sid: str) -> list[str]:
+        """Revoke any other active Youli sessions for *user_id* and return their sids."""
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT sid FROM youli_session WHERE user_id = ? AND status = 'active' AND sid != ?",
+                (user_id, keep_sid),
+            ).fetchall()
+            sids = [str(row["sid"] if isinstance(row, dict) else row[0]) for row in rows]
+            if not sids:
+                return []
+            conn.execute(
+                "UPDATE youli_session SET status = 'revoked', revoked_at = ?, token_blob = NULL "
+                "WHERE user_id = ? AND status = 'active' AND sid != ?",
+                (now_ts(), user_id, keep_sid),
+            )
+            return sids
 
     def list_active_for_user(self, user_id: int) -> list[YouliSessionRow]:
         with self._db.connect() as conn:

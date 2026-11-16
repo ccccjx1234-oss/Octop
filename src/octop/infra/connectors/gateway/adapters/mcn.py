@@ -16,6 +16,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from octop.config import YouliConfig
+from octop.infra.agents.plugins.plugin_tool_names import sanitize_plugin_tool_name
 from octop.infra.auth.youli.delivery_export import (
     EXPORT_DESCRIPTION,
     GET_DOWNLOAD_TASK_DESCRIPTION,
@@ -27,8 +28,14 @@ from octop.infra.auth.youli.delivery_export import (
     list_export_templates,
 )
 from octop.infra.auth.youli.mcn_client import McnClient, McnClientError
+from octop.infra.auth.youli.pagination import (
+    parse_page_args,
+    post_all_pages,
+    post_with_page,
+    slim_rows,
+)
 
-_MAX_OUTPUT_CHARS = 8000
+_MAX_OUTPUT_CHARS = 24000
 _SAVED_QUOTES: dict[str, tuple[float, str]] = {}
 
 
@@ -118,6 +125,25 @@ def _slim(data: Any, keys: tuple[str, ...]) -> Any:
     ]
 
 
+def _post_page(
+    client: McnClient,
+    path: str,
+    payload: dict[str, Any],
+    keys: tuple[str, ...],
+    *,
+    page_num: int,
+    page_size: int,
+) -> dict[str, Any]:
+    rows, page_info = post_with_page(
+        client,
+        path,
+        payload,
+        page_num=page_num,
+        page_size=page_size,
+    )
+    return {"items": slim_rows(rows, keys), "page": page_info}
+
+
 def _normalize_date(value: Any, field_name: str, *, required: bool = False) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -179,13 +205,17 @@ def _order_item(item: dict[str, Any]) -> dict[str, Any]:
         "packageId": item.get("packageId"),
         "count": item.get("count"),
         "quantity": item.get("quantity"),
-        "price": item.get("originalPrice") if item.get("originalPrice") is not None else item.get("price"),
+        "price": item.get("originalPrice")
+        if item.get("originalPrice") is not None
+        else item.get("price"),
         "originalPrice": item.get("originalPrice"),
         "originalMoney": item.get("originalMoney"),
         "couponMoney": item.get("couponMoney"),
         "couponJson": coupon_json,
         "couponAfterMoney": (
-            item.get("baseMoney") if item.get("baseMoney") is not None else item.get("couponAfterMoney")
+            item.get("baseMoney")
+            if item.get("baseMoney") is not None
+            else item.get("couponAfterMoney")
         ),
         "factMoney": item.get("factMoney"),
         "factRate": item.get("factRate"),
@@ -240,8 +270,12 @@ def _client(creds: dict[str, Any]) -> McnClient:
         if not token:
             # Background work for this same employee has no turn sid.
             token = str(creds.get("token") or "").strip()
-    base_url = str(creds.get("base_url") or os.environ.get("OCTOP_YOULI_MCN_URL") or "").strip()
-    ca_file = str(creds.get("ca_file") or os.environ.get("OCTOP_YOULI_CA_FILE") or "").strip()
+    base_url = (
+        str(os.environ.get("OCTOP_YOULI_MCN_URL") or creds.get("base_url") or "")
+        .strip()
+        .rstrip("/")
+    )
+    ca_file = str(os.environ.get("OCTOP_YOULI_CA_FILE") or creds.get("ca_file") or "").strip()
     if not token:
         raise McnClientError("MCN 连接器未授权，请重新登录会火员工账号")
     client = McnClient(YouliConfig(mcn_base_url=base_url, ca_file=ca_file), token)
@@ -251,10 +285,11 @@ def _client(creds: dict[str, Any]) -> McnClient:
 
 
 def _list_accounts(client: McnClient, args: dict[str, Any]) -> str:
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
     payload: dict[str, Any] = {
         "page": {
-            "pageNum": max(1, int(args.get("page") or 1)),
-            "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
+            "pageNum": page_num,
+            "pageSize": page_size,
         }
     }
     name = str(args.get("account_name") or "").strip()
@@ -263,10 +298,11 @@ def _list_accounts(client: McnClient, args: dict[str, Any]) -> str:
     platform = int(args.get("platform") or 0)
     if platform:
         payload["platforms"] = [platform]
-    data = client.post("/api/mcn/account/list", payload)
     return _json(
-        _slim(
-            data,
+        _post_page(
+            client,
+            "/api/mcn/account/list",
+            payload,
             (
                 "id",
                 "accountNumber",
@@ -278,6 +314,8 @@ def _list_accounts(client: McnClient, args: dict[str, Any]) -> str:
                 "fans",
                 "distributionGroupName",
             ),
+            page_num=page_num,
+            page_size=page_size,
         )
     )
 
@@ -299,19 +337,21 @@ def _query_account_specs(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _list_quotes(client: McnClient, args: dict[str, Any]) -> str:
+    page_num, page_size = parse_page_args(args, default_size=10, max_size=100)
     payload: dict[str, Any] = {
         "page": {
-            "pageNum": max(1, int(args.get("page") or 1)),
-            "pageSize": min(20, max(1, int(args.get("page_size") or 10))),
+            "pageNum": page_num,
+            "pageSize": page_size,
         }
     }
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["offerOrderName"] = keyword
-    data = client.post("/api/mcn/offerOrder/list", payload)
     return _json(
-        _slim(
-            data,
+        _post_page(
+            client,
+            "/api/mcn/offerOrder/list",
+            payload,
             (
                 "id",
                 "offerOrderNo",
@@ -323,6 +363,8 @@ def _list_quotes(client: McnClient, args: dict[str, Any]) -> str:
                 "status",
                 "createdTime",
             ),
+            page_num=page_num,
+            page_size=page_size,
         )
     )
 
@@ -335,32 +377,51 @@ def _get_quote(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _list_products(client: McnClient, args: dict[str, Any]) -> str:
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 20}}
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
+    payload: dict[str, Any] = {"page": {"pageNum": page_num, "pageSize": page_size}}
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["name"] = keyword
-    data = client.post("/api/mcn/product/list", payload)
-    return _json(_slim(data, ("id", "name", "productType", "attribute", "productCategoryId")))
+    return _json(
+        _post_page(
+            client,
+            "/api/mcn/product/list",
+            payload,
+            ("id", "name", "productType", "attribute", "productCategoryId"),
+            page_num=page_num,
+            page_size=page_size,
+        )
+    )
 
 
 def _list_customers(client: McnClient, args: dict[str, Any]) -> str:
     # The MCN list endpoint defaults this flag to false; list views must opt in.
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
     payload: dict[str, Any] = {
-        "page": {"pageNum": 1, "pageSize": 20},
+        "page": {"pageNum": page_num, "pageSize": page_size},
         "useDataPermission": True,
     }
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["name"] = keyword
-    data = client.post("/api/mcn/customer-management/list", payload)
-    return _json(_slim(data, ("id", "name", "category", "contact", "mobile")))
+    return _json(
+        _post_page(
+            client,
+            "/api/mcn/customer-management/list",
+            payload,
+            ("id", "name", "category", "contact", "mobile"),
+            page_num=page_num,
+            page_size=page_size,
+        )
+    )
 
 
 def _list_customer_ownerships(client: McnClient, args: dict[str, Any]) -> str:
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
     payload: dict[str, Any] = {
         "page": {
-            "pageNum": max(1, int(args.get("page") or 1)),
-            "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
+            "pageNum": page_num,
+            "pageSize": page_size,
         },
         "useDataPermission": True,
     }
@@ -370,10 +431,11 @@ def _list_customer_ownerships(client: McnClient, args: dict[str, Any]) -> str:
     customer_id = str(args.get("customer_id") or "").strip()
     if customer_id:
         payload["customerId"] = customer_id
-    data = client.post("/api/mcn/customer/opportunity/list", payload)
     return _json(
-        _slim(
-            data,
+        _post_page(
+            client,
+            "/api/mcn/customer/opportunity/list",
+            payload,
             (
                 "id",
                 "opportunityCode",
@@ -391,23 +453,29 @@ def _list_customer_ownerships(client: McnClient, args: dict[str, Any]) -> str:
                 "userTwoName",
                 "createdTime",
             ),
+            page_num=page_num,
+            page_size=page_size,
         )
     )
 
 
 def _list_contracts(client: McnClient, args: dict[str, Any]) -> str:
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 20}}
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
+    payload: dict[str, Any] = {"page": {"pageNum": page_num, "pageSize": page_size}}
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["keyword"] = keyword
     customer_id = str(args.get("customer_id") or "").strip()
     if customer_id:
         payload["customerId"] = customer_id
-    data = client.post("/api/mcn/contract/list", payload)
     return _json(
-        _slim(
-            data,
+        _post_page(
+            client,
+            "/api/mcn/contract/list",
+            payload,
             ("id", "name", "customerName", "status", "amount", "startTime", "endTime"),
+            page_num=page_num,
+            page_size=page_size,
         )
     )
 
@@ -447,17 +515,30 @@ def _list_company_entities(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _list_opportunities(client: McnClient, args: dict[str, Any]) -> str:
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
     payload: dict[str, Any] = {
         "page": {
-            "pageNum": max(1, int(args.get("page") or 1)),
-            "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
-        }
+            "pageNum": page_num,
+            "pageSize": page_size,
+        },
+        "useDataPermission": True,
     }
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
-        payload["keyword"] = keyword
-    data = client.post("/api/mcn/customer/opportunity/list", payload)
-    return _json(_slim(data, ("id", "name", "customerId", "userName", "createdTime")))
+        payload["name"] = keyword
+    customer_id = str(args.get("customer_id") or "").strip()
+    if customer_id:
+        payload["customerId"] = customer_id
+    return _json(
+        _post_page(
+            client,
+            "/api/mcn/customer/opportunity/list",
+            payload,
+            ("id", "name", "customerId", "userName", "createdTime"),
+            page_num=page_num,
+            page_size=page_size,
+        )
+    )
 
 
 def _list_dictionaries(client: McnClient, args: dict[str, Any]) -> str:
@@ -481,22 +562,27 @@ def _list_dictionaries(client: McnClient, args: dict[str, Any]) -> str:
 
 
 def _list_projects(client: McnClient, args: dict[str, Any]) -> str:
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
     payload: dict[str, Any] = {
         "page": {
-            "pageNum": max(1, int(args.get("page") or 1)),
-            "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
+            "pageNum": page_num,
+            "pageSize": page_size,
         }
     }
+    keyword = str(args.get("keyword") or "").strip()
+    if keyword:
+        payload["projectName"] = keyword
     customer_id = str(args.get("customer_opportunity_id") or "").strip()
     if customer_id:
         payload["customerId"] = customer_id
     project_type = args.get("project_type")
     if project_type:
         payload["projectTypeList"] = [int(project_type)]
-    data = client.post("/api/mcn/customerSubProject/list", payload)
     return _json(
-        _slim(
-            data,
+        _post_page(
+            client,
+            "/api/mcn/customerSubProject/list",
+            payload,
             (
                 "id",
                 "projectName",
@@ -507,26 +593,46 @@ def _list_projects(client: McnClient, args: dict[str, Any]) -> str:
                 "projectBudget",
                 "parentProjectId",
             ),
+            page_num=page_num,
+            page_size=page_size,
         )
     )
 
 
 def _list_price_versions(client: McnClient, args: dict[str, Any]) -> str:
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 20}}
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
+    payload: dict[str, Any] = {"page": {"pageNum": page_num, "pageSize": page_size}}
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["name"] = keyword
-    data = client.post("/api/mcn/account/quote/version/list", payload)
-    return _json(_slim(data, ("id", "name", "version", "isDefault", "status")))
+    return _json(
+        _post_page(
+            client,
+            "/api/mcn/account/quote/version/list",
+            payload,
+            ("id", "name", "version", "isDefault", "status"),
+            page_num=page_num,
+            page_size=page_size,
+        )
+    )
 
 
 def _list_coupon_versions(client: McnClient, args: dict[str, Any]) -> str:
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 20}}
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
+    payload: dict[str, Any] = {"page": {"pageNum": page_num, "pageSize": page_size}}
     keyword = str(args.get("keyword") or "").strip()
     if keyword:
         payload["name"] = keyword
-    data = client.post("/api/mcn/coupon/version/list", payload)
-    return _json(_slim(data, ("id", "name", "version", "isDefault", "status")))
+    return _json(
+        _post_page(
+            client,
+            "/api/mcn/coupon/version/list",
+            payload,
+            ("id", "name", "version", "isDefault", "status"),
+            page_num=page_num,
+            page_size=page_size,
+        )
+    )
 
 
 def _parse_quote(client: McnClient, args: dict[str, Any]) -> str:
@@ -659,17 +765,18 @@ def _quote_options(client: McnClient, path: str, filters: dict[str, Any]) -> lis
 
 
 def _opportunity_rows(client: McnClient, *, customer_id: str = "") -> list[dict[str, Any]]:
-    payload: dict[str, Any] = {
-        "page": {"pageNum": 1, "pageSize": 100},
-        "useDataPermission": True,
-    }
+    payload: dict[str, Any] = {"useDataPermission": True}
     if customer_id:
         payload["customerId"] = customer_id
     try:
-        rows = client.post("/api/mcn/customer/opportunity/list", payload)
+        rows = post_all_pages(
+            client,
+            "/api/mcn/customer/opportunity/list",
+            payload,
+            page_size=100,
+            max_pages=10,
+        )
     except McnClientError:
-        return []
-    if not isinstance(rows, list):
         return []
     return [
         r
@@ -735,13 +842,14 @@ def _resolve_sub_project_for_order(
     if client is None or not sub_project_id:
         return project_id
     try:
-        rows = client.post(
+        rows = post_all_pages(
+            client,
             "/api/mcn/customerSubProject/list",
-            {"page": {"pageNum": 1, "pageSize": 100}},
+            {},
+            page_size=100,
+            max_pages=10,
         )
     except McnClientError:
-        return project_id
-    if not isinstance(rows, list):
         return project_id
     real_rows = [
         r
@@ -802,22 +910,21 @@ def _resolve_protect_type(
             raise McnClientError("未创建：protectType 仅支持 1普通保价 2特客直签 3特客复签。")
         return val
     try:
-        rows = client.post(list_path, {"page": {"pageNum": 1, "pageSize": 100}})
+        rows = post_all_pages(client, list_path, {}, page_size=100, max_pages=10)
     except McnClientError:
         return 1
-    if isinstance(rows, list):
-        matched = next(
-            (
-                r
-                for r in rows
-                if isinstance(r, dict)
-                and str(r.get("id")) == version_id
-                and r.get("isSpecialCustomer") is not None
-            ),
-            None,
-        )
-        if matched and int(matched.get("isSpecialCustomer") or 0) == 1:
-            return 2
+    matched = next(
+        (
+            r
+            for r in rows
+            if isinstance(r, dict)
+            and str(r.get("id")) == version_id
+            and r.get("isSpecialCustomer") is not None
+        ),
+        None,
+    )
+    if matched and int(matched.get("isSpecialCustomer") or 0) == 1:
+        return 2
     return 1
 
 
@@ -1282,19 +1389,18 @@ def _list_service_items(client: McnClient, args: dict[str, Any]) -> str:
     order_id = str(args.get("order_id") or "").strip()
     if not order_id:
         return "查询服务项目失败：order_id 不能为空"
-    data = client.post(
-        "/api/mcn/order/service/item/page/list",
-        {
-            "page": {
-                "pageNum": max(1, int(args.get("page") or 1)),
-                "pageSize": min(20, max(1, int(args.get("page_size") or 20))),
-            },
-            "orderId": order_id,
-        },
-    )
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
     return _json(
-        _slim(
-            data,
+        _post_page(
+            client,
+            "/api/mcn/order/service/item/page/list",
+            {
+                "page": {
+                    "pageNum": page_num,
+                    "pageSize": page_size,
+                },
+                "orderId": order_id,
+            },
             (
                 "id",
                 "orderId",
@@ -1306,6 +1412,8 @@ def _list_service_items(client: McnClient, args: dict[str, Any]) -> str:
                 "flowStatus",
                 "orderAmount",
             ),
+            page_num=page_num,
+            page_size=page_size,
         )
     )
 
@@ -1338,7 +1446,9 @@ def _update_publish_link(client: McnClient, args: dict[str, Any]) -> str:
         "publishLink": link,
     }
     publish_time = _normalize_date(
-        args.get("publish_time") if args.get("publish_time") not in (None, "") else existing_vo.get("publishTime"),
+        args.get("publish_time")
+        if args.get("publish_time") not in (None, "")
+        else existing_vo.get("publishTime"),
         "发布时间",
     )
     if publish_time:
@@ -1455,17 +1565,19 @@ def _create_coupon_version(client: McnClient, args: dict[str, Any]) -> str:
         opportunity_name = str(args.get("opportunity_name") or "").strip()
         if not opportunity_name:
             try:
-                rows = client.post(
+                rows = post_all_pages(
+                    client,
                     "/api/mcn/customer/opportunity/list",
-                    {"page": {"pageNum": 1, "pageSize": 20}},
+                    {"useDataPermission": True},
+                    page_size=100,
+                    max_pages=10,
                 )
-                if isinstance(rows, list):
-                    matched = next(
-                        (r for r in rows if str(r.get("id")) == opportunity_id),
-                        None,
-                    )
-                    if matched and matched.get("name"):
-                        opportunity_name = str(matched["name"]).strip()
+                matched = next(
+                    (r for r in rows if str(r.get("id")) == opportunity_id),
+                    None,
+                )
+                if matched and matched.get("name"):
+                    opportunity_name = str(matched["name"]).strip()
             except McnClientError:
                 opportunity_name = ""
         if opportunity_name:
@@ -1493,8 +1605,12 @@ def _create_contract(client: McnClient, args: dict[str, Any]) -> str:
     payload = args.get("payload")
     if payload is None:
         contract_type = int(args.get("type") or 1)
-        effective_time = _normalize_date(args.get("effective_time"), "effective_time", required=True)
-        expiration_time = _normalize_date(args.get("expiration_time"), "expiration_time", required=True)
+        effective_time = _normalize_date(
+            args.get("effective_time"), "effective_time", required=True
+        )
+        expiration_time = _normalize_date(
+            args.get("expiration_time"), "expiration_time", required=True
+        )
         if expiration_time < effective_time:
             return "未创建：expiration_time 不能早于 effective_time。"
         signing_date = _normalize_date(
@@ -1662,7 +1778,7 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "youli_list_accounts",
-        "description": "查询经贝 MCN 账号库，拉包报价先选账号时使用。",
+        "description": "查询经贝 MCN 账号库，拉包报价先选账号时使用。返回 items 和 page 分页信息。",
         "inputSchema": _schema(
             {
                 "account_name": {"type": "string", "description": "账号名称关键字，可空"},
@@ -1671,7 +1787,7 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "媒体平台：1抖音 2快手 3小红书 4微博 5微信 6今日头条 7B站；0 表示不限",
                 },
                 "page": {"type": "integer", "description": "页码，从 1 开始"},
-                "page_size": {"type": "integer", "description": "每页数量，最大 20"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             }
         ),
     },
@@ -1693,12 +1809,12 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_list_quotes",
-        "description": "查询经贝 MCN 报价单列表。",
+        "description": "查询经贝 MCN 报价单列表。返回 items 和 page 分页信息。",
         "inputSchema": _schema(
             {
                 "keyword": {"type": "string", "description": "报价单名称或编号关键字，可空"},
-                "page": {"type": "integer"},
-                "page_size": {"type": "integer"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 10，最大 100"},
             }
         ),
     },
@@ -1709,33 +1825,47 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_list_products",
-        "description": "查询经贝 MCN 产品列表，用于确定报价单的 productId。",
-        "inputSchema": _schema({"keyword": {"type": "string"}}),
+        "description": "查询经贝 MCN 产品列表，用于确定报价单的 productId。返回 items 和 page 分页信息。",
+        "inputSchema": _schema(
+            {
+                "keyword": {"type": "string", "description": "产品名称关键字，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
+            }
+        ),
     },
     {
         "name": "youli_list_customers",
-        "description": "查询经贝 MCN 客户主数据（公司客户库），按当前员工的客户管理数据权限过滤，用于创建报价/合同时确定 customer_id。查询我的客户、客户归属或客户信息时请用 youli_list_customer_ownerships。",
-        "inputSchema": _schema({"keyword": {"type": "string"}}),
+        "description": "查询经贝 MCN 客户主数据（公司客户库），按当前员工的客户管理数据权限过滤，用于创建报价/合同时确定 customer_id。返回 items 和 page 分页信息。查询我的客户、客户归属或客户信息时请用 youli_list_customer_ownerships。",
+        "inputSchema": _schema(
+            {
+                "keyword": {"type": "string", "description": "客户名称关键字，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
+            }
+        ),
     },
     {
         "name": "youli_list_customer_ownerships",
-        "description": "查询当前员工数据权限内的客户归属（我的客户/客户商机），用于查客户归属、我的客户或客户信息。返回客户归属ID、客户ID、客户名称、类别、联系人、电话、归属商务/执行等。",
+        "description": "查询当前员工数据权限内的客户归属（我的客户/客户商机），用于查客户归属、我的客户或客户信息。返回 items（客户归属ID、客户ID、客户名称、类别、联系人、电话、归属商务/执行等）和 page 分页信息。",
         "inputSchema": _schema(
             {
                 "keyword": {"type": "string", "description": "客户名称关键字，可空"},
                 "customer_id": {"type": "string", "description": "客户ID，可空"},
                 "page": {"type": "integer", "description": "页码，从 1 开始"},
-                "page_size": {"type": "integer", "description": "每页数量，最大 20"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             }
         ),
     },
     {
         "name": "youli_list_contracts",
-        "description": "查询经贝 MCN 销售合同。",
+        "description": "查询经贝 MCN 销售合同。返回 items 和 page 分页信息。",
         "inputSchema": _schema(
             {
-                "keyword": {"type": "string"},
-                "customer_id": {"type": "string"},
+                "keyword": {"type": "string", "description": "合同名称或客户关键字，可空"},
+                "customer_id": {"type": "string", "description": "客户 ID，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             }
         ),
     },
@@ -1754,12 +1884,13 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_list_opportunities",
-        "description": "查询客户商机列表，创建合同/项目/报价时用于确定 customer_opportunity_id；返回精简字段。查询客户归属明细请用 youli_list_customer_ownerships。",
+        "description": "查询客户商机列表，创建合同/项目/报价时用于确定 customer_opportunity_id；返回 items（精简字段）和 page 分页信息。查询客户归属明细请用 youli_list_customer_ownerships。",
         "inputSchema": _schema(
             {
                 "keyword": {"type": "string", "description": "客户或商机名称关键字，可空"},
-                "page": {"type": "integer"},
-                "page_size": {"type": "integer"},
+                "customer_id": {"type": "string", "description": "客户 ID，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             }
         ),
     },
@@ -1778,25 +1909,38 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_list_projects",
-        "description": "查询客户项目列表（含项目类型、主平台、预算）。",
+        "description": "查询客户项目列表（含项目类型、主平台、预算）。返回 items 和 page 分页信息。",
         "inputSchema": _schema(
             {
+                "keyword": {"type": "string", "description": "项目名称关键字，可空"},
                 "customer_opportunity_id": {"type": "string", "description": "客户商机 ID，可空"},
                 "project_type": {"type": "integer", "description": "项目类型，可空"},
-                "page": {"type": "integer"},
-                "page_size": {"type": "integer"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             }
         ),
     },
     {
         "name": "youli_list_price_versions",
-        "description": "查询经贝 MCN 账号价格版本。",
-        "inputSchema": _schema({"keyword": {"type": "string"}}),
+        "description": "查询经贝 MCN 账号价格版本。返回 items 和 page 分页信息。",
+        "inputSchema": _schema(
+            {
+                "keyword": {"type": "string", "description": "价格版本名称关键字，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
+            }
+        ),
     },
     {
         "name": "youli_list_coupon_versions",
-        "description": "查询经贝 MCN 优惠政策版本。",
-        "inputSchema": _schema({"keyword": {"type": "string"}}),
+        "description": "查询经贝 MCN 优惠政策版本。返回 items 和 page 分页信息。",
+        "inputSchema": _schema(
+            {
+                "keyword": {"type": "string", "description": "优惠政策版本名称关键字，可空"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
+            }
+        ),
     },
     {
         "name": "youli_parse_quote",
@@ -1811,18 +1955,25 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_save_quote",
-        "description": "保存经贝 MCN 报价单（写操作，需用户确认）。",
+        "description": "保存经贝 MCN 报价单（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准执行。",
         "inputSchema": _schema(
             {
                 "payload": {"type": "object", "description": "OfferOrderSaveRo 结构的报价单"},
-                "confirm": {"type": "boolean", "description": "用户核对并明确确认后才传 true"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备执行保存时传 true，系统自动触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要，说明客户、产品和金额，供确认弹窗展示",
+                },
             },
             ["payload", "confirm"],
         ),
     },
     {
         "name": "youli_create_package_quote",
-        "description": "创建账号报价：先用 confirm=false 生成只读草稿，自动带出散投项目类型、常规单、商机首个有效合同、合同保价或默认价格/优惠版本、账号规格与价格，并调用页面同一优惠试算。不要向用户索要 ID，不要逐个确认默认字段；只追问账号平台/规格等业务歧义。汇总草稿金额一次确认后 confirm=true 保存；不需要再次确认用户已选过的规格。接口为空只说明当前查询无结果，不可断言接口坏了或系统没有其他记录。",
+        "description": "创建账号报价：先用 confirm=false 生成只读草稿，自动带出散投项目类型、常规单、商机首个有效合同、合同保价或默认价格/优惠版本、账号规格与价格，并调用页面同一优惠试算。不要向用户索要 ID，不要逐个确认默认字段；若缺少客户、产品或 account_specs（账号/规格/数量）等必要字段，必须先查真实候选并持续调用 ask_user_question 分步引导补齐（禁止只发纯文本停等用户回复）。拿到试算草稿与 expected_amount 后直接以 confirm=true 调用，系统会自动弹出确认弹窗由用户批准保存（无需先再用文字问是否保存）。接口为空只说明当前查询无结果，不可断言接口坏了或系统没有其他记录。",
         "inputSchema": _schema(
             {
                 "name": {"type": "string", "description": "报价单名称"},
@@ -1847,7 +1998,7 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "expected_amount": {
                     "type": "number",
-                    "description": "confirm=true 时传入用户已确认的草稿应付金额；金额变化会阻止保存",
+                    "description": "confirm=true 时传入草稿试算得到的应付金额；金额变化会阻止保存",
                 },
                 "customer_opportunity_id": {
                     "type": "string",
@@ -1858,7 +2009,14 @@ TOOLS: list[dict[str, Any]] = [
                     "items": {"type": "object"},
                     "description": "每项包含 account_id、sku_id；price 可省略以取规格价格，quantity 默认 1。账号名、规格名、平台、运营方式自动查询；渠道存在多个供应商时指定 supplier_id。",
                 },
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "试算草稿传入 false，正式保存传 true（触发确认弹窗）",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要（客户、账号规格、数量与应付金额），供确认弹窗展示",
+                },
             },
             [
                 "name",
@@ -1871,7 +2029,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_create_order_from_quote",
-        "description": "从报价单创建并提交销售订单（写操作，需用户确认）。",
+        "description": "从报价单创建并提交销售订单（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准下单。",
         "inputSchema": _schema(
             {
                 "quote_id": {"type": "string"},
@@ -1884,14 +2042,21 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "integer",
                     "description": "下单类型：1水下单 2平台单-客户下单 3平台单-代客下单 4佣金单，默认1",
                 },
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备下单时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文下单摘要（报价单、项目、下单类型等），供确认弹窗展示",
+                },
             },
             ["quote_id", "confirm"],
         ),
     },
     {
         "name": "youli_create_combined_order",
-        "description": "组合订单：按供应商把一张拉包报价拆成多张订单（写操作，需用户确认）。",
+        "description": "组合订单：按供应商把一张拉包报价拆成多张订单（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准执行。",
         "inputSchema": _schema(
             {
                 "quote_id": {"type": "string"},
@@ -1901,26 +2066,33 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "integer",
                     "description": "下单类型：1水下单 2平台单-客户下单 3平台单-代客下单 4佣金单，默认1",
                 },
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备创建组合订单时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要，供确认弹窗展示",
+                },
             },
             ["quote_id", "confirm"],
         ),
     },
     {
         "name": "youli_list_service_items",
-        "description": "查询订单服务项目（账号+规格+发布链接）。",
+        "description": "查询订单服务项目（账号+规格+发布链接）。返回 items 和 page 分页信息。",
         "inputSchema": _schema(
             {
                 "order_id": {"type": "string"},
-                "page": {"type": "integer"},
-                "page_size": {"type": "integer"},
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             },
             ["order_id"],
         ),
     },
     {
         "name": "youli_update_publish_link",
-        "description": "填写服务项目发布链接（写操作，需用户确认）。",
+        "description": "填写服务项目发布链接（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准保存。",
         "inputSchema": _schema(
             {
                 "service_item_id": {"type": "string"},
@@ -1930,8 +2102,18 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "发布时间 yyyy-MM-dd；时分秒会被忽略",
                 },
                 "publish_text": {"type": "string", "description": "发布文案，可空（留空保留原值）"},
-                "platform_order_id": {"type": "string", "description": "平台订单 ID，可空（留空保留原值）"},
-                "confirm": {"type": "boolean"},
+                "platform_order_id": {
+                    "type": "string",
+                    "description": "平台订单 ID，可空（留空保留原值）",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备保存发布链接时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要，供确认弹窗展示",
+                },
             },
             ["service_item_id", "publish_link", "confirm"],
         ),
@@ -1951,7 +2133,14 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "仅按链接导出且用户指定了模板名称时传入。不要问用户要 ID",
                 },
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "参数明确后传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文导出摘要（项目名和导出方式），供确认弹窗展示",
+                },
             },
             ["mode", "confirm"],
         ),
@@ -1966,6 +2155,8 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "project 查娱乐/品牌名，brand 查订单项目名",
                 },
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 20，最大 100"},
             },
             [],
         ),
@@ -1978,7 +2169,9 @@ TOOLS: list[dict[str, Any]] = [
                 "template_name": {
                     "type": "string",
                     "description": "模板名称，可空表示列出启用的按链接模板",
-                }
+                },
+                "page": {"type": "integer", "description": "页码，从 1 开始"},
+                "page_size": {"type": "integer", "description": "每页数量，默认 50，最大 100"},
             },
             [],
         ),
@@ -1999,15 +2192,25 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_create_project",
-        "description": "创建客户父项目（写操作，需用户确认）。子项目请用 youli_create_sub_project。",
+        "description": "创建客户父项目（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准创建。子项目请用 youli_create_sub_project。",
         "inputSchema": _schema(
-            {"project_name": {"type": "string"}, "confirm": {"type": "boolean"}},
+            {
+                "project_name": {"type": "string"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备创建时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要，供确认弹窗展示",
+                },
+            },
             ["project_name", "confirm"],
         ),
     },
     {
         "name": "youli_create_sub_project",
-        "description": "创建客户子项目，支持不同项目类型（project_type）和主平台（main_platform），写操作需用户确认。",
+        "description": "创建客户子项目，支持不同项目类型（project_type）和主平台（main_platform）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准创建。",
         "inputSchema": _schema(
             {
                 "project_name": {"type": "string"},
@@ -2028,7 +2231,14 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "项目负责人员工 ID 列表，可空",
                 },
                 "parent_project_id": {"type": "string", "description": "父项目 ID，可空"},
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备创建时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要，供确认弹窗展示",
+                },
             },
             [
                 "project_name",
@@ -2042,24 +2252,34 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "youli_create_coupon_version",
-        "description": "创建优惠政策版本，含客户特定版本（写操作，需用户确认）。",
+        "description": "创建优惠政策版本，含客户特定版本（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准创建。",
         "inputSchema": _schema(
             {
                 "name": {"type": "string"},
                 "version": {"type": "string"},
                 "opportunity_id": {"type": "string"},
-                "opportunity_name": {"type": "string", "description": "特定客户商机名称，传入 opportunity_id 时自动回填或显式传入"},
+                "opportunity_name": {
+                    "type": "string",
+                    "description": "特定客户商机名称，传入 opportunity_id 时自动回填或显式传入",
+                },
                 "is_default": {"type": "boolean"},
                 "effective_time": {"type": "string"},
                 "expiration_time": {"type": "string"},
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备创建时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文摘要，供确认弹窗展示",
+                },
             },
             ["name", "confirm"],
         ),
     },
     {
         "name": "youli_create_contract",
-        "description": "创建销售合同（写操作，需用户确认）。合同类型 type：1单次 2季框 3半年框 4年框；签约主体 issuing_office 先通过 youli_list_company_entities 获取。",
+        "description": "创建销售合同（写操作）。参数核对清晰后直接以 confirm=true 调用，系统会弹出确认弹窗由用户批准创建。合同类型 type：1单次 2季框 3半年框 4年框；签约主体 issuing_office 先通过 youli_list_company_entities 获取。",
         "inputSchema": _schema(
             {
                 "payload": {"type": "object", "description": "ContractRo 结构"},
@@ -2070,21 +2290,45 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "客户商机 ID；填了合同才会出现在合同列表",
                 },
                 "type": {"type": "integer", "description": "合同类型 1单次 2季框 3半年框 4年框"},
-                "cooperation_mode": {"type": "integer", "description": "合作方式：1单次合作 2长线合作；缺省按合同类型自动推导"},
+                "cooperation_mode": {
+                    "type": "integer",
+                    "description": "合作方式：1单次合作 2长线合作；缺省按合同类型自动推导",
+                },
                 "scale_amount": {"type": "number", "description": "签约规模（万元），可空"},
-                "guaranteed_type": {"type": "integer", "description": "保量类型：1不保量 2固定保量 3梯度保量，可空"},
+                "guaranteed_type": {
+                    "type": "integer",
+                    "description": "保量类型：1不保量 2固定保量 3梯度保量，可空",
+                },
                 "issuing_office": {"type": "string", "description": "签约主体/开票单位 ID"},
                 "effective_time": {"type": "string", "description": "有效开始日期 yyyy-MM-dd"},
                 "expiration_time": {"type": "string", "description": "有效截止日期 yyyy-MM-dd"},
                 "signing_date": {"type": "string", "description": "签约日期 yyyy-MM-dd，可空"},
                 "price_version_id": {"type": "string", "description": "保价价格版本 ID，可空"},
-                "price_protect_type": {"type": "integer", "description": "保价类型：1普通保价 2特客直签 3特客复签，可空"},
-                "price_start_time": {"type": "string", "description": "保价开始日期 yyyy-MM-dd，可空"},
-                "price_end_time": {"type": "string", "description": "保价结束日期 yyyy-MM-dd，可空"},
+                "price_protect_type": {
+                    "type": "integer",
+                    "description": "保价类型：1普通保价 2特客直签 3特客复签，可空",
+                },
+                "price_start_time": {
+                    "type": "string",
+                    "description": "保价开始日期 yyyy-MM-dd，可空",
+                },
+                "price_end_time": {
+                    "type": "string",
+                    "description": "保价结束日期 yyyy-MM-dd，可空",
+                },
                 "coupon_version_id": {"type": "string", "description": "保价优惠版本 ID，可空"},
-                "coupon_protect_type": {"type": "integer", "description": "保优惠类型：1普通保价 2特客直签 3特客复签，可空"},
-                "favorable_start_time": {"type": "string", "description": "保优惠开始日期 yyyy-MM-dd，可空"},
-                "favorable_end_time": {"type": "string", "description": "保优惠结束日期 yyyy-MM-dd，可空"},
+                "coupon_protect_type": {
+                    "type": "integer",
+                    "description": "保优惠类型：1普通保价 2特客直签 3特客复签，可空",
+                },
+                "favorable_start_time": {
+                    "type": "string",
+                    "description": "保优惠开始日期 yyyy-MM-dd，可空",
+                },
+                "favorable_end_time": {
+                    "type": "string",
+                    "description": "保优惠结束日期 yyyy-MM-dd，可空",
+                },
                 "employee_id": {"type": "string", "description": "签单人 ID，可空"},
                 "user_name": {"type": "string", "description": "签单人姓名，可空"},
                 "enable_type": {"type": "integer", "description": "1临时启用 2正式启用"},
@@ -2093,12 +2337,76 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "账期信息，默认 {periodType:1}",
                 },
                 "remark": {"type": "string", "description": "合同备注，可空"},
-                "confirm": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "准备创建合同时传 true，触发交互确认弹窗",
+                },
+                "confirm_summary": {
+                    "type": "string",
+                    "description": "简短中文合同摘要，供确认弹窗展示",
+                },
             },
             ["confirm"],
         ),
     },
 ]
+
+_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        "youli_save_quote",
+        "youli_create_package_quote",
+        "youli_create_order_from_quote",
+        "youli_create_combined_order",
+        "youli_update_publish_link",
+        "youli_export_delivery",
+        "youli_create_project",
+        "youli_create_sub_project",
+        "youli_create_coupon_version",
+        "youli_create_contract",
+    }
+)
+
+
+def is_write_tool_name(tool_name: str) -> bool:
+    """Return True if *tool_name* refers to one of the MCN write tools."""
+    return any(
+        tool_name == raw_name or tool_name.endswith(f"_{raw_name}") for raw_name in _WRITE_TOOLS
+    )
+
+
+def write_tool_names(mcp_server_name: str) -> list[str]:
+    """Return runtime tool names in TOOLS order, matching langchain registration."""
+    used: set[str] = set()
+    names: list[str] = []
+    for tool in TOOLS:
+        raw_name = str(tool.get("name") or "")
+        safe_name = sanitize_plugin_tool_name(f"{mcp_server_name}_{raw_name}", used=used)
+        if raw_name in _WRITE_TOOLS:
+            names.append(safe_name)
+    return names
+
+
+def _confirm_when(req: Any) -> bool:
+    tool_call = getattr(req, "tool_call", None)
+    if tool_call is None and isinstance(req, dict):
+        tool_call = req.get("tool_call")
+    raw_args = tool_call.get("args") if isinstance(tool_call, dict) else None
+    if not isinstance(raw_args, dict):
+        return False
+    val = raw_args.get("confirm")
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in {"true", "1", "yes"}
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return False
+
+
+def write_interrupt_on(mcp_server_names: list[str]) -> dict[str, Any]:
+    """Trigger interactive HITL confirmation whenever a MCN write tool sets confirm=true."""
+    entry: dict[str, Any] = {"allowed_decisions": ["approve", "reject"], "when": _confirm_when}
+    return {name: dict(entry) for server in mcp_server_names for name in write_tool_names(server)}
 
 
 def list_tools() -> list[dict[str, Any]]:

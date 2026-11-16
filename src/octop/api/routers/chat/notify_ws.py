@@ -13,6 +13,8 @@ from starlette.websockets import WebSocketState
 
 from octop.api.deps import resolve_user_from_token
 from octop.api.routers.chat.sse import json_chunk_default
+from octop.api.routers.chat.ws import _ws_session_active
+from octop.infra.auth.youli.context import current_youli_sid
 from octop.infra.errors import OctopError
 
 logger = logging.getLogger(__name__)
@@ -34,9 +36,12 @@ async def dashboard_notifications_ws(
     try:
         user = resolve_user_from_token(server, token)
     except OctopError as exc:
-        await websocket.close(code=4001, reason=f"auth: {exc.code.value}")
+        reason = exc.details.get("reason")
+        close_reason = f"auth:{reason}" if reason else f"auth: {exc.code.value}"
+        await websocket.close(code=4001, reason=close_reason)
         return
 
+    sid = current_youli_sid()
     if server.app_runtime is None:
         await websocket.close(code=1011, reason="server not ready")
         return
@@ -48,15 +53,21 @@ async def dashboard_notifications_ws(
     async def send_frame(frame: dict[str, Any]) -> None:
         if websocket.application_state != WebSocketState.CONNECTED:
             return
+        if frame.get("type") == "session_revoked":
+            with contextlib.suppress(Exception):
+                await websocket.close(code=4001, reason="auth:session_replaced")
+            return
         await websocket.send_text(
             json.dumps(frame, ensure_ascii=False, default=json_chunk_default),
         )
 
-    hub.register(connection_id, send_frame, user_id=user.id)
+    hub.register(connection_id, send_frame, user_id=user.id, sid=sid)
 
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
             raw = await websocket.receive_text()
+            if not await _ws_session_active(websocket, server, sid, user.id):
+                break
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:

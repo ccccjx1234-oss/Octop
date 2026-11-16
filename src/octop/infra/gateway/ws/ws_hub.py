@@ -38,6 +38,8 @@ class WebSocketHub:
         self._conn_thread: dict[str, str] = {}
         self._user_conns: dict[int, set[str]] = {}
         self._conn_user: dict[str, int] = {}
+        self._sid_conns: dict[str, set[str]] = {}
+        self._conn_sid: dict[str, str] = {}
         self._active_turns: set[str] = set()
 
     def register(
@@ -46,17 +48,23 @@ class WebSocketHub:
         send_fn: SendFn,
         *,
         user_id: int | None = None,
+        sid: str | None = None,
     ) -> None:
         self._unbind_user(connection_id)
+        self._unbind_sid(connection_id)
         self._connections[connection_id] = send_fn
-        if user_id is None:
-            return
-        self._conn_user[connection_id] = user_id
-        self._user_conns.setdefault(user_id, set()).add(connection_id)
+        if user_id is not None:
+            self._conn_user[connection_id] = user_id
+            self._user_conns.setdefault(user_id, set()).add(connection_id)
+        clean_sid = sid.strip() if isinstance(sid, str) else ""
+        if clean_sid:
+            self._conn_sid[connection_id] = clean_sid
+            self._sid_conns.setdefault(clean_sid, set()).add(connection_id)
 
     def unregister(self, connection_id: str) -> None:
         self.unsubscribe_connection(connection_id)
         self._unbind_user(connection_id)
+        self._unbind_sid(connection_id)
         self._connections.pop(connection_id, None)
 
     def _unbind_user(self, connection_id: str) -> None:
@@ -69,6 +77,17 @@ class WebSocketHub:
         conns.discard(connection_id)
         if not conns:
             self._user_conns.pop(user_id, None)
+
+    def _unbind_sid(self, connection_id: str) -> None:
+        sid = self._conn_sid.pop(connection_id, None)
+        if sid is None:
+            return
+        conns = self._sid_conns.get(sid)
+        if conns is None:
+            return
+        conns.discard(connection_id)
+        if not conns:
+            self._sid_conns.pop(sid, None)
 
     def subscribe(self, thread_id: str, connection_id: str) -> None:
         """Add *connection_id* as a subscriber for *thread_id*.
@@ -143,6 +162,17 @@ class WebSocketHub:
         conns = self._user_conns.get(user_id)
         if not conns:
             logger.debug("ws hub: no subscriber for user %s", user_id)
+            return
+        targets = list(conns)
+        if len(targets) == 1:
+            await self.push(targets[0], frame)
+            return
+        await asyncio.gather(*(self.push(conn_id, frame) for conn_id in targets))
+
+    async def push_to_sid(self, sid: str, frame: dict[str, Any]) -> None:
+        clean_sid = sid.strip()
+        conns = self._sid_conns.get(clean_sid) if clean_sid else None
+        if not conns:
             return
         targets = list(conns)
         if len(targets) == 1:

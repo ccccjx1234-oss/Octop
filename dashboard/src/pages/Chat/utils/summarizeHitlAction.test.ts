@@ -134,4 +134,47 @@ describe("summarizeHitlAction", () => {
     expect(view.rows.map((row) => row.label)).toEqual(["操作"]);
     expect(view.rows.some((row) => row.value === "user-7")).toBe(false);
   });
+
+  it("formats MCN write tools cleanly and hides confirm/confirm_summary rows", () => {
+    const quoteView = summarizeHitlAction(
+      "mcn_youli_create_package_quote",
+      {
+        name: "茶颜3月抖音报价",
+        customer_id: "cust-1",
+        expected_amount: 12800,
+        confirm: true,
+        confirm_summary: "为客户「茶颜悦色」创建拉包报价，应付 ¥12800",
+      },
+      tZh,
+      "mcn_youli_create_package_quote",
+    );
+
+    expect(quoteView.toolLabel).toBe("创建拉包报价单");
+    expect(quoteView.summary).toBe(
+      "为客户「茶颜悦色」创建拉包报价，应付 ¥12800",
+    );
+    expect(quoteView.rows.map((r) => r.label)).toEqual([
+      "名称",
+      "客户 ID",
+      "试算应付金额",
+    ]);
+
+    const orderView = summarizeHitlAction(
+      "mcn_youli_create_order_from_quote",
+      {
+        quote_id: "q-99",
+        commit_type: 1,
+        confirm: true,
+      },
+      tZh,
+      "mcn_youli_create_order_from_quote",
+    );
+
+    expect(orderView.toolLabel).toBe("从报价单创建销售订单");
+    expect(orderView.summary).toBe("基于报价单 q-99 创建销售订单");
+    expect(orderView.rows).toEqual([
+      { label: "报价单 ID", value: "q-99" },
+      { label: "下单类型", value: "水下单" },
+    ]);
+  });
 });

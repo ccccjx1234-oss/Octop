@@ -137,10 +137,12 @@ def test_lookup_tools_use_names_not_ids() -> None:
     assert calls[0] == (
         "/api/mcn/deliveryDashboard/project/list",
         {
-            "page": {"pageNum": 1, "pageSize": 10},
+            "page": {"pageNum": 1, "pageSize": 20},
             "projectName": "杜甫江阁",
         },
     )
+    assert projects["page"]["pageNum"] == 1
+    assert projects["page"]["pageSize"] == 20
     assert templates["templates"] == [{"id": "12", "templateName": "客户周报", "isDefault": 0}]
     assert calls[1][0] == "/api/mcn/excel/export/template/list"
     assert calls[1][1]["sceneCode"] == 2
@@ -205,3 +207,33 @@ def test_link_export_keeps_template_and_followup_uses_task_id(monkeypatch) -> No
     finished = json.loads(delivery_export.get_download_task(client, {"task_id": "77"}))
     assert finished["download_url"] == "https://files.example/link.xlsx"
     assert finished["task_id"] == "77"
+
+
+def test_list_delivery_projects_respects_page_args_and_returns_page_meta() -> None:
+    calls: list[tuple[str, object]] = []
+
+    class PagedClient:
+        def post_with_meta(self, path: str, payload: object = None) -> dict[str, object]:
+            calls.append((path, payload))
+            return {
+                "data": [{"projectName": "项目甲", "projectBrandName": "品牌甲"}],
+                "page": {"pageNum": 2, "pageSize": 50, "totalCount": 75, "totalPage": 2},
+            }
+
+        def post(self, path: str, payload: object = None) -> object:
+            return self.post_with_meta(path, payload)["data"]
+
+    res = json.loads(
+        delivery_export.list_delivery_projects(PagedClient(), {"page": 2, "page_size": 50})
+    )
+    assert calls[0] == (
+        "/api/mcn/deliveryDashboard/project/list",
+        {"page": {"pageNum": 2, "pageSize": 50}},
+    )
+    assert res["page"] == {
+        "pageNum": 2,
+        "pageSize": 50,
+        "totalCount": 75,
+        "totalPage": 2,
+        "hasMore": False,
+    }

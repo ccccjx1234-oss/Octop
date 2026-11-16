@@ -123,10 +123,7 @@ class RuntimeTelemetry:
 
     def snapshot(self, *, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
-            events = [
-                {"ts": e.ts, "kind": e.kind, **e.detail}
-                for e in list(self._events)[-50:]
-            ]
+            events = [{"ts": e.ts, "kind": e.kind, **e.detail} for e in list(self._events)[-50:]]
             data: dict[str, Any] = {
                 "uptime_s": int(time.time() - self.started_at),
                 "rss_mb": _read_rss_mb(),

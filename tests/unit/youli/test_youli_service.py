@@ -243,3 +243,49 @@ async def test_revalidation_keeps_session_when_mdm_is_unreachable(service, monke
     )
 
     assert service.session(result.session.sid) is not None
+
+
+@pytest.mark.asyncio
+async def test_new_login_revokes_previous_sid_and_pushes_ws_notice(service, monkeypatch):
+    pushed: list[tuple[str, dict]] = []
+
+    class FakeHub:
+        async def push_to_sid(self, sid: str, frame: dict) -> None:
+            pushed.append((sid, frame))
+
+    service._ws_hub = FakeHub()  # noqa: SLF001
+    first = await _active_session(service, monkeypatch)
+    second = await _active_session(service, monkeypatch)
+
+    assert first.session.sid != second.session.sid
+    assert service.session(first.session.sid) is None
+    assert service.session(second.session.sid) is not None
+    assert len(pushed) == 1
+    assert pushed[0][0] == first.session.sid
+    assert pushed[0][1]["type"] == "session_revoked"
+    assert pushed[0][1]["reason"] == "session_replaced"
+
+    from octop.infra.auth.youli.service import (
+        _REVOKED_SID_REASONS,
+        REASON_SESSION_REPLACED,
+        resolve_youli_revocation_reason,
+    )
+
+    assert (
+        resolve_youli_revocation_reason(
+            service._services.youli_session_repo,  # noqa: SLF001
+            sid=first.session.sid,
+            user_id=first.user.id,
+        )
+        == REASON_SESSION_REPLACED
+    )
+    # Survives in-memory cache loss (e.g. restart) by checking newer active sessions.
+    _REVOKED_SID_REASONS.pop(first.session.sid, None)
+    assert (
+        resolve_youli_revocation_reason(
+            service._services.youli_session_repo,  # noqa: SLF001
+            sid=first.session.sid,
+            user_id=first.user.id,
+        )
+        == REASON_SESSION_REPLACED
+    )

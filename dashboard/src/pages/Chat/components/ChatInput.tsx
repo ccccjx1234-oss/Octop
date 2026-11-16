@@ -102,6 +102,7 @@ interface ChatInputProps {
   /** Called when the composer is cleared after a successful send/queue. */
   onComposerCleared?: () => void;
   availableModels?: ResolvedModel[];
+  composerMenuLoading?: boolean;
   selectedModel?: string | null;
   onModelChange?: (model: string | null) => void;
   reasoningMode?: "auto" | "enabled" | "disabled";
@@ -169,6 +170,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       initialText = "",
       onComposerCleared,
       availableModels,
+      composerMenuLoading = false,
       selectedModel,
       onModelChange,
       reasoningMode = "auto",
@@ -1000,6 +1002,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
           <ChatInputActionsRow
             isMobile={isMobile}
+            composerMenuLoading={composerMenuLoading}
             isStreaming={isStreaming || holdSend}
             isTeam={isTeam}
             disabled={disabled}

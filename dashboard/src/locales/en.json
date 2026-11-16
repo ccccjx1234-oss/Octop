@@ -1768,11 +1768,108 @@
         "wait": "Wait",
         "element_ref": "Element",
         "full_page": "Full page",
-        "tab_id": "Tab"
+        "tab_id": "Tab",
+        "name": "Name",
+        "product_id": "Product ID",
+        "customer_id": "Customer ID",
+        "customer_name": "Customer name",
+        "customer_opportunity_id": "Opportunity ID",
+        "opportunity_id": "Opportunity ID",
+        "opportunity_name": "Opportunity name",
+        "contract_id": "Contract ID",
+        "price_version_id": "Price version ID",
+        "coupon_version_id": "Coupon version ID",
+        "expected_amount": "Expected payable amount",
+        "account_specs": "Account specs",
+        "quote_id": "Quote ID",
+        "project_id": "Parent project ID",
+        "sub_project_id": "Sub-project ID",
+        "project_name": "Project name",
+        "parent_project_id": "Parent project ID",
+        "project_type": "Project type",
+        "main_platform": "Main platform",
+        "project_budget": "Project budget",
+        "project_leader_ids": "Project leaders",
+        "commit_type": "Order commit type",
+        "order_type": "Order type",
+        "service_item_id": "Service item ID",
+        "publish_link": "Publish link",
+        "publish_time": "Publish date",
+        "publish_text": "Publish copy",
+        "platform_order_id": "Platform order ID",
+        "mode": "Export mode",
+        "export_template_id": "Export template ID",
+        "type": "Contract type",
+        "issuing_office": "Issuing entity",
+        "effective_time": "Effective date",
+        "expiration_time": "Expiration date",
+        "signing_date": "Signing date",
+        "scale_amount": "Contract scale (10k CNY)",
+        "enable_type": "Enable mode",
+        "version": "Version",
+        "is_default": "Default",
+        "remark": "Remark",
+        "payload": "Payload"
       },
       "bool": {
         "true": "Yes",
         "false": "No"
+      },
+      "mcn": {
+        "tools": {
+          "youli_save_quote": "Save quote",
+          "youli_create_package_quote": "Create package quote",
+          "youli_create_order_from_quote": "Create sales order from quote",
+          "youli_create_combined_order": "Create combined sales orders",
+          "youli_update_publish_link": "Update service item publish link",
+          "youli_export_delivery": "Export delivery data",
+          "youli_create_project": "Create customer project",
+          "youli_create_sub_project": "Create customer sub-project",
+          "youli_create_coupon_version": "Create coupon policy version",
+          "youli_create_contract": "Create sales contract"
+        },
+        "commitTypes": {
+          "1": "Direct order",
+          "2": "Platform order (client)",
+          "3": "Platform order (proxy)",
+          "4": "Commission order"
+        },
+        "contractTypes": {
+          "1": "Single",
+          "2": "Quarterly framework",
+          "3": "Half-year framework",
+          "4": "Annual framework"
+        },
+        "exportModes": {
+          "project": "By project",
+          "link": "By publish link"
+        },
+        "platforms": {
+          "1": "Douyin",
+          "2": "Kuaishou",
+          "3": "Xiaohongshu",
+          "4": "Weibo",
+          "5": "WeChat",
+          "6": "Toutiao",
+          "7": "Bilibili"
+        },
+        "enableTypes": {
+          "1": "Temporary",
+          "2": "Formal"
+        },
+        "summaries": {
+          "createPackageQuote": "Create package quote \"{{name}}\"",
+          "createPackageQuoteWithAmount": "Create package quote \"{{name}}\" (payable ¥{{amount}})",
+          "createOrder": "Create sales order from quote {{quoteId}}",
+          "createCombinedOrder": "Create combined orders from quote {{quoteId}}",
+          "updatePublishLink": "Update publish link: {{link}}",
+          "exportDeliveryProject": "Export delivery data for \"{{project}}\"",
+          "exportDeliveryMode": "Export delivery data ({{mode}})",
+          "createProject": "Create project \"{{name}}\"",
+          "createSubProject": "Create sub-project \"{{name}}\"",
+          "createCouponVersion": "Create coupon version \"{{name}}\"",
+          "createContract": "Create sales contract \"{{name}}\""
+        }
       },
       "browser": {
         "actions": {
@@ -1827,6 +1924,10 @@
     },
     "ask": {
       "title": "A few questions first",
+      "filterPlaceholder": "Filter options…",
+      "optionCount": "{{total}} options",
+      "filteredOptionCount": "{{matched}} / {{total}}",
+      "noMatchingOptions": "No matching options — use \"Something else\" below",
       "other": "Something else…",
       "freeTextPlaceholder": "Type your answer",
       "next": "Next",
@@ -6060,6 +6161,9 @@
     "or": "or",
     "oidcWith": "Continue with {{name}}",
     "oidcStartFailed": "Could not start single sign-on",
+    "sessionRevokedTitle": "Session signed out",
+    "sessionReplaced": "This account signed in on another device or window, so your previous session was signed out. Please sign in again.",
+    "sessionExpired": "Your sign-in session has expired or been revoked. Please sign in again.",
     "ldapHint": "Sign in with your {{name}} account",
     "oidcError": {
       "denied": "Single sign-on was cancelled.",

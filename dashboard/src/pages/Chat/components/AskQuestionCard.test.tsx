@@ -111,4 +111,48 @@ describe("AskQuestionCard", () => {
     expect(details).toHaveAttribute("open");
     expect(screen.getByText("Which framework?")).toBeVisible();
   });
+
+  it("renders up to 20 searchable master-data options while preserving keys and Other", () => {
+    const onSubmit = vi.fn();
+    const customerOptions = Array.from({ length: 20 }, (_, i) => ({
+      label: `客户-${String(i + 1).padStart(2, "0")}`,
+      description: i === 14 ? "重点品牌联系人：王五" : `普通客户 ${i + 1}`,
+    }));
+
+    render(
+      <AskQuestionCard
+        questions={[
+          {
+            header: "选择客户",
+            question: "请选择要下单的客户（共 45 条，第 1 页）",
+            options: customerOptions,
+          },
+        ]}
+        status="pending"
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const searchInput = screen.getByPlaceholderText(
+      "chat.ask.filterPlaceholder",
+    );
+    expect(searchInput).toBeInTheDocument();
+    expect(screen.getByText("客户-20")).toBeInTheDocument();
+    // 20 options = A..T, so Other gets U
+    const otherBtn = screen.getByRole("button", { name: /chat\.ask\.other/ });
+    expect(otherBtn).toHaveTextContent("U");
+
+    fireEvent.change(searchInput, { target: { value: "王五" } });
+    expect(screen.queryByText("客户-01")).not.toBeInTheDocument();
+    const matchedBtn = screen.getByRole("button", { name: /客户-15/ });
+    // Original 15th option keeps badge O even when filtered
+    expect(matchedBtn).toHaveTextContent("O");
+    expect(
+      screen.getByRole("button", { name: /chat\.ask\.other/ }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(matchedBtn);
+    fireEvent.click(screen.getByRole("button", { name: "chat.ask.submit" }));
+    expect(onSubmit).toHaveBeenCalledWith("选择客户: 客户-15");
+  });
 });

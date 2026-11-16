@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Input, Button, Checkbox, Modal } from "antd";
+import { Alert, Input, Button, Checkbox, Modal } from "antd";
 import { message } from "@/utils/antdMessage";
 
 import {
@@ -26,6 +26,11 @@ import {
   setAuthToken,
   setRememberLoginPreference,
 } from "../../api";
+import {
+  consumeAuthNotice,
+  UNAUTHORIZED_EVENT,
+  type AuthNotice,
+} from "../../api/request";
 import {
   authApi,
   isMfaChallenge,
@@ -156,6 +161,9 @@ export default function LoginPage({
   const [showCreateLocal, setShowCreateLocal] = useState(false);
   const [localAccountExists, setLocalAccountExists] = useState(false);
   const [localLoading, setLocalLoading] = useState(false);
+  const [authNotice, setAuthNotice] = useState<AuthNotice | null>(() =>
+    consumeAuthNotice(),
+  );
   const [captcha, setCaptcha] = useState<PublicCaptchaConfig>({
     provider: "slider",
   });
@@ -175,6 +183,18 @@ export default function LoginPage({
 
   useEffect(() => {
     void applyGuestLocale();
+  }, []);
+
+  useEffect(() => {
+    const onUnauthorized = (event: Event) => {
+      const detail = (event as CustomEvent<AuthNotice | undefined>).detail;
+      const next = consumeAuthNotice() ?? detail ?? null;
+      if (next && (next.reason || next.message)) {
+        setAuthNotice(next);
+      }
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
 
   // Desktop: landing here does not mean a signed-out user. The shell holds a
@@ -867,6 +887,24 @@ export default function LoginPage({
                 {t(isStaff ? "login.staffSubtitle" : "login.manageSubtitle")}
               </p>
             </div>
+
+            {authNotice ? (
+              <Alert
+                type="warning"
+                showIcon
+                closable
+                onClose={() => setAuthNotice(null)}
+                message={
+                  authNotice.reason === "session_replaced"
+                    ? t("login.sessionReplaced")
+                    : authNotice.reason === "upstream_expired" ||
+                      authNotice.reason === "session_revoked"
+                    ? t("login.sessionExpired")
+                    : authNotice.message || t("login.sessionExpired")
+                }
+                style={{ width: "100%", borderRadius: 10 }}
+              />
+            ) : null}
 
             <Input
               prefix={

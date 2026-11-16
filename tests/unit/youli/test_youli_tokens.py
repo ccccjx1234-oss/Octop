@@ -64,6 +64,58 @@ def _make_session(server, user: User, *, abs_offset: int = 300) -> str:
     return "sid-test"
 
 
+def test_concurrent_session_replacement_keeps_one_active(server):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from octop.infra.db.repos.youli import YouliSessionRepo
+
+    user = _make_user(server)
+    repo = server.services.youli_session_repo
+    other_pool = SqlitePool(repo._db.path)  # noqa: SLF001
+    other_repo = YouliSessionRepo(other_pool)
+    now = int(time.time())
+
+    def login(item):
+        selected_repo, sid = item
+        return selected_repo.create_replacing(
+            sid=sid,
+            user_id=user.id,
+            account_user_id=1001,
+            account_username="dave",
+            company_id=2001,
+            employee_id=3001,
+            industry=7,
+            token_blob=None,
+            token_expires_at=now + 600,
+            abs_expires_at=now + 600,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(login, ((repo, "sid-a"), (other_repo, "sid-b"))))
+    active = repo.list_active_for_user(user.id)
+    assert len(active) == 1
+    assert active[0].sid in {"sid-a", "sid-b"}
+    assert sum(len(replaced) for _, replaced in results) == 1
+    other_pool.close()
+
+
+@pytest.mark.asyncio
+async def test_revoked_socket_session_is_closed(server):
+    from unittest.mock import AsyncMock
+
+    from starlette.websockets import WebSocketState
+
+    from octop.api.routers.chat.ws import _ws_session_active
+
+    user = _make_user(server)
+    sid = _make_session(server, user)
+    socket = SimpleNamespace(application_state=WebSocketState.CONNECTED, close=AsyncMock())
+    assert await _ws_session_active(socket, server, sid, user.id)
+    server.services.youli_session_repo.revoke(sid)
+    assert not await _ws_session_active(socket, server, sid, user.id)
+    socket.close.assert_awaited_once_with(code=4001, reason="auth:session_revoked")
+
+
 def test_sign_token_carries_sid():
     token = sign_token(
         b"secret",

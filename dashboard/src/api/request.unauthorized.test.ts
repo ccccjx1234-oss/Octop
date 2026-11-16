@@ -99,4 +99,52 @@ describe("401 handling", () => {
 
     window.removeEventListener(mod.UNAUTHORIZED_EVENT, listener);
   });
+
+  it("resets redirect guard after setAuthToken and preserves kick reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "AUTH_FAILED",
+                message: "认证失败。",
+                details: { reason: "session_replaced" },
+              },
+            }),
+            {
+              status: 401,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+        ),
+      ),
+    );
+
+    const listener = vi.fn((event: Event) => event.preventDefault());
+    window.addEventListener(mod.UNAUTHORIZED_EVENT, listener);
+
+    await expect(mod.request("/agents")).rejects.toThrow();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(mod.consumeAuthNotice()).toEqual({
+      reason: "session_replaced",
+      message: "认证失败。",
+    });
+
+    // Re-login via SPA without full reload must allow a future 401 redirect.
+    mod.setAuthToken("fresh-token");
+    await expect(mod.request("/agents")).rejects.toThrow();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(mod.consumeAuthNotice()?.reason).toBe("session_replaced");
+
+    expect(
+      mod.parseWsAuthCloseNotice({
+        code: 4001,
+        reason: "auth:session_replaced",
+      }),
+    ).toEqual({ reason: "session_replaced" });
+
+    window.removeEventListener(mod.UNAUTHORIZED_EVENT, listener);
+  });
 });

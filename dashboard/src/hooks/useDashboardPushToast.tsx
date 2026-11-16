@@ -4,7 +4,11 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { buildDashboardNotifyWsUrl } from "../api/modules/wsNotifications";
-import { getAuthToken } from "../api/request";
+import {
+  getAuthToken,
+  parseWsAuthCloseNotice,
+  triggerUnauthorizedRedirect,
+} from "../api/request";
 import { useAgent } from "../context/AgentContext";
 import { ExpertIcon } from "../pages/Experts/components/iconForName";
 import {
@@ -292,6 +296,37 @@ export function useDashboardPushToast(): void {
         ) {
           return;
         }
+        if (
+          raw &&
+          typeof raw === "object" &&
+          (raw as { type?: string }).type === "session_revoked"
+        ) {
+          const payload = raw as { reason?: string; message?: string };
+          const reason =
+            typeof payload.reason === "string" && payload.reason.trim()
+              ? payload.reason.trim()
+              : "session_replaced";
+          const noticeMsg =
+            typeof payload.message === "string" && payload.message.trim()
+              ? payload.message.trim()
+              : tRef.current("login.sessionReplaced");
+          closed = true;
+          clearReconnect();
+          ws = null;
+          try {
+            socket.close();
+          } catch {
+            // ignore
+          }
+          notificationRef.current.warning({
+            key: "octop-session-revoked",
+            message: tRef.current("login.sessionRevokedTitle"),
+            description: noticeMsg,
+            duration: 6,
+          });
+          triggerUnauthorizedRedirect({ reason, message: noticeMsg });
+          return;
+        }
         const parsed = parseDashboardPushFrame(raw);
         if (!parsed) return;
         void refreshRef.current({ silent: true });
@@ -326,9 +361,16 @@ export function useDashboardPushToast(): void {
         if (!claimSystemPush(browserStorage(), dedupeKey, tabId)) return;
         openSystem(parsed);
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (ws !== socket) return;
         ws = null;
+        const authNotice = parseWsAuthCloseNotice(event);
+        if (authNotice) {
+          closed = true;
+          clearReconnect();
+          triggerUnauthorizedRedirect(authNotice);
+          return;
+        }
         if (!closed) scheduleReconnect();
       };
     };

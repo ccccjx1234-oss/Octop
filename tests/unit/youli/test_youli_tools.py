@@ -386,3 +386,65 @@ async def test_create_contract_requires_enable_type(monkeypatch) -> None:
     assert calls == []
     await tool.ainvoke({"payload": {"enableType": 1, "name": "合同A"}, "confirm": True})
     assert calls[0][0] == "/api/mcn/contract/addContract"
+
+
+def test_mcn_adapter_prefers_env_url_over_stored_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("OCTOP_YOULI_MCN_URL", "http://172.18.0.1:18443/")
+    client = mcn_adapter._client({"token": "tok", "base_url": "https://8.163.15.131"})
+    assert client._base_url == "http://172.18.0.1:18443"
+
+    monkeypatch.delenv("OCTOP_YOULI_MCN_URL", raising=False)
+    fallback = mcn_adapter._client({"token": "tok", "base_url": "https://fallback.example"})
+    assert fallback._base_url == "https://fallback.example"
+
+
+def test_connector_service_decrypt_overrides_stale_mcn_base_url(tmp_path) -> None:
+    from octop.config import OctopConfig
+    from octop.infra.connectors.service import ConnectorService
+    from octop.infra.db.migrate import run_migrations
+    from octop.infra.db.pool import SqlitePool
+    from octop.infra.db.services import build_shared_services
+    from octop.infra.utils.paths import PathLayout
+
+    paths = PathLayout(tmp_path / ".octop")
+    paths.ensure_root()
+    db = SqlitePool(paths.db)
+    run_migrations(db)
+    cfg = OctopConfig(youli=YouliConfig(mcn_base_url="http://172.18.0.1:18443/"))
+    services = build_shared_services(db=db, paths=paths, config=cfg)
+    uid = services.user_repo.create(username="u1", password_hash=None, role="youli_employee")
+
+    services.connector_repo.create(
+        instance_id="01MCN",
+        user_id=uid,
+        kind="mcn",
+        display_name="MCN 业务",
+        mcp_server_name="mcn__01MCN",
+        shared=False,
+    )
+    services.connector_repo.create(
+        instance_id="01WK",
+        user_id=uid,
+        kind="weknora",
+        display_name="WeKnora",
+        mcp_server_name="weknora__01WK",
+        shared=False,
+    )
+    svc = ConnectorService(
+        repo=services.connector_repo,
+        secret_repo=services.secret_repo,
+        settings_repo=services.settings_repo,
+        config=cfg,
+        youli_session_repo=services.youli_session_repo,
+    )
+    svc.encrypt_and_store(
+        instance_id="01MCN",
+        payload={"token": "t", "internal_token": "i", "base_url": "https://8.163.15.131"},
+    )
+    svc.encrypt_and_store(
+        instance_id="01WK",
+        payload={"api_key": "k", "internal_token": "i", "base_url": "https://wk.example/api/v1"},
+    )
+
+    assert svc.decrypt("01MCN")["base_url"] == "http://172.18.0.1:18443"
+    assert svc.decrypt("01WK")["base_url"] == "https://wk.example/api/v1"

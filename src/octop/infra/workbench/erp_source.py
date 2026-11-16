@@ -33,6 +33,7 @@ class _InflightCall:
     value: Any = None
     exc: Exception | None = None
 
+
 ORDER_STATUS_MAP: dict[int, tuple[str, int, str]] = {
     1: ("pending", 15, "待提交"),
     2: ("pending", 30, "待执行"),
@@ -119,7 +120,15 @@ def _extract_list(resp: Any) -> list[dict[str, Any]]:
     if isinstance(resp, list):
         return [item for item in resp if isinstance(item, dict)]
     if isinstance(resp, dict):
-        for key in ("list", "records", "items", "rows", "topics", "conversations", "distributionList"):
+        for key in (
+            "list",
+            "records",
+            "items",
+            "rows",
+            "topics",
+            "conversations",
+            "distributionList",
+        ):
             candidate = resp.get(key)
             if isinstance(candidate, list):
                 return [item for item in candidate if isinstance(item, dict)]
@@ -228,9 +237,7 @@ def build_trend_series(
         while cursor <= today:
             end_d = min(today, cursor + timedelta(days=step - 1))
             lbl = (
-                f"{cursor.day}日"
-                if cursor == end_d
-                else f"{cursor.month}/{cursor.day}-{end_d.day}"
+                f"{cursor.day}日" if cursor == end_d else f"{cursor.month}/{cursor.day}-{end_d.day}"
             )
             slices.append((cursor, end_d, lbl))
             cursor = end_d + timedelta(days=1)
@@ -342,7 +349,9 @@ class ErpDataFetcher:
         has_perm_denied = False
         other_errors: list[str] = []
 
-        def _worker(spec: tuple[str, str, str, dict[str, Any] | None]) -> tuple[str, Any, Exception | None]:
+        def _worker(
+            spec: tuple[str, str, str, dict[str, Any] | None],
+        ) -> tuple[str, Any, Exception | None]:
             key, method, path, payload = spec
             try:
                 val = self._call_one(key, method, path, payload, force_refresh=force_refresh)
@@ -377,7 +386,9 @@ class ErpDataFetcher:
             if outcomes and all(exc is not None for _, _, exc in outcomes):
                 first_error = other_errors[0] if other_errors else "部分数据暂不可用"
             elif has_perm_denied:
-                first_error = "部分 AI 创作接口仅内容数据管理员可见，已展示当前账号有权限的 MCN ERP 数据"
+                first_error = (
+                    "部分 AI 创作接口仅内容数据管理员可见，已展示当前账号有权限的 MCN ERP 数据"
+                )
         return results, auth_expired, first_error
 
 
@@ -506,13 +517,20 @@ def _map_business(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
                 progress=75 if o.get("firstOrderDate") else 40,
                 external_ref=f"mcn:opp:{oid}",
                 updated_at=ts,
-                meta={"type": "商机", "customerName": cname, "owner": owner, "firstOrderDate": o.get("firstOrderDate")},
+                meta={
+                    "type": "商机",
+                    "customerName": cname,
+                    "owner": owner,
+                    "firstOrderDate": o.get("firstOrderDate"),
+                },
             )
         )
     for of in offers[:4]:
         of_id = str(of.get("id") or of.get("offerOrderNo") or "")
         cname = str(of.get("customerName") or "MCN 客户").strip()
-        oname = str(of.get("offerOrderName") or of.get("productName") or of.get("offerOrderNo") or "报价单").strip()
+        oname = str(
+            of.get("offerOrderName") or of.get("productName") or of.get("offerOrderNo") or "报价单"
+        ).strip()
         status, pct = _offer_status(of.get("status"))
         ts = parse_timestamp(of.get("createdTime")) or 0
         tasks.append(
@@ -528,7 +546,11 @@ def _map_business(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
                 progress=pct,
                 external_ref=f"mcn:offer:{of_id}",
                 updated_at=ts,
-                meta={"offerOrderNo": of.get("offerOrderNo"), "amount": of.get("factOrderMoney"), "creator": of.get("creatorName")},
+                meta={
+                    "offerOrderNo": of.get("offerOrderNo"),
+                    "amount": of.get("factOrderMoney"),
+                    "creator": of.get("creatorName"),
+                },
             )
         )
     for c in contracts[:4]:
@@ -536,7 +558,10 @@ def _map_business(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
         cname = str(c.get("customerName") or "MCN 客户").strip()
         cnum = str(c.get("contractNumber") or cid).strip()
         ctype = str(c.get("typeName") or "合同").strip()
-        ts = parse_timestamp(c.get("updatedTime") or c.get("createdTime") or c.get("signingDate")) or 0
+        ts = (
+            parse_timestamp(c.get("updatedTime") or c.get("createdTime") or c.get("signingDate"))
+            or 0
+        )
         tasks.append(
             _make_erp_task(
                 role_key="business",
@@ -560,10 +585,22 @@ def _map_business(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     cust_price = _to_float(perf.get("customerPrice"), 0.0)
     recv_amt = _to_float(perf.get("receiveAmount"), 0.0)
     kpis = [
-        {"label": "本月订单额", "value": _fmt_money(order_amt), "delta": _fmt_rate(perf.get("orderAmountRate"))},
+        {
+            "label": "本月订单额",
+            "value": _fmt_money(order_amt),
+            "delta": _fmt_rate(perf.get("orderAmountRate")),
+        },
         {"label": "活跃客户数", "value": str(cust_num), "delta": f"当月新客 {new_cust}"},
-        {"label": "平均客单价", "value": _fmt_money(cust_price), "delta": _fmt_rate(perf.get("customerPriceRate"))},
-        {"label": "本月已回款", "value": _fmt_money(recv_amt), "delta": _fmt_rate(perf.get("receiveAmountRate"))},
+        {
+            "label": "平均客单价",
+            "value": _fmt_money(cust_price),
+            "delta": _fmt_rate(perf.get("customerPriceRate")),
+        },
+        {
+            "label": "本月已回款",
+            "value": _fmt_money(recv_amt),
+            "delta": _fmt_rate(perf.get("receiveAmountRate")),
+        },
     ]
 
     valid_orders = _active_orders(orders)
@@ -654,7 +691,13 @@ def _map_customer_service(bundle: dict[str, Any], period_range: str) -> ErpRoleS
     for o in valid_orders[:6]:
         oid = str(o.get("id") or o.get("orderNo") or "")
         cname = str(o.get("customerName") or "MCN 客户").strip()
-        otitle = str(o.get("projectName") or o.get("productName") or o.get("contractName") or o.get("orderNo") or "").strip()
+        otitle = str(
+            o.get("projectName")
+            or o.get("productName")
+            or o.get("contractName")
+            or o.get("orderNo")
+            or ""
+        ).strip()
         st, pct, st_lbl = _order_status(o.get("status"))
         ts = parse_timestamp(o.get("signerTime") or o.get("createdTime")) or 0
         tasks.append(
@@ -670,7 +713,11 @@ def _map_customer_service(bundle: dict[str, Any], period_range: str) -> ErpRoleS
                 progress=pct,
                 external_ref=f"mcn:order:{oid}",
                 updated_at=ts,
-                meta={"orderNo": o.get("orderNo"), "amount": o.get("settlementAmount"), "statusLabel": st_lbl},
+                meta={
+                    "orderNo": o.get("orderNo"),
+                    "amount": o.get("settlementAmount"),
+                    "statusLabel": st_lbl,
+                },
             )
         )
     for of in offers[:3]:
@@ -707,20 +754,36 @@ def _map_customer_service(bundle: dict[str, Any], period_range: str) -> ErpRoleS
         else f"已完成 {done_cnt} 单"
     )
     kpis = [
-        {"label": "MCN 订单数", "value": str(orders_total), "delta": f"子项目 {sub_projects_total} 个"},
-        {"label": "待完结订单", "value": str(wait_complete), "delta": f"待接单 {int(_to_float(pending.get('waitPending'), 0))}"},
-        {"label": "待开票 / 回款", "value": f"{int(_to_float(pending.get('waitInvoiced'), 0))} / {int(_to_float(pending.get('waitCollected'), 0))}", "delta": f"待认领 {int(_to_float(pending.get('waitClaimed'), 0))}"},
+        {
+            "label": "MCN 订单数",
+            "value": str(orders_total),
+            "delta": f"子项目 {sub_projects_total} 个",
+        },
+        {
+            "label": "待完结订单",
+            "value": str(wait_complete),
+            "delta": f"待接单 {int(_to_float(pending.get('waitPending'), 0))}",
+        },
+        {
+            "label": "待开票 / 回款",
+            "value": f"{int(_to_float(pending.get('waitInvoiced'), 0))} / {int(_to_float(pending.get('waitCollected'), 0))}",
+            "delta": f"待认领 {int(_to_float(pending.get('waitClaimed'), 0))}",
+        },
         {"label": "订单完结率", "value": f"{complete_rate}%", "delta": done_delta},
     ]
     pts = [
-        (parse_timestamp(o.get("signerTime") or o.get("createdTime")), 1.0)
-        for o in valid_orders
+        (parse_timestamp(o.get("signerTime") or o.get("createdTime")), 1.0) for o in valid_orders
     ] + [(parse_timestamp(p.get("createdTime")), 1.0) for p in sub_projects]
     pending_denom = done_cnt + wait_complete
     goal_progress = {
         "order_close": (float(done_cnt), float(max(total_cnt, 1))),
-        "subproject_order": (float(sum(1 for p in sub_projects if p.get("hasOrder"))), float(max(len(sub_projects), 1))),
-        "pending_clear": (float(done_cnt), float(max(pending_denom, 1))) if pending_denom > 0 else (0.0, 10.0),
+        "subproject_order": (
+            float(sum(1 for p in sub_projects if p.get("hasOrder"))),
+            float(max(len(sub_projects), 1)),
+        ),
+        "pending_clear": (float(done_cnt), float(max(pending_denom, 1)))
+        if pending_denom > 0
+        else (0.0, 10.0),
     }
     return ErpRoleSlice(
         tasks=tasks,
@@ -785,20 +848,38 @@ def _map_mcn_ops(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     publishes_total = _extract_total(bundle.get("publishes"))
     svc_items_total = _extract_total(bundle.get("service_items"))
     ai_scripts_total = _extract_total(bundle.get("ai_scripts"))
-    matched_cnt = sum(1 for p in publishes if bool(p.get("matched")) or p.get("matchStatus") == "MATCHED")
+    matched_cnt = sum(
+        1 for p in publishes if bool(p.get("matched")) or p.get("matchStatus") == "MATCHED"
+    )
     kpis = [
-        {"label": "签约账号数", "value": str(accounts_total), "delta": f"AI脚本 {ai_scripts_total} 条"},
+        {
+            "label": "签约账号数",
+            "value": str(accounts_total),
+            "delta": f"AI脚本 {ai_scripts_total} 条",
+        },
         {"label": "商单发布数", "value": str(publishes_total), "delta": f"已匹配 {matched_cnt} 条"},
-        {"label": "待认领作品", "value": str(int(_to_float(pending.get("waitClaimed"), 0))), "delta": f"待接单 {int(_to_float(pending.get('waitPending'), 0))}"},
-        {"label": "履约匹配率", "value": f"{round(matched_cnt / len(publishes) * 100) if publishes else 0}%", "delta": f"服务排期 {svc_items_total} 项"},
+        {
+            "label": "待认领作品",
+            "value": str(int(_to_float(pending.get("waitClaimed"), 0))),
+            "delta": f"待接单 {int(_to_float(pending.get('waitPending'), 0))}",
+        },
+        {
+            "label": "履约匹配率",
+            "value": f"{round(matched_cnt / len(publishes) * 100) if publishes else 0}%",
+            "delta": f"服务排期 {svc_items_total} 项",
+        },
     ]
     pts = [
-        (parse_timestamp(p.get("createdAt") or p.get("publishTime")), 1.0)
-        for p in publishes
+        (parse_timestamp(p.get("createdAt") or p.get("publishTime")), 1.0) for p in publishes
     ] + [(parse_timestamp(s.get("publishTime")), 1.0) for s in ai_scripts]
     goal_progress = {
         "publish_match": (float(matched_cnt), float(max(len(publishes), 1))),
-        "svc_exec": (float(sum(1 for it in svc_items if _service_item_progress(it.get("progress"))[1] >= 100)), float(max(len(svc_items), 1))),
+        "svc_exec": (
+            float(
+                sum(1 for it in svc_items if _service_item_progress(it.get("progress"))[1] >= 100)
+            ),
+            float(max(len(svc_items), 1)),
+        ),
         "script_sync": (float(ai_scripts_total), 10.0),
         "account_active": (float(accounts_total), 10.0),
     }
@@ -819,7 +900,9 @@ def _map_planning(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     tasks: list[dict[str, Any]] = []
     for tp in topics[:5]:
         tid = str(tp.get("id") or tp.get("keyword") or "")
-        cat = str(tp.get("contentCategoryName") or tp.get("contentPrimaryCategory") or "热点").strip()
+        cat = str(
+            tp.get("contentCategoryName") or tp.get("contentPrimaryCategory") or "热点"
+        ).strip()
         ts = parse_timestamp(tp.get("lastFetchedAt")) or 0
         tasks.append(
             _make_erp_task(
@@ -885,8 +968,16 @@ def _map_planning(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     kpis = [
         {"label": "实时热点话题", "value": str(topics_total), "delta": "AI 创作热榜同步"},
         {"label": "全案/子项目", "value": str(sub_projects_total), "delta": "MCN 客户立项"},
-        {"label": "自营脚本沉淀", "value": str(ai_scripts_total), "delta": f"脚本对话 {script_convs_total}"},
-        {"label": "已发布脚本占比", "value": f"{round(sum(1 for s in ai_scripts if s.get('workUrl')) / len(ai_scripts) * 100) if ai_scripts else 0}%", "delta": "有发布链接校验"},
+        {
+            "label": "自营脚本沉淀",
+            "value": str(ai_scripts_total),
+            "delta": f"脚本对话 {script_convs_total}",
+        },
+        {
+            "label": "已发布脚本占比",
+            "value": f"{round(sum(1 for s in ai_scripts if s.get('workUrl')) / len(ai_scripts) * 100) if ai_scripts else 0}%",
+            "delta": "有发布链接校验",
+        },
     ]
     pts = [(parse_timestamp(s.get("publishTime")), 1.0) for s in ai_scripts] + [
         (parse_timestamp(p.get("createdTime")), 1.0) for p in sub_projects
@@ -939,7 +1030,9 @@ def _map_editing(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
                 module_key="final_review",
                 module_title="精修交付",
                 target_type="成片项目",
-                target_name=str(pub.get("projectName") or pub.get("accountName") or "商单成片").strip(),
+                target_name=str(
+                    pub.get("projectName") or pub.get("accountName") or "商单成片"
+                ).strip(),
                 title=f"[{pub.get('mediaPlatform') or '作品'}] {pub.get('accountName') or pub.get('orderNo') or ''}",
                 due_label=format_short_time(pub.get("createdAt")),
                 status="done" if matched else "pending_delivery",
@@ -952,12 +1045,18 @@ def _map_editing(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     svc_items_total = _extract_total(bundle.get("service_items"))
     ai_scripts_total = _extract_total(bundle.get("ai_scripts"))
     publishes_total = _extract_total(bundle.get("publishes"))
-    matched = sum(1 for p in publishes if bool(p.get("matched")) or p.get("matchStatus") == "MATCHED")
+    matched = sum(
+        1 for p in publishes if bool(p.get("matched")) or p.get("matchStatus") == "MATCHED"
+    )
     kpis = [
         {"label": "执行服务项", "value": str(svc_items_total), "delta": "MCN 制作队列"},
         {"label": "成片/脚本库", "value": str(ai_scripts_total), "delta": "AI 创作脚本关联"},
         {"label": "已上线成片", "value": str(publishes_total), "delta": f"已认领匹配 {matched} 条"},
-        {"label": "认领通过率", "value": f"{round(matched / len(publishes) * 100) if publishes else 0}%", "delta": "线上作品核验"},
+        {
+            "label": "认领通过率",
+            "value": f"{round(matched / len(publishes) * 100) if publishes else 0}%",
+            "delta": "线上作品核验",
+        },
     ]
     pts = [(parse_timestamp(p.get("createdAt")), 1.0) for p in publishes] + [
         (parse_timestamp(s.get("publishTime")), 1.0) for s in ai_scripts
@@ -1047,7 +1146,19 @@ def _map_media(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
         {"label": "媒介资源池", "value": str(accounts_total), "delta": "MCN 账号档案"},
         {"label": "采买付款合同", "value": str(pay_contracts_total), "delta": "达人/供应商协议"},
         {"label": "排期服务单", "value": str(svc_items_total), "delta": "进行中服务项"},
-        {"label": "分组覆盖数", "value": str(len({a.get('distributionGroupName') for a in accounts if a.get('distributionGroupName')})), "delta": "资源分配组"},
+        {
+            "label": "分组覆盖数",
+            "value": str(
+                len(
+                    {
+                        a.get("distributionGroupName")
+                        for a in accounts
+                        if a.get("distributionGroupName")
+                    }
+                )
+            ),
+            "delta": "资源分配组",
+        },
     ]
     pts = [(parse_timestamp(pc.get("signingDate")), 1.0) for pc in pay_contracts] + [
         (parse_timestamp(it.get("updatedTime") or it.get("createdTime")), 1.0) for it in svc_items
@@ -1072,15 +1183,27 @@ def _map_ad_buy(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     # Filter to parentId == 0 top-level categories (matching MCN frontend) to avoid double-counting child rows.
     top_dist = [d for d in dist if d.get("parentId") in (None, "", 0, "0")] or dist
     total_dist_amt = sum(
-        _to_float(d.get("settlementAmount") if d.get("settlementAmount") is not None else d.get("value"), 0.0)
+        _to_float(
+            d.get("settlementAmount") if d.get("settlementAmount") is not None else d.get("value"),
+            0.0,
+        )
         for d in top_dist
     )
 
     tasks: list[dict[str, Any]] = []
     for idx, d in enumerate(top_dist[:6]):
-        cat = str(d.get("advertisingCategoryName") or d.get("parentName") or d.get("name") or "品类").strip()
-        amt = _to_float(d.get("settlementAmount") if d.get("settlementAmount") is not None else d.get("value"), 0.0)
-        share = (amt / total_dist_amt * 100.0) if total_dist_amt > 0 else (_to_float(d.get("rate"), 0.0) * 100.0)
+        cat = str(
+            d.get("advertisingCategoryName") or d.get("parentName") or d.get("name") or "品类"
+        ).strip()
+        amt = _to_float(
+            d.get("settlementAmount") if d.get("settlementAmount") is not None else d.get("value"),
+            0.0,
+        )
+        share = (
+            (amt / total_dist_amt * 100.0)
+            if total_dist_amt > 0
+            else (_to_float(d.get("rate"), 0.0) * 100.0)
+        )
         cat_id = d.get("advertisingCategoryId") or idx
         tasks.append(
             _make_erp_task(
@@ -1094,7 +1217,11 @@ def _map_ad_buy(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
                 status="in_progress",
                 progress=50,
                 external_ref=f"mcn:dist:{cat_id}:{cat}",
-                meta={"categoryId": d.get("advertisingCategoryId"), "settlementAmount": amt, "sharePct": round(share, 1)},
+                meta={
+                    "categoryId": d.get("advertisingCategoryId"),
+                    "settlementAmount": amt,
+                    "sharePct": round(share, 1),
+                },
             )
         )
     for o in valid_orders[:5]:
@@ -1119,18 +1246,43 @@ def _map_ad_buy(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
         )
 
     kpis = [
-        {"label": "投放品类数", "value": str(len(top_dist)), "delta": f"总投放结算 {_fmt_money(total_dist_amt)}"},
-        {"label": "接单金额", "value": _fmt_money(_to_float(perf.get("acceptAmount"), 0.0)), "delta": f"接单数 {int(_to_float(perf.get('acceptNumber'), 0))}"},
-        {"label": "关联订单额", "value": _fmt_money(_to_float(perf.get("orderAmount"), 0.0)), "delta": _fmt_rate(perf.get("orderAmountRate"))},
-        {"label": "平均客单", "value": _fmt_money(_to_float(perf.get("customerPrice"), 0.0)), "delta": _fmt_rate(perf.get("customerPriceRate"))},
+        {
+            "label": "投放品类数",
+            "value": str(len(top_dist)),
+            "delta": f"总投放结算 {_fmt_money(total_dist_amt)}",
+        },
+        {
+            "label": "接单金额",
+            "value": _fmt_money(_to_float(perf.get("acceptAmount"), 0.0)),
+            "delta": f"接单数 {int(_to_float(perf.get('acceptNumber'), 0))}",
+        },
+        {
+            "label": "关联订单额",
+            "value": _fmt_money(_to_float(perf.get("orderAmount"), 0.0)),
+            "delta": _fmt_rate(perf.get("orderAmountRate")),
+        },
+        {
+            "label": "平均客单",
+            "value": _fmt_money(_to_float(perf.get("customerPrice"), 0.0)),
+            "delta": _fmt_rate(perf.get("customerPriceRate")),
+        },
     ]
-    pts = [(parse_timestamp(o.get("signerTime") or o.get("createdTime")), _to_float(o.get("settlementAmount"), 1.0)) for o in valid_orders]
+    pts = [
+        (
+            parse_timestamp(o.get("signerTime") or o.get("createdTime")),
+            _to_float(o.get("settlementAmount"), 1.0),
+        )
+        for o in valid_orders
+    ]
     return ErpRoleSlice(
         tasks=tasks,
         kpis=kpis,
         trend=build_trend_series(pts, period_range),
         goal_progress={
-            "order_delivery": (float(sum(1 for o in valid_orders if _order_status(o.get("status"))[0] == "done")), float(max(len(valid_orders), 1))),
+            "order_delivery": (
+                float(sum(1 for o in valid_orders if _order_status(o.get("status"))[0] == "done")),
+                float(max(len(valid_orders), 1)),
+            ),
         },
         data_sources=["MCN 客户投放分布", "MCN 订单", "MCN 业绩报表"],
     )
@@ -1193,14 +1345,30 @@ def _map_finance(bundle: dict[str, Any], period_range: str) -> ErpRoleSlice:
     recv_amt = _to_float(perf.get("receiveAmount"), 0.0)
     recv_rate = round(recv_amt / order_amt * 100, 1) if order_amt > 0 else 0.0
     kpis = [
-        {"label": "待开票 / 待回款", "value": f"{int(_to_float(pending.get('waitInvoiced'), 0))} / {int(_to_float(pending.get('waitCollected'), 0))}", "delta": f"待认领 {int(_to_float(pending.get('waitClaimed'), 0))} 笔"},
-        {"label": "本月已回款", "value": _fmt_money(recv_amt), "delta": _fmt_rate(perf.get("receiveAmountRate"))},
-        {"label": "收款申请数", "value": str(receipts_total), "delta": f"应付合同 {pay_contracts_total} 份"},
-        {"label": "订单回款率", "value": f"{min(100.0, recv_rate):.1f}%", "delta": f"对账单 {recons_total} 份"},
+        {
+            "label": "待开票 / 待回款",
+            "value": f"{int(_to_float(pending.get('waitInvoiced'), 0))} / {int(_to_float(pending.get('waitCollected'), 0))}",
+            "delta": f"待认领 {int(_to_float(pending.get('waitClaimed'), 0))} 笔",
+        },
+        {
+            "label": "本月已回款",
+            "value": _fmt_money(recv_amt),
+            "delta": _fmt_rate(perf.get("receiveAmountRate")),
+        },
+        {
+            "label": "收款申请数",
+            "value": str(receipts_total),
+            "delta": f"应付合同 {pay_contracts_total} 份",
+        },
+        {
+            "label": "订单回款率",
+            "value": f"{min(100.0, recv_rate):.1f}%",
+            "delta": f"对账单 {recons_total} 份",
+        },
     ]
-    pts = [(parse_timestamp(rc.get("createTime") or rc.get("requestTime")), 1.0) for rc in receipts] + [
-        (parse_timestamp(rn.get("createTime")), 1.0) for rn in recons
-    ]
+    pts = [
+        (parse_timestamp(rc.get("createTime") or rc.get("requestTime")), 1.0) for rc in receipts
+    ] + [(parse_timestamp(rn.get("createTime")), 1.0) for rn in recons]
     return ErpRoleSlice(
         tasks=tasks,
         kpis=kpis,
@@ -1282,7 +1450,9 @@ def fetch_erp_deliverables(
     if client is None or not client.enabled:
         return [], False, ""
     fetcher = ErpDataFetcher(client, user_id)
-    bundle, auth_expired, err = fetcher.fetch_bundle(DELIVERABLE_ENDPOINTS, force_refresh=force_refresh)
+    bundle, auth_expired, err = fetcher.fetch_bundle(
+        DELIVERABLE_ENDPOINTS, force_refresh=force_refresh
+    )
     if auth_expired:
         return [], True, err
 

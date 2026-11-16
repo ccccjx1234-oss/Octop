@@ -118,11 +118,19 @@ class ConnectorService:
         if row is None or not row.credential_blob:
             return {}
         creds = decrypt_credentials(self._secret_repo, row.credential_blob)
-        if row.kind == "mcn" and self._youli_session_repo is not None:
+        if row.kind == "mcn":
             creds = dict(creds)
-            live = self._live_youli_token(row.user_id)
-            if live:
-                creds["token"] = live
+            if self._youli_session_repo is not None:
+                live = self._live_youli_token(row.user_id)
+                if live:
+                    creds["token"] = live
+            youli_cfg = getattr(self._config, "youli", None)
+            mcn_url = str(getattr(youli_cfg, "mcn_base_url", "") or "").strip().rstrip("/")
+            if mcn_url:
+                creds["base_url"] = mcn_url
+            ca_file = str(getattr(youli_cfg, "ca_file", "") or "").strip()
+            if ca_file:
+                creds["ca_file"] = ca_file
         return creds
 
     def _live_youli_token(self, user_id: int) -> str:

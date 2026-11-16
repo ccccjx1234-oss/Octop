@@ -85,3 +85,22 @@ it("redirects to the system-account form when Youli is not configured", async ()
     expect(screen.getByText("system login")).toBeInTheDocument(),
   );
 });
+
+it("shows a kick reason banner when redirected after another device signed in", async () => {
+  sessionStorage.setItem(
+    "octop:auth_notice",
+    JSON.stringify({ reason: "session_replaced" }),
+  );
+  render(
+    <MemoryRouter initialEntries={["/login"]}>
+      <Routes>
+        <Route path="/login" element={<LoginPage mode="staff" />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByText(/login\.sessionReplaced|其他设备或窗口登录/),
+    ).toBeInTheDocument(),
+  );
+});

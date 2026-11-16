@@ -11,14 +11,15 @@ import time
 from typing import Any
 
 from octop.infra.auth.youli.mcn_client import McnClientError
+from octop.infra.auth.youli.pagination import parse_page_args, post_with_page, slim_rows
 
 EXPORT_DESCRIPTION = (
     "按用户说的话导出交付数据。用户不知道 ID，禁止向用户询问模板 ID、任务 ID、工具名或 confirm。"
-    "从原话或截图读取项目名，以及要按项目还是按每条链接；看不清就用业务语言问，一次只问一个缺口。"
+    "从原话或截图读取项目名，以及要按项目还是按每条链接；看不清或需挑选名称时用 ask_user_question 确认。"
     "先用 youli_list_delivery_projects 核对名称，0 条或多项时只把名称列给用户选。"
     "按项目导出不要传 export_template_id。"
     "按链接导出时，用户没指定模板就用默认模板；只有用户说出模板名称，才用 youli_list_export_templates 对上名称后传入 id。"
-    "用一句话复述项目名和导出方式，用户同意后再以 confirm=true 调用。"
+    "参数明确后以 confirm=true 调用，系统会弹出确认弹窗由用户批准执行。"
     "返回 download_url 时把它作为下载链接发给用户。没有链接就用 task_id 调用 youli_get_download_task。"
     "不要让用户去下载中心或交付看板。"
 )
@@ -112,9 +113,20 @@ def _download_view(row: dict[str, Any] | None, task_id: str = "") -> dict[str, A
     }
 
 
-def _list_download_tasks(client: Any) -> list[dict[str, Any]]:
-    data = client.post(_DOWNLOAD_LIST, {"page": {"pageNum": 1, "pageSize": 20}})
-    return _rows(data)
+def _list_download_tasks(
+    client: Any,
+    *,
+    max_pages: int = 3,
+    page_size: int = 50,
+) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    for page_num in range(1, max_pages + 1):
+        data = client.post(_DOWNLOAD_LIST, {"page": {"pageNum": page_num, "pageSize": page_size}})
+        batch = _rows(data)
+        collected.extend(batch)
+        if len(batch) < page_size:
+            break
+    return collected
 
 
 def _match_download_row(
@@ -191,7 +203,8 @@ def _export_identity(result: Any) -> tuple[str, str]:
 def list_delivery_projects(client: Any, args: dict[str, Any]) -> str:
     keyword = str(args.get("keyword") or "").strip()
     name_field = str(args.get("name_field") or "project").strip() or "project"
-    payload: dict[str, Any] = {"page": {"pageNum": 1, "pageSize": 10}}
+    page_num, page_size = parse_page_args(args, default_size=20, max_size=100)
+    payload: dict[str, Any] = {"page": {"pageNum": page_num, "pageSize": page_size}}
     if keyword:
         if name_field == "brand":
             payload["projectBrandName"] = keyword
@@ -199,32 +212,47 @@ def list_delivery_projects(client: Any, args: dict[str, Any]) -> str:
             payload["projectName"] = keyword
         else:
             return "查询失败：name_field 只能是 project 或 brand。"
-    data = client.post("/api/mcn/deliveryDashboard/project/list", payload)
+    rows, page_info = post_with_page(
+        client,
+        "/api/mcn/deliveryDashboard/project/list",
+        payload,
+        page_num=page_num,
+        page_size=page_size,
+    )
     return _json(
         {
             "name_field": name_field,
-            "projects": _slim(
-                data,
+            "projects": slim_rows(
+                rows,
                 ("projectName", "projectBrandName", "projectTypeName", "totalOrderAmount"),
             ),
+            "page": page_info,
             "note": "只向用户展示项目名称。确认后按同一个名称导出，同名会一起导出。",
         }
     )
 
 
 def list_export_templates(client: Any, args: dict[str, Any]) -> str:
+    page_num, page_size = parse_page_args(args, default_size=50, max_size=100)
     payload: dict[str, Any] = {
-        "page": {"pageNum": 1, "pageSize": 50},
+        "page": {"pageNum": page_num, "pageSize": page_size},
         "sceneCode": 2,
         "status": 1,
     }
     template_name = str(args.get("template_name") or "").strip()
     if template_name:
         payload["templateName"] = template_name
-    data = client.post("/api/mcn/excel/export/template/list", payload)
+    rows, page_info = post_with_page(
+        client,
+        "/api/mcn/excel/export/template/list",
+        payload,
+        page_num=page_num,
+        page_size=page_size,
+    )
     return _json(
         {
-            "templates": _slim(data, ("id", "templateName", "isDefault")),
+            "templates": slim_rows(rows, ("id", "templateName", "isDefault")),
+            "page": page_info,
             "note": "只把 templateName 说给用户。用户没指定模板时，导出不要传模板 id。",
         }
     )

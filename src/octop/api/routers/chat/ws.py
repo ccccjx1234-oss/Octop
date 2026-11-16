@@ -39,6 +39,20 @@ def _ws_thread_visible(row: Any, agent_id: str, user_id: int) -> bool:
     return row is not None and row.agent_id == agent_id and thread_visible_to(row, user_id)
 
 
+async def _ws_session_active(
+    websocket: WebSocket, server: Any, sid: str | None, user_id: int
+) -> bool:
+    if not sid:
+        return True
+    session = await asyncio.to_thread(server.services.youli_session_repo.get_active, sid)
+    if session is not None and session.user_id == user_id:
+        return True
+    if websocket.application_state == WebSocketState.CONNECTED:
+        with contextlib.suppress(Exception):
+            await websocket.close(code=4001, reason="auth:session_revoked")
+    return False
+
+
 @router.websocket("/agents/{agent_id}/chat/ws")
 async def dashboard_chat_ws(
     websocket: WebSocket,
@@ -54,12 +68,18 @@ async def dashboard_chat_ws(
     try:
         user = resolve_user_from_token(server, token)
     except OctopError as exc:
-        await websocket.close(code=4001, reason=f"auth: {exc.code.value}")
+        reason = exc.details.get("reason")
+        close_reason = f"auth:{reason}" if reason else f"auth: {exc.code.value}"
+        await websocket.close(code=4001, reason=close_reason)
         return
+
+    from octop.infra.auth.youli.context import current_youli_sid  # noqa: PLC0415
+
+    sid = current_youli_sid()
 
     bridge_ref = parse_bridge_agent_id(agent_id)
     if bridge_ref is not None:
-        await _bridge_chat_ws(websocket, server=server, user=user, ref=bridge_ref)
+        await _bridge_chat_ws(websocket, server=server, user=user, ref=bridge_ref, sid=sid)
         return
 
     assert server.app_runtime is not None  # noqa: S101
@@ -85,15 +105,21 @@ async def dashboard_chat_ws(
     async def send_frame(frame: dict[str, Any]) -> None:
         if websocket.application_state != WebSocketState.CONNECTED:
             return
+        if frame.get("type") == "session_revoked":
+            with contextlib.suppress(Exception):
+                await websocket.close(code=4001, reason="auth:session_replaced")
+            return
         await websocket.send_text(
             json.dumps(frame, ensure_ascii=False, default=json_chunk_default),
         )
 
-    hub.register(connection_id, send_frame)
+    hub.register(connection_id, send_frame, sid=sid)
 
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
             raw = await websocket.receive_text()
+            if not await _ws_session_active(websocket, server, sid, user.id):
+                break
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
@@ -302,6 +328,7 @@ async def _bridge_chat_ws(
     server: Any,
     user: Any,
     ref: Any,
+    sid: str | None = None,
 ) -> None:
     """Relay dashboard chat frames to a remote agent over Bridge WS."""
     rt = server.app_runtime
@@ -455,6 +482,8 @@ async def _bridge_chat_ws(
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
             raw = await websocket.receive_text()
+            if not await _ws_session_active(websocket, server, sid, user.id):
+                break
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:

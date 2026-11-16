@@ -11,7 +11,38 @@ const { TextArea } = Input;
 /** Sentinel choice that reveals the free-text input for a question. */
 const OTHER = "__other__";
 
-const OPTION_KEYS = ["A", "B", "C", "D", "E", "F"] as const;
+const OPTION_KEYS = [
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "I",
+  "J",
+  "K",
+  "L",
+  "M",
+  "N",
+  "O",
+  "P",
+  "Q",
+  "R",
+  "S",
+  "T",
+  "U",
+  "V",
+  "W",
+  "X",
+  "Y",
+  "Z",
+] as const;
+
+function optionBadgeKey(index: number): string {
+  return index < OPTION_KEYS.length ? OPTION_KEYS[index] : String(index + 1);
+}
 
 export interface AskQuestionCardProps {
   questions: AskQuestion[];
@@ -61,6 +92,26 @@ function QuestionCard({
   const interactive = state === "current";
   const openEnded = options.length === 0;
   const hasOther = openEnded || answer.picked.includes(OTHER);
+  const [filter, setFilter] = useState("");
+  const [prevQuestion, setPrevQuestion] = useState(question.question);
+  if (prevQuestion !== question.question) {
+    setPrevQuestion(question.question);
+    setFilter("");
+  }
+
+  const showFilter = interactive && options.length > 4;
+  const query = showFilter ? filter.trim().toLowerCase() : "";
+  const indexedOptions = options.map((option, originalIndex) => ({
+    option,
+    originalIndex,
+  }));
+  const visibleOptions = query
+    ? indexedOptions.filter(({ option }) => {
+        const label = option.label.toLowerCase();
+        const desc = (option.description ?? "").toLowerCase();
+        return label.includes(query) || desc.includes(query);
+      })
+    : indexedOptions;
 
   const toggle = (label: string) => {
     if (!interactive) return;
@@ -92,29 +143,55 @@ function QuestionCard({
         <div className={styles.doneAnswer}>{confirmed}</div>
       ) : (
         <div className={cx(styles.options, !interactive && styles.locked)}>
-          {options.map((option, optionIndex) => {
-            const key = OPTION_KEYS[optionIndex] ?? String(optionIndex + 1);
-            const selected = answer.picked.includes(option.label);
-            return (
-              <button
-                key={option.label}
-                type="button"
-                className={cx(styles.option, selected && styles.selected)}
-                disabled={!interactive}
-                onClick={() => toggle(option.label)}
-              >
-                <span className={styles.key}>{key}</span>
-                <span className={styles.optionBody}>
-                  <span className={styles.optionLabel}>{option.label}</span>
-                  {option.description ? (
-                    <span className={styles.optionDesc}>
-                      {option.description}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-            );
-          })}
+          {showFilter ? (
+            <div className={styles.filterRow}>
+              <Input
+                className={styles.filterInput}
+                size="small"
+                allowClear
+                value={filter}
+                placeholder={t("chat.ask.filterPlaceholder")}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              <span className={styles.filterCount}>
+                {query
+                  ? t("chat.ask.filteredOptionCount", {
+                      matched: visibleOptions.length,
+                      total: options.length,
+                    })
+                  : t("chat.ask.optionCount", { total: options.length })}
+              </span>
+            </div>
+          ) : null}
+          {visibleOptions.length === 0 && query ? (
+            <div className={styles.filterEmpty}>
+              {t("chat.ask.noMatchingOptions")}
+            </div>
+          ) : (
+            visibleOptions.map(({ option, originalIndex }) => {
+              const key = optionBadgeKey(originalIndex);
+              const selected = answer.picked.includes(option.label);
+              return (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={cx(styles.option, selected && styles.selected)}
+                  disabled={!interactive}
+                  onClick={() => toggle(option.label)}
+                >
+                  <span className={styles.key}>{key}</span>
+                  <span className={styles.optionBody}>
+                    <span className={styles.optionLabel}>{option.label}</span>
+                    {option.description ? (
+                      <span className={styles.optionDesc}>
+                        {option.description}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })
+          )}
           {!openEnded ? (
             <button
               type="button"
@@ -123,9 +200,7 @@ function QuestionCard({
               onClick={() => toggle(OTHER)}
             >
               <span className={styles.key}>
-                {options.length < OPTION_KEYS.length
-                  ? OPTION_KEYS[options.length]
-                  : ""}
+                {optionBadgeKey(options.length)}
               </span>
               <span className={styles.optionBody}>
                 <span className={styles.optionLabel}>

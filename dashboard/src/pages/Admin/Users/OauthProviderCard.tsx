@@ -504,8 +504,7 @@ function OauthProviderCardLive({
               >
                 {t("adminSso.testConnection")}
               </Button>
-              {(provider.kind === "feishu" ||
-                provider.kind === "dingtalk") && (
+              {(provider.kind === "feishu" || provider.kind === "dingtalk") && (
                 <Button
                   icon={<Download size={15} />}
                   loading={importing}

@@ -187,15 +187,24 @@ class UserRuntimes:
                 "web_fetch",
             }
         )
-        cfg.middleware = [
-            IsolationToolGuard(
-                lambda: getattr(
-                    self.manager._harness_manager.get_agent(key).agent,
-                    "_mcp_tool_name_set",
-                    frozenset(),
-                )
+        guard = IsolationToolGuard(
+            lambda: getattr(
+                self.manager._harness_manager.get_agent(key).agent,
+                "_mcp_tool_name_set",
+                frozenset(),
+            )
+        )
+        preserved = [
+            mw
+            for mw in (getattr(cfg, "middleware", None) or ())
+            if not isinstance(mw, IsolationToolGuard)
+            and (
+                type(mw).__module__.startswith("octop.infra.agents.middleware.")
+                or type(mw).__module__.startswith("octop.infra.knowledge.")
+                or type(mw).__module__.startswith("langchain.agents.middleware")
             )
         ]
+        cfg.middleware = [guard, *preserved]
         return cfg
 
     def namespace(self, row: AgentRow) -> str:
@@ -266,9 +275,7 @@ class UserRuntimes:
             return 0
         now = time.monotonic()
         candidates = [
-            key
-            for key, last_ts in list(self.last_used.items())
-            if now - last_ts >= idle_seconds
+            key for key, last_ts in list(self.last_used.items()) if now - last_ts >= idle_seconds
         ]
         evicted = 0
         for key in candidates:
