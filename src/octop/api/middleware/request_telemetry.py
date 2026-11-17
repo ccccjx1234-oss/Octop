@@ -9,11 +9,9 @@ from typing import Any
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from octop.infra.isolation.context import actor_id
-
 logger = logging.getLogger(__name__)
 _SLOW_MS = 500.0
-_QUIET_HEALTH_PATHS = frozenset({"/api/health", "/api/health/isolation"})
+_QUIET_HEALTH_PATHS = frozenset({"/api/health"})
 
 
 def _extract_request_id(scope: Scope) -> str:
@@ -62,13 +60,12 @@ class RequestTelemetryMiddleware:
         finally:
             duration_ms = (time.monotonic() - started) * 1000.0
             telemetry = getattr(self.server, "telemetry", None)
-            uid = actor_id()
-            if uid is None:
-                state = scope.get("state")
-                if isinstance(state, dict):
-                    raw_id = getattr(state.get("octop_user"), "id", None)
-                    if isinstance(raw_id, int):
-                        uid = raw_id
+            uid: int | None = None
+            state = scope.get("state")
+            if isinstance(state, dict):
+                raw_id = getattr(state.get("octop_user"), "id", None)
+                if isinstance(raw_id, int):
+                    uid = raw_id
             if telemetry is not None:
                 telemetry.record_request(
                     req_id=req_id,

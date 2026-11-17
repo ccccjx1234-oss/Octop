@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from octop.infra.backend.sandbox import resolve_user_effective_root
 from octop.infra.errors import ErrorCode, OctopError
-from octop.infra.users.resource_policy import raise_if_backend_outside_user_root
+from octop.infra.users.resource_policy import (
+    assert_backend_within_user_root,
+    raise_if_backend_outside_user_root,
+)
 from octop.infra.utils.host_dirs import assert_backend_root_dirs_allowed
 
 
@@ -14,19 +18,33 @@ def assert_user_backend_root_dirs(
     backend: Any,
     *,
     policy_repo: Any | None = None,
+    paths: Any | None = None,
 ) -> None:
     """Reject local backend ``root_dir`` values that fail denylist or user policy.
 
     When *policy_repo* is provided, explicit ``local_shell`` / ``filesystem``
-    roots must stay under the user's ``workspace_root_dir`` (if set). A missing
-    root or the host filesystem root is left for create/update to snap onto
-    that directory. All authenticated users may otherwise select host paths
-    outside home (UI still defaults to home). Sensitive pseudo-fs mounts remain
-    blocked.
+    roots must stay under the user's ``workspace_root_dir`` (or non-admin
+    sandbox root when ``OCTOP_AGENT_SANDBOX_ISOLATION=1``). A missing root or
+    the host filesystem root is left for create/update to snap onto that
+    directory. All authenticated users may otherwise select host paths outside
+    home (UI still defaults to home). Sensitive pseudo-fs mounts remain blocked.
     """
     if backend is None:
         return
     if policy_repo is not None and user is not None:
+        if paths is not None:
+            allowed = resolve_user_effective_root(
+                paths=paths,
+                policy_repo=policy_repo,
+                user_id=int(user.id),
+                is_admin=bool(getattr(user, "is_admin", False)),
+            )
+            if allowed:
+                try:
+                    assert_backend_within_user_root(backend, allowed, reject_host_root=False)
+                except ValueError as exc:
+                    raise OctopError(ErrorCode.WORKSPACE_ROOT_RESTRICTED, str(exc)) from exc
+                return
         raise_if_backend_outside_user_root(policy_repo, int(user.id), backend)
         return
     try:

@@ -45,8 +45,6 @@ import cx from "classnames";
 import { request, requestBlob, requestUpload } from "../../../../api/request";
 import { withFromWorkspace } from "../../../../utils/fromWorkspace";
 import { workspaceApi } from "../../../../api/modules/workspace";
-import { fileSharesApi } from "../../../../api/modules/fileShares";
-import FileShareDialog from "./FileShareDialog";
 import { useAgent } from "../../../../context/AgentContext";
 import { useIsMobile } from "../../../../hooks/useIsMobile";
 import { useHorizontalResize } from "../../../../hooks/useHorizontalResize";
@@ -266,24 +264,6 @@ export default function WorkspaceDrawer({
 
   const [treeData, setTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
-  const [sharingEnabled, setSharingEnabled] = useState(false);
-  const [shareTarget, setShareTarget] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    let current = true;
-    fileSharesApi.capabilities().then(
-      (value) => {
-        if (current) setSharingEnabled(value.enabled);
-      },
-      () => {
-        if (current) setSharingEnabled(false);
-      },
-    );
-    return () => {
-      current = false;
-    };
-  }, [open]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
   const [editMode, setEditMode] = useState(false);
@@ -686,17 +666,6 @@ export default function WorkspaceDrawer({
     const menuItems = !canCreateIn(target.path)
       ? []
       : [
-          ...(!target.is_dir &&
-          sharingEnabled &&
-          !target.path.split("/").some((part) => part.startsWith("."))
-            ? [
-                {
-                  key: "share",
-                  label: t("fileSharing.title"),
-                  onClick: () => setShareTarget(target.path),
-                },
-              ]
-            : []),
           ...(target.is_dir
             ? [
                 {
@@ -1158,14 +1127,6 @@ export default function WorkspaceDrawer({
 
   const workspaceBody = (
     <>
-      {shareTarget && (
-        <FileShareDialog
-          key={`${agentId}:${shareTarget}`}
-          agentId={agentId}
-          path={shareTarget}
-          onClose={() => setShareTarget(null)}
-        />
-      )}
       <Modal
         title={t("workspace.archiveImportTitle")}
         open={archiveImportOpen}

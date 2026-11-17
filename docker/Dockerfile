@@ -88,6 +88,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OCTOP_BIND_HOST=0.0.0.0 \
     OCTOP_PORT=8088 \
     OCTOP_LOG_LEVEL=info \
+    OCTOP_AGENT_SANDBOX_ISOLATION=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
@@ -104,6 +105,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
             "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list.d/debian.sources; \
     fi \
     && apt-get update && apt-get install -y --no-install-recommends \
+        bubblewrap \
         libffi-dev \
         libgl1 \
         libglib2.0-0 \

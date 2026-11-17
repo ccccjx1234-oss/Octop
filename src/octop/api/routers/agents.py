@@ -346,6 +346,7 @@ async def create_agent(
             user,
             body.config.get("backend"),
             policy_repo=server.services.user_policy_repo,
+            paths=server.paths,
         )
     knowledge_ids = (
         server.app_runtime.agent_registry.validate_knowledge_base_ids(
@@ -459,6 +460,7 @@ async def patch_agent(
             user,
             body.config.get("backend"),
             policy_repo=server.services.user_policy_repo,
+            paths=server.paths,
         )
     updates = {
         key: value
