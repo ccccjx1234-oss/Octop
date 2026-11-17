@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ChevronRight, FilePen, Globe } from "lucide-react";
+import { ChevronRight, Globe } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import cx from "classnames";
 import type { HitlDecisionHandler } from "../../../api/types/hitl";
@@ -10,8 +10,6 @@ import {
   turnUsedBrowserTool,
   turnUsedFileTool,
 } from "../utils/messageContent";
-import { isWriteToolName } from "../constants";
-import { collectChatFilePaths } from "../hooks/useChatFileDetection";
 import { layoutAssistantTurnHitl } from "../utils/layoutAssistantTurnHitl";
 import { useAgent } from "../../../context/AgentContext";
 import { TodoProgressPanel } from "../../../components/TodoProgressPanel";
@@ -32,6 +30,7 @@ import { KnowledgeCitationsStrip } from "./KnowledgeCitationsStrip";
 import { messageSpeakerId } from "../utils/messageGrouping";
 import { isAssistantProcessLive } from "./liveAssistantTurn";
 import ChatDeliveryCard, { inferDeliveryDefaults } from "./ChatDeliveryCard";
+import TurnFileChangeCard from "./TurnFileChangeCard";
 import styles from "../index.module.less";
 
 interface AssistantTurnViewProps {
@@ -223,13 +222,6 @@ export default function AssistantTurnView({
         .filter(Boolean),
     [fullSplit.tools],
   );
-  const turnFileCount = useMemo(() => {
-    const fromPaths = collectChatFilePaths(messages, agentId).length;
-    if (fromPaths > 0) return fromPaths;
-    return (fullSplit.tools ?? []).filter((msg) =>
-      isWriteToolName(msg.toolData?.name),
-    ).length;
-  }, [messages, agentId, fullSplit.tools]);
   const hasToolMedia =
     toolMedia.images.length > 0 ||
     toolMedia.videos.length > 0 ||
@@ -411,36 +403,12 @@ export default function AssistantTurnView({
       )}
       {showEditFile && (
         <div className={styles.turnInset}>
-          <button
-            type="button"
-            className={cx(
-              styles.openBrowserPrompt,
-              turnStreaming && styles.openBrowserPromptActive,
-            )}
-            onClick={onEditFile}
-            aria-label={t("chat.editFileCard", {
-              count: Math.max(turnFileCount, 1),
-              defaultValue: "编辑了{{count}}个文件",
-            })}
-          >
-            <FilePen
-              size={16}
-              strokeWidth={2}
-              className={styles.openBrowserPromptIcon}
-              aria-hidden="true"
-            />
-            <span>
-              {t("chat.editFileCard", {
-                count: Math.max(turnFileCount, 1),
-                defaultValue: "编辑了{{count}}个文件",
-              })}
-            </span>
-            <ChevronRight
-              size={14}
-              className={styles.openBrowserPromptArrow}
-              aria-hidden="true"
-            />
-          </button>
+          <TurnFileChangeCard
+            messages={messages}
+            agentId={speakerAgentId}
+            streaming={turnStreaming}
+            onOpenList={onEditFile}
+          />
         </div>
       )}
     </>
