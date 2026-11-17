@@ -18,6 +18,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _INSTALL_TIMEOUT_SEC = 90
+_PROBE_CACHE: tuple[str, int, bool] | None = None
 
 _PKG_MANAGERS: tuple[tuple[str, str], ...] = (
     ("apt-get", "apt"),
@@ -156,8 +157,64 @@ def _install_bubblewrap(manager: str) -> bool:
     return _run_install(argv)
 
 
+def bwrap_namespace_supported(*, refresh: bool = False) -> bool:
+    """True when ``bwrap`` can actually create namespaces on this Linux host/container."""
+    global _PROBE_CACHE
+    if not sys.platform.startswith("linux"):
+        return False
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        _PROBE_CACHE = None
+        return False
+    try:
+        mtime_ns = os.stat(bwrap).st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    if not refresh and _PROBE_CACHE is not None:
+        cached_path, cached_mtime, cached_ok = _PROBE_CACHE
+        if cached_path == bwrap and cached_mtime == mtime_ns:
+            return cached_ok
+
+    argv = [
+        bwrap,
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--",
+        "/bin/sh",
+        "-c",
+        "true",
+    ]
+    ok = False
+    try:
+        res = subprocess.run(argv, check=False, capture_output=True, text=True, timeout=5)
+        ok = res.returncode == 0
+        if not ok:
+            logger.warning(
+                "bubblewrap namespace probe failed (exit=%s): %s",
+                res.returncode,
+                (res.stderr or "").strip()[:300],
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("bubblewrap namespace probe error: %s", exc)
+        ok = False
+    _PROBE_CACHE = (bwrap, mtime_ns, ok)
+    return ok
+
+
 def ensure_bubblewrap() -> dict[str, Any]:
-    """Best-effort ensure ``bwrap`` is on PATH.
+    """Best-effort ensure ``bwrap`` is on PATH and can create namespaces.
 
     Returns a status dict suitable for ``POST /api/filesystem/ensure-bwrap``.
     Never raises for missing packages / privilege — callers must not block save.
@@ -170,6 +227,12 @@ def ensure_bubblewrap() -> dict[str, Any]:
         }
 
     if shutil.which("bwrap"):
+        if not bwrap_namespace_supported(refresh=True):
+            return {
+                "status": "degraded",
+                "reason": "namespace_denied",
+                "detail": "bubblewrap binary exists but container/host blocked namespace creation",
+            }
         return {
             "status": "ready",
             "reason": "already_present",
@@ -199,6 +262,12 @@ def ensure_bubblewrap() -> dict[str, Any]:
         }
 
     if shutil.which("bwrap"):
+        if not bwrap_namespace_supported(refresh=True):
+            return {
+                "status": "degraded",
+                "reason": "namespace_denied",
+                "detail": "bubblewrap installed but container/host blocked namespace creation",
+            }
         return {
             "status": "installed",
             "reason": "install_ok",
@@ -212,4 +281,4 @@ def ensure_bubblewrap() -> dict[str, Any]:
     }
 
 
-__all__ = ["ensure_bubblewrap"]
+__all__ = ["bwrap_namespace_supported", "ensure_bubblewrap"]

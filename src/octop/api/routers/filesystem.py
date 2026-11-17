@@ -18,6 +18,7 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -25,13 +26,10 @@ from pydantic import BaseModel, Field
 
 from octop.api.deps import current_user, get_server
 from octop.infra.agents.workspace.dir import default_workspace_parent_dir
+from octop.infra.backend.sandbox import resolve_user_effective_root
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
-from octop.infra.users.resource_policy import (
-    POLICY_WORKSPACE_ROOT_DIR,
-    effective_workspace_root_dir,
-)
-from octop.infra.utils.bwrap import ensure_bubblewrap
+from octop.infra.utils.bwrap import bwrap_namespace_supported, ensure_bubblewrap
 from octop.infra.utils.docker_env import docker_status, ensure_docker
 from octop.infra.utils.host_dirs import (
     assert_safe_host_path,
@@ -50,8 +48,11 @@ router = APIRouter()
 
 
 def _user_workspace_root(server: Any, user: User) -> str | None:
-    return effective_workspace_root_dir(
-        server.services.user_policy_repo.get(user.id, POLICY_WORKSPACE_ROOT_DIR)
+    return resolve_user_effective_root(
+        paths=server.paths,
+        policy_repo=server.services.user_policy_repo,
+        user_id=user.id,
+        is_admin=user.is_admin,
     )
 
 
@@ -98,13 +99,16 @@ async def filesystem_defaults(
     in_container = running_in_container()
     workspace_parent = default_workspace_parent_dir()
     allowed = _user_workspace_root(server, user)
+    jail_enforced = host_jail_enforced()
+    if jail_enforced and sys.platform.startswith("linux"):
+        jail_enforced = await asyncio.to_thread(bwrap_namespace_supported)
     if allowed:
         return {
             "default_root_dir": allowed,
             "tree_root": allowed,
             "browse_roots": [allowed],
             "default_workspace_dir": workspace_parent,
-            "jail_enforced": host_jail_enforced(),
+            "jail_enforced": jail_enforced,
             "in_container": in_container,
         }
     root = host_fs_tree_root()
@@ -113,7 +117,7 @@ async def filesystem_defaults(
         "tree_root": root,
         "browse_roots": host_browse_roots(),
         "default_workspace_dir": workspace_parent,
-        "jail_enforced": host_jail_enforced(),
+        "jail_enforced": jail_enforced,
         "in_container": in_container,
     }
 
