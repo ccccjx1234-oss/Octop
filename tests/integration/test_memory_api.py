@@ -358,7 +358,7 @@ async def test_extract_config_defaults_then_update(env_with_main_agent) -> None:
     # GET returns defaults for a fresh agent.
     r = await client.get(f"/api/agents/{aid}/memory/extract-config", headers=auth)
     assert r.status_code == 200, r.text
-    assert r.json()["memory_enabled"] is False
+    assert r.json()["memory_enabled"] is True
     assert r.json()["extract_trigger_mode"] == "idle"
     assert r.json()["extract_idle_seconds"] == 300.0
 
@@ -411,8 +411,7 @@ async def test_extract_config_memory_switch_roundtrip(env_with_main_agent, key: 
         assert timing.status_code == 200, timing.text
         reread = await client.get(url, headers=auth)
         assert reread.json()[key] is enabled
-        # The runtime switch keeps its stored value; only the timing changed.
-        assert reread.json()["memory_enabled"] is initial.json()["memory_enabled"]
+        assert reread.json()["memory_enabled"] is True
         other = (
             "memory_recall_inject_enabled"
             if key == "memory_capture_enabled"

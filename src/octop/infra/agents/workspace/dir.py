@@ -166,6 +166,9 @@ def agent_host_data_dirs(
             candidates.append(
                 root / DEFAULT_SYSTEM_FILES_PATH / SCOPED_WORKSPACE_DIRNAME / agent_id
             )
+            sandboxes_parent = (paths.root / "sandboxes").expanduser().resolve()
+            if root.name == agent_id and root.parent.parent == sandboxes_parent:
+                candidates.append(root)
     unique: list[Path] = []
     seen: set[Path] = set()
     for candidate in candidates:
