@@ -272,7 +272,8 @@ export default function AgentBackendFields({
                     margin: 0,
                   }}
                 >
-                  {fsDefaults?.in_container
+                  {fsDefaults?.in_container &&
+                  isHostRootDir(fsDefaults.default_root_dir)
                     ? t("experts.backendRootDirDescContainer")
                     : t("experts.backendRootDirDesc")}
                 </p>

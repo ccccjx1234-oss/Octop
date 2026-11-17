@@ -43,6 +43,9 @@ services:
       - OCTOP_BIND_HOST=0.0.0.0
       - OCTOP_PORT=${OCTOP_PORT:-8088}
       - OCTOP_LOG_LEVEL=${OCTOP_LOG_LEVEL:-info}
+      # Confine non-admin experts to per-agent sandboxes under ~/.octop/sandboxes (bwrap jail on Linux).
+      # Verify in container: docker compose exec octop bwrap --die-with-parent --new-session --unshare-pid --unshare-ipc --unshare-uts --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp -- /bin/sh -c true
+      - OCTOP_AGENT_SANDBOX_ISOLATION=${OCTOP_AGENT_SANDBOX_ISOLATION:-1}
       - OCTOP_DEFAULT_PASSWORD=${OCTOP_DEFAULT_PASSWORD:-}
       - OCTOP_ADMIN_USERNAME=${OCTOP_ADMIN_USERNAME:-admin}
       - OCTOP_ADMIN_DISPLAY_NAME=${OCTOP_ADMIN_DISPLAY_NAME:-Admin}

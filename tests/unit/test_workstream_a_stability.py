@@ -11,10 +11,8 @@ import certifi
 import httpx
 import pytest
 from fastapi import FastAPI
-from starlette.requests import Request
 
 from octop.api import deps
-from octop.api.middleware.user_isolation import UserIsolationMiddleware
 from octop.config import OctopConfig, YouliConfig
 from octop.infra.auth.youli import http_pool
 from octop.infra.auth.youli.client import YouliClient, YouliClientUnavailable
@@ -147,55 +145,6 @@ async def test_async_revalidation_coalesces_concurrent_requests(
     assert calls == 1
 
 
-@pytest.mark.asyncio
-async def test_isolation_middleware_skips_heavy_runtime_for_avatar(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OCTOP_USER_ISOLATION", "1")
-    ensure_mock = AsyncMock()
-    app = FastAPI()
-
-    @app.get("/api/agents/COMMON/avatar")
-    async def avatar(request: Request) -> dict[str, int]:
-        user = await deps.async_authenticate_request(request, app.state.server)
-        return {"uid": user.id}
-
-    server = SimpleNamespace(
-        app_runtime=SimpleNamespace(agent_registry=SimpleNamespace(ensure_user_runtime=ensure_mock))
-    )
-    app.state.server = server
-    monkeypatch.setattr(
-        "octop.api.middleware.user_isolation.async_authenticate_request",
-        AsyncMock(return_value=User(7, "alice", "user", None)),
-    )
-    # Wait: test also verifies Request.state.octop_user propagation via async_authenticate_request
-    monkeypatch.setattr(
-        "octop.api.middleware.user_isolation.async_resolve_user_from_token",
-        AsyncMock(return_value=User(7, "alice", "user", None)),
-    )
-    # Restore real async_authenticate_request on middleware so it populates request.state.octop_user
-    monkeypatch.setattr(
-        "octop.api.middleware.user_isolation.async_authenticate_request",
-        deps.async_authenticate_request,
-    )
-    monkeypatch.setattr(
-        "octop.api.deps.async_resolve_user_from_token",
-        AsyncMock(return_value=User(7, "alice", "user", None)),
-    )
-
-    app.add_middleware(UserIsolationMiddleware, server=server)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get(
-            "/api/agents/COMMON/avatar",
-            headers={"Authorization": "Bearer fake-token"},
-        )
-    assert resp.status_code == 200
-    assert resp.json() == {"uid": 7}
-    ensure_mock.assert_not_awaited()
-
-
 def test_runtime_telemetry_records_events_and_snapshot() -> None:
     t = RuntimeTelemetry()
     t.record_request(req_id="abc", method="GET", path="/api/x", status=200, duration_ms=10.0)
@@ -229,14 +178,14 @@ def test_http_pool_accepts_httpx_timeout_and_reuses_client() -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_telemetry_captures_user_id_after_isolation_scope(
+async def test_request_telemetry_captures_user_id_from_jwt_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from starlette.responses import JSONResponse
 
+    from octop.api.middleware.jwt_auth import install as install_jwt_auth
     from octop.api.middleware.request_telemetry import RequestTelemetryMiddleware
 
-    monkeypatch.setenv("OCTOP_USER_ISOLATION", "1")
     telemetry = RuntimeTelemetry()
     app = FastAPI()
 
@@ -250,7 +199,11 @@ async def test_request_telemetry_captures_user_id_after_isolation_scope(
         "octop.api.deps.async_resolve_user_from_token",
         AsyncMock(return_value=User(7, "alice", "user", None)),
     )
-    app.add_middleware(UserIsolationMiddleware, server=server)
+    monkeypatch.setattr(
+        "octop.api.middleware.jwt_auth.maybe_sliding_renew_token",
+        lambda *_a, **_kw: None,
+    )
+    install_jwt_auth(app, server)
     app.add_middleware(RequestTelemetryMiddleware, server=server)
 
     async with httpx.AsyncClient(

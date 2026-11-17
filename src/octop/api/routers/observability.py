@@ -97,9 +97,7 @@ async def get_runtime_diagnostics(
         return {"enabled": False}
     registry = getattr(getattr(server, "app_runtime", None), "agent_registry", None)
     harness = getattr(registry, "_harness_manager", None) if registry is not None else None
-    runtimes = getattr(registry, "_user_runtimes", None) if registry is not None else None
     extra = {
         "agents_running": len(harness.list_agents()) if harness is not None else 0,
-        "user_runtimes": len(runtimes.last_used) if runtimes is not None else 0,
     }
     return cast(dict[str, Any], telemetry.snapshot(extra=extra))
