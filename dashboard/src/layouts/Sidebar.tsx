@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import AvatarDropdown from "../components/AvatarDropdown";
-import { ArrowLeftRight, ChevronDown, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, PanelLeftClose, X } from "lucide-react";
 import cx from "classnames";
 import { useTheme } from "../context/ThemeContext";
 import { useLayoutMode } from "../context/LayoutModeContext";
@@ -41,6 +41,7 @@ import {
 } from "./sidebarNav";
 import { sectionsFromLayout, type SidebarNavLayout } from "./sidebarNavLayout";
 import SidebarNavCustomizer from "./SidebarNavCustomizer";
+import OnboardingGuide from "../components/OnboardingGuide";
 import styles from "./Sidebar.module.less";
 import { typeSize } from "../utils/mobileTypeScale";
 
@@ -122,6 +123,8 @@ interface SidebarProps {
   selectedKey: string;
   collapsed: boolean;
   onToggle: () => void;
+  /** Desktop brand-row fold. Falls back to `onToggle`. */
+  onNavFold?: () => void;
   isMobile?: boolean;
 }
 
@@ -172,6 +175,7 @@ function NavItemButton({
   return (
     <div
       className={styles.navItemRow}
+      data-nav-key={item.key}
       style={{
         background: active ? "var(--fn-sidebar-item-active-bg)" : "transparent",
       }}
@@ -409,6 +413,7 @@ export default function Sidebar({
   selectedKey,
   collapsed,
   onToggle,
+  onNavFold,
   isMobile,
 }: SidebarProps) {
   const navigate = useNavigate();
@@ -432,6 +437,8 @@ export default function Sidebar({
   );
   const [savedLayout, setSavedLayout] = useState<SidebarNavLayout | null>(null);
   const [customizerOpen, setCustomizerOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const onboardingChecked = useRef(false);
   const navSections = useMemo(
     () => sectionsFromLayout(catalog, savedLayout),
     [catalog, savedLayout],
@@ -447,7 +454,14 @@ export default function Sidebar({
     void preferencesApi
       .get()
       .then((prefs) => {
-        if (!cancelled) setSavedLayout(prefs.sidebar_nav ?? null);
+        if (cancelled) return;
+        setSavedLayout(prefs.sidebar_nav ?? null);
+        // Open the welcome guide once per session for users who have not
+        // finished or skipped it yet.
+        if (!onboardingChecked.current) {
+          onboardingChecked.current = true;
+          if (!prefs.onboarding_completed) setOnboardingOpen(true);
+        }
       })
       .catch(() => {
         /* keep the default nav */
@@ -541,6 +555,7 @@ export default function Sidebar({
         compact={isRailCollapsed}
         onBeforeOpenSettings={isMobile && !collapsed ? onToggle : undefined}
         onCustomizeNav={() => setCustomizerOpen(true)}
+        onOpenOnboarding={() => setOnboardingOpen(true)}
       />
     </div>
   );
@@ -552,6 +567,13 @@ export default function Sidebar({
       layout={savedLayout}
       onClose={() => setCustomizerOpen(false)}
       onSaved={setSavedLayout}
+    />
+  );
+
+  const onboarding = (
+    <OnboardingGuide
+      open={onboardingOpen}
+      onClose={() => setOnboardingOpen(false)}
     />
   );
 
@@ -779,13 +801,37 @@ export default function Sidebar({
         >
           {userFooter}
           {customizer}
+          {onboarding}
         </div>
       </div>
     );
   }
 
+  const navFoldLabel = t(
+    collapsed ? "layout.expandNav" : "layout.collapseNav",
+    collapsed ? "展开导航栏" : "收起导航栏",
+  );
+  const navFoldHint = `${navFoldLabel} (${railShortcutLabel(
+    "toggle-nav",
+    isMacPlatform(),
+  )})`;
+  const navFoldButton = !isRailCollapsed ? (
+    <button
+      type="button"
+      className={styles.navFold}
+      onClick={onNavFold ?? onToggle}
+      aria-expanded={!collapsed}
+      aria-label={navFoldLabel}
+      aria-keyshortcuts={railShortcutAria("toggle-nav")}
+      title={navFoldHint}
+    >
+      <PanelLeftClose size={16} strokeWidth={1.8} aria-hidden />
+    </button>
+  ) : null;
+
   // Desktop: custom sidebar with icon-only collapsed mode.
-  // The trailing divider is MainLayout's RailEdgeControl, not a border here.
+  // Expanded: fold control sits in the brand row, right of the version.
+  // Collapsed: the seam's center chevron expands it, so the mark stays clear.
   return (
     <div className={styles.navRailHost}>
       <div
@@ -816,18 +862,13 @@ export default function Sidebar({
           <div className={styles.navChrome} aria-hidden />
         ) : null}
         <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            minWidth: 0,
-            // Same top inset either way, so expanding only widens the bar.
-            padding: isRailCollapsed ? "10px 0 12px" : "10px 8px 10px 14px",
-            justifyContent: isRailCollapsed ? "center" : "flex-start",
-            flexShrink: 0,
-          }}
+          className={cx(
+            styles.brandRow,
+            isRailCollapsed && styles.brandRowCollapsed,
+          )}
         >
           {brandInner}
+          {navFoldButton}
         </div>
         <div
           className={isRailCollapsed ? styles.navScrollCollapsed : undefined}
@@ -846,6 +887,7 @@ export default function Sidebar({
 
         {userFooter}
         {customizer}
+        {onboarding}
       </div>
     </div>
   );
