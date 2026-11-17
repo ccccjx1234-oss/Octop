@@ -132,7 +132,7 @@ class ConnectorService:
                 live = self._live_youli_token(row.user_id)
                 if live:
                     creds["token"] = live
-            youli_cfg = getattr(self._config, "youli", None)
+            youli_cfg = getattr(getattr(self, "_config", None), "youli", None)
             mcn_url = str(getattr(youli_cfg, "mcn_base_url", "") or "").strip().rstrip("/")
             if mcn_url:
                 creds["base_url"] = mcn_url

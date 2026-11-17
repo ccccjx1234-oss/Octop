@@ -1283,3 +1283,26 @@ def test_write_interrupt_on_covers_all_mcn_writes_and_gates_on_confirm() -> None
         assert when(SimpleNamespace(tool_call={"name": "x", "args": {"confirm": True}})) is True
         assert when(SimpleNamespace(tool_call={"name": "x", "args": {"confirm": False}})) is False
         assert when(SimpleNamespace(tool_call={"name": "x", "args": {}})) is False
+
+
+def test_bounded_ttl_cache_evicts_expired_and_oldest_entries(monkeypatch) -> None:
+    from octop.infra.connectors.gateway.adapters.mcn import common
+
+    now = [1000.0]
+    monkeypatch.setattr(common.time, "time", lambda: now[0])
+    cache = common.BoundedTTLCache(max_entries=2, ttl_seconds=60.0)
+
+    cache.remember("k1", "v1")
+    now[0] += 10.0
+    cache.remember("k2", "v2")
+    assert cache.recall("k1") == "v1"  # touches k1 -> k2 becomes oldest
+    now[0] += 10.0
+    cache.remember("k3", "v3")  # evicts k2, keeps k1 and k3
+    assert cache.recall("k2") is None
+    assert cache.recall("k1") == "v1"
+    assert cache.recall("k3") == "v3"
+
+    now[0] += 61.0  # k1 and k3 expire past TTL
+    assert cache.recall("k1") is None
+    assert cache.recall("k3") is None
+    assert len(cache) == 0
