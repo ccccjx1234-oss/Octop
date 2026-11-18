@@ -12,6 +12,7 @@ import {
   Button,
   Tag,
   Divider,
+  Popconfirm,
   Segmented,
   Tooltip,
   Popover,
@@ -667,16 +668,33 @@ export default function AvatarDropdown({
                     </div>
                     {linked ? (
                       canUnbindKind(provider.kind) ? (
-                        <Button
-                          size="small"
-                          danger
-                          loading={busy}
-                          disabled={ssoBindingKind !== null && !busy}
-                          onClick={() => void handleUnbindOauth(provider.kind)}
+                        <Popconfirm
+                          title={t("account.ssoDisconnectConfirm", { name })}
+                          description={
+                            provider.kind === "feishu"
+                              ? t("account.ssoDisconnectFeishuHint")
+                              : undefined
+                          }
+                          okText={t("account.ssoDisconnect")}
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => void handleUnbindOauth(provider.kind)}
                         >
-                          {t("account.ssoDisconnect")}
-                        </Button>
-                      ) : null
+                          <Button
+                            size="small"
+                            danger
+                            loading={busy}
+                            disabled={ssoBindingKind !== null && !busy}
+                          >
+                            {t("account.ssoDisconnect")}
+                          </Button>
+                        </Popconfirm>
+                      ) : (
+                        <Tooltip title={t("account.ssoCannotDisconnectLast")}>
+                          <Button size="small" disabled>
+                            {t("account.ssoDisconnect")}
+                          </Button>
+                        </Tooltip>
+                      )
                     ) : (
                       <Button
                         size="small"

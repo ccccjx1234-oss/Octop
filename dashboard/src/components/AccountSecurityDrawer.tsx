@@ -284,14 +284,14 @@ export function YouliBindingCard({ providerId }: { providerId: number }) {
             label={t("account.youliMobile")}
             rules={[{ required: true }]}
           >
-            <Input autoComplete="username" maxLength={32} />
+            <Input autoComplete="off" maxLength={32} />
           </Form.Item>
           <Form.Item
             name="password"
             label={t("account.youliPassword")}
             rules={[{ required: true }]}
           >
-            <Input.Password autoComplete="current-password" maxLength={128} />
+            <Input.Password autoComplete="new-password" maxLength={128} />
           </Form.Item>
           <Space>
             <Button
