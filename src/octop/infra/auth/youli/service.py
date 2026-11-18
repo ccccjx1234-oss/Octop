@@ -257,63 +257,44 @@ class YouliAuthService:
         request_id: str,
         browser_token: str,
     ) -> YouliExchangeResult:
-        request = self._services.youli_login_request_repo.get(request_id)
-        if request is None:
-            raise OctopError(ErrorCode.AUTH_FAILED, "unknown login request")
-        now = int(time.time())
-        if request.consumed_at is not None or request.expires_at <= now:
-            raise OctopError(ErrorCode.AUTH_FAILED, "login request expired")
-        if not secrets.compare_digest(request.state_hash, _sha256(state or "")):
-            raise OctopError(ErrorCode.AUTH_FAILED, "login request state mismatch")
-        if not secrets.compare_digest(request.browser_hash, _sha256(browser_token or "")):
-            raise OctopError(ErrorCode.AUTH_FAILED, "login request is not bound to this browser")
-        if request.verifier_blob is None:
-            raise OctopError(ErrorCode.AUTH_FAILED, "login verifier missing")
-        verifier = decrypt_secret(self._services.secret_repo, request.verifier_blob)
-        if not self._services.youli_login_request_repo.consume(request_id):
-            raise OctopError(ErrorCode.AUTH_FAILED, "login request already used")
-        try:
-            issued = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: self._client.redeem(
-                    code=code,
-                    request_id=request_id,
-                    audience=request.audience,
-                    code_verifier=verifier,
-                ),
-            )
-        except YouliClientError as exc:
-            raise OctopError(ErrorCode.AUTH_FAILED, "handoff exchange failed") from exc
-        try:
-            await self._verify_identity(issued)
-        except Exception:
-            await self._revoke_upstream(issued)
-            raise
-        user = await self._users.resolve_or_create_sso_user(
-            provider_id=self.ensure_provider(),
-            subject=f"youli:{issued.company_id}:{issued.employee_id}",
-            claims={
-                "name": issued.username,
-                "company_id": issued.company_id,
-                "employee_id": issued.employee_id,
-            },
-            role_assignment=YOULI_ROLE_ASSIGNMENT,
+        issued = await self._redeem_verified(
+            code=code,
+            state=state,
+            request_id=request_id,
+            browser_token=browser_token,
+            compensate=True,
         )
+        now = int(time.time())
         sid = uuid.uuid4().hex
         ttl = int(self._cfg.token_ttl_seconds)
         abs_expires = now + min(int(self._services.config.access_token_ttl_seconds), ttl)
-        session, replaced_sids = self._services.youli_session_repo.create_replacing(
-            sid=sid,
-            user_id=user.id,
-            account_user_id=issued.user_id,
-            account_username=issued.username,
-            company_id=issued.company_id,
-            employee_id=issued.employee_id,
-            industry=issued.industry,
-            token_blob=encrypt_secret(self._services.secret_repo, issued.token),
-            token_expires_at=now + ttl,
-            abs_expires_at=abs_expires,
+        try:
+            user_row, session, replaced_sids = self._services.youli_session_repo.login(
+                provider_id=self.ensure_provider(),
+                subject=f"youli:{issued.company_id}:{issued.employee_id}",
+                role=YOULI_ROLE_ASSIGNMENT[0],
+                role_name=YOULI_ROLE_ASSIGNMENT[1] or "",
+                permissions=YOULI_ROLE_ASSIGNMENT[2],
+                sid=sid,
+                account_user_id=issued.user_id,
+                account_username=issued.username,
+                company_id=issued.company_id,
+                employee_id=issued.employee_id,
+                industry=issued.industry,
+                token_blob=encrypt_secret(self._services.secret_repo, issued.token),
+                token_expires_at=now + ttl,
+                abs_expires_at=abs_expires,
+            )
+        except ValueError as exc:
+            raise OctopError(
+                ErrorCode.AUTH_FAILED, "employee identity reserved for delegation"
+            ) from exc
+        user = User(
+            id=user_row.id, username=user_row.username, role=str(user_row.role),
+            display_name=user_row.display_name, locale=user_row.locale,
+            permissions=list(user_row.permissions),
         )
+        self._users.register_cached_user(user)
         for old_sid in replaced_sids:
             record_sid_revocation_reason(old_sid, REASON_SESSION_REPLACED)
             if self._ws_hub is not None:
@@ -349,6 +330,125 @@ class YouliAuthService:
             expires_in=max(1, abs_expires - now),
             session=session,
         )
+
+    async def _redeem_verified(
+        self,
+        *,
+        code: str,
+        state: str,
+        request_id: str,
+        browser_token: str,
+        compensate: bool = False,
+    ) -> YouliIssuedToken:
+        request = self._services.youli_login_request_repo.get(request_id)
+        if request is None:
+            raise OctopError(ErrorCode.AUTH_FAILED, "unknown login request")
+        now = int(time.time())
+        if request.consumed_at is not None or request.expires_at <= now:
+            raise OctopError(ErrorCode.AUTH_FAILED, "login request expired")
+        if not secrets.compare_digest(request.state_hash, _sha256(state or "")):
+            raise OctopError(ErrorCode.AUTH_FAILED, "login request state mismatch")
+        if not secrets.compare_digest(request.browser_hash, _sha256(browser_token or "")):
+            raise OctopError(ErrorCode.AUTH_FAILED, "login request is not bound to this browser")
+        if request.verifier_blob is None:
+            raise OctopError(ErrorCode.AUTH_FAILED, "login verifier missing")
+        verifier = decrypt_secret(self._services.secret_repo, request.verifier_blob)
+        if not self._services.youli_login_request_repo.consume(request_id):
+            raise OctopError(ErrorCode.AUTH_FAILED, "login request already used")
+        try:
+            issued = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._client.redeem(
+                    code=code,
+                    request_id=request_id,
+                    audience=request.audience,
+                    code_verifier=verifier,
+                ),
+            )
+        except YouliClientError as exc:
+            raise OctopError(ErrorCode.AUTH_FAILED, "handoff exchange failed") from exc
+        try:
+            await self._verify_identity(issued)
+        except Exception:
+            if compensate:
+                await self._revoke_upstream(issued)
+            raise
+        return issued
+
+    async def bind_employee(
+        self, *, user_id: int, mobile: str, password: str, public_base: str, feishu_claim: Any
+    ) -> None:
+        """Prove the employee account without changing the current Octop login."""
+        if not self._cfg.mdm_base_url:
+            raise OctopError(
+                ErrorCode.NETWORK_ERROR, "business verification unavailable", status=503
+            )
+        started = await self.start(public_base=public_base)
+        loop = asyncio.get_running_loop()
+        try:
+            token = await loop.run_in_executor(
+                None, lambda: self._client.password_login(mobile=mobile, password=password)
+            )
+            code = await loop.run_in_executor(
+                None,
+                lambda: self._client.issue_code(
+                    request_id=started.request_id, audience=self._cfg.audience, token=token
+                ),
+            )
+            issued = await self._redeem_verified(
+                code=code,
+                state=started.state,
+                request_id=started.request_id,
+                browser_token=started.browser_token,
+            )
+        except YouliClientUnavailable as exc:
+            raise OctopError(
+                ErrorCode.NETWORK_ERROR, "business verification unavailable", status=503
+            ) from exc
+        except YouliClientError as exc:
+            raise OctopError(ErrorCode.AUTH_FAILED, "business verification failed") from exc
+        finally:
+            self._services.youli_login_request_repo.consume(started.request_id)
+        now = int(time.time())
+        ttl = int(self._cfg.token_ttl_seconds)
+        try:
+            self._services.youli_identity_binding_repo.bind(
+                user_id=user_id,
+                provider_id=self.ensure_provider(),
+                feishu_claim=feishu_claim,
+                feishu_subject=feishu_claim["subject"],
+                subject=f"youli:{issued.company_id}:{issued.employee_id}",
+                sid=uuid.uuid4().hex,
+                account_user_id=issued.user_id,
+                account_username=issued.username,
+                company_id=issued.company_id,
+                employee_id=issued.employee_id,
+                industry=issued.industry,
+                token_blob=encrypt_secret(self._services.secret_repo, issued.token),
+                token_expires_at=now + ttl,
+                abs_expires_at=now + min(int(self._services.config.access_token_ttl_seconds), ttl),
+            )
+        except ValueError as exc:
+            raise OctopError(ErrorCode.SSO_IDENTITY_TAKEN, "business identity conflict") from exc
+
+    def binding_status(self, user_id: int) -> dict[str, Any]:
+        row = self._services.youli_identity_binding_repo.get(user_id)
+        if row is None:
+            return {"bound": False, "delegation_active": False}
+        stored_session = self._services.youli_session_repo.get(str(row["sid"]))
+        if stored_session is None or stored_session.status == "revoked":
+            return {"bound": False, "delegation_active": False}
+        session = self._services.youli_session_repo.get_active(str(row["sid"]))
+        return {
+            "bound": True,
+            "company_id": int(row["company_id"]),
+            "employee_id": int(row["employee_id"]),
+            "delegation_active": session is not None,
+        }
+
+    async def unlink_employee(self, user_id: int) -> None:
+        provider = self._services.sso_repo.get_by_kind(YOULI_PROVIDER_KIND)
+        self._services.youli_identity_binding_repo.unlink(user_id, provider.id if provider else 0)
 
     async def _verify_identity(self, issued: YouliIssuedToken) -> None:
         payload = await asyncio.get_running_loop().run_in_executor(
@@ -438,6 +538,8 @@ def _admission_failure(
     employee_id: int,
 ) -> str | None:
     """Return why a verified business identity may not use Octop, if any."""
+    if min(user_id, company_id, employee_id) <= 0:
+        return "invalid business identity"
     if int(payload.get("userId") or 0) != user_id:
         return "handoff identity changed"
     if int(payload.get("companyId") or 0) != company_id:
@@ -461,7 +563,7 @@ def _admission_failure(
 
 
 def revalidate_business_session(
-    *, services: SharedServices, cfg: YouliConfig, session: YouliSessionRow
+    *, services: SharedServices, cfg: YouliConfig, session: YouliSessionRow, strict: bool = False
 ) -> None:
     """Re-check a delegated session's business token against MDM.
 
@@ -471,6 +573,10 @@ def revalidate_business_session(
     """
     client = YouliClient(cfg)
     if not client.enabled or not cfg.mdm_base_url:
+        if strict:
+            raise OctopError(
+                ErrorCode.NETWORK_ERROR, "business verification unavailable", status=503
+            )
         return
     if session.token_blob is None:
         services.youli_session_repo.revoke(session.sid)
@@ -482,7 +588,11 @@ def revalidate_business_session(
         raise OctopError(ErrorCode.TOKEN_EXPIRED, "business credential unreadable") from exc
     try:
         payload = client.verify(token)
-    except YouliClientUnavailable:
+    except YouliClientUnavailable as exc:
+        if strict:
+            raise OctopError(
+                ErrorCode.NETWORK_ERROR, "business verification unavailable", status=503
+            ) from exc
         logger.warning("youli revalidation skipped: MDM unavailable for sid %s", session.sid)
         return
     except YouliClientError as exc:

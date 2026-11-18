@@ -372,3 +372,54 @@ async def test_resolve_turn_mcp_servers_names_connectors_that_need_authorization
     assert ei.value.details["connectors"] == blocked
     agent_manager.connector_auth_blocked.assert_awaited_once_with(1, ["notion__1"])
     assert ei.value.localized_message("zh") == "以下连接器需要授权后才能使用：Notion"
+
+
+@pytest.mark.asyncio
+async def test_external_im_member_cannot_use_owner_private_source() -> None:
+    from langgraph.config import var_child_runnable_config
+
+    from octop.infra.knowledge.tools import build_knowledge_tools
+
+    observed = {}
+    retrieve = AsyncMock()
+    async def fake_project_stream(_mgr, _aid, request, **_kwargs):
+        observed["user"] = request["user"]
+        config = dict(request.get("configurable") or {})
+        config.update(user=request["user"], knowledge_base_ids=["private-feishu:source"])
+        token = var_child_runnable_config.set({"configurable": config})
+        try:
+            search = next(t for t in build_knowledge_tools(SimpleNamespace()) if t.name == "search_knowledge")
+            observed["answer"] = await search.ainvoke({"query": "find private material"})
+        finally:
+            var_child_runnable_config.reset(token)
+        yield MagicMock()
+
+    manager = MagicMock()
+    manager.merge_turn_mcp_servers.return_value = None
+    manager.default_mcp_servers.return_value = []
+    manager.default_knowledge_base_ids.return_value = []
+    manager.prepare_chat_mcp = AsyncMock(return_value=[])
+    manager.get_row.return_value = None
+    manager.providers.is_model_ref_usable.return_value = False
+    manager.providers.resolve_explicit_default_model.return_value = None
+    manager.providers.resolve_model_for_multimodal_turn.side_effect = lambda ref, **_k: ref
+    manager.get_thread_model.return_value = None
+    registry = MagicMock()
+    registry.get_or_create_by_key = AsyncMock(return_value="im-thread")
+    processor = GlobalProcessor(
+        agent_manager=manager, thread_registry=registry, audit_repo=MagicMock(),
+        agent_repo=MagicMock(get=MagicMock(return_value=MagicMock(user_id=7, default_model=None))),
+        user_repo=MagicMock(), connector_repo=MagicMock(), dispatcher=SlashDispatcher(),
+        usage_repo=None, gateway=None,
+    )
+    msg = InboundMessage(channel_id="feishu", channel_type="feishu", tenant_id="agent-1",
+                         channel_subject=ChannelSubject(subject_id="external-member"),
+                         content=[TextContent(text="find private material")])
+    with patch("octop.infra.gateway.process.processor.project_stream", new=fake_project_stream), patch(
+        "octop.infra.knowledge.tools.retrieve_context", retrieve
+    ):
+        events = [event async for event in processor(msg)]
+    assert events
+    assert observed["user"] == "7"
+    assert "No knowledge bases selected" in observed["answer"]
+    retrieve.assert_not_awaited()

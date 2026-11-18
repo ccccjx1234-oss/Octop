@@ -79,3 +79,21 @@ def insert_returning_id(conn: Any, sql: str, params: Sequence[object]) -> int:
     if isinstance(row, Mapping):
         return int(row["id"])
     return int(row[0])
+
+
+def lock_thread(conn: Any, dialect: str, thread_id: str) -> Any:
+    """Serialize recipient changes with private-thread protection."""
+    suffix = " FOR UPDATE" if dialect == "postgresql" else ""
+    return conn.execute(
+        "SELECT user_id, agent_id, private_knowledge_protected FROM threads WHERE thread_id = ?"
+        + suffix,
+        (thread_id,),
+    ).fetchone()
+
+
+class PrivateThreadBindingError(ValueError):
+    """A non-dashboard recipient cannot bind a private thread."""
+
+
+class PrivateThreadForkError(ValueError):
+    """A protected source cannot be forked."""

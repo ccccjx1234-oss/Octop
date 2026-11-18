@@ -10,6 +10,7 @@ from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos._base import (
     DbRow,
     bool_int,
+    lock_thread,
     map_rows,
     now_ts,
     sql_in_placeholders,
@@ -54,6 +55,7 @@ class ThreadRow:
     pending_plan_path: str | None = None
     hitl_policy: str | None = None
     contributed: bool = False
+    private_knowledge_protected: bool = False
 
     @classmethod
     def from_row(cls, r: DbRow) -> ThreadRow:
@@ -96,6 +98,7 @@ class ThreadRow:
             pending_plan_path=str(pending_plan_path) if pending_plan_path else None,
             hitl_policy=str(hitl_policy) if hitl_policy else None,
             contributed=contributed,
+            private_knowledge_protected=bool(r["private_knowledge_protected"]),
         )
 
 
@@ -173,9 +176,16 @@ class ThreadRepo:
         session_key: str,
         title: str | None = None,
         last_active: int | None = None,
+        fork_source_id: str | None = None,
     ) -> None:
         ts = now_ts()
         with self._db.transaction() as conn:
+            if fork_source_id is not None:
+                source = lock_thread(conn, self._db.dialect, fork_source_id)
+                if source is None or source["private_knowledge_protected"]:
+                    from octop.infra.db.repos._base import PrivateThreadForkError
+
+                    raise PrivateThreadForkError("private knowledge protected")
             conn.execute(
                 "INSERT INTO threads(thread_id, agent_id, user_id, channel_type, "
                 "session_key, title, last_active, created_at) "
@@ -294,12 +304,36 @@ class ThreadRepo:
             ).fetchall()
         return map_rows(rows, ThreadRow)
 
-    def set_contributed(self, thread_id: str, contributed: bool) -> None:
+    def protect_private_knowledge(self, thread_id: str, user_id: int) -> bool:
+        """Atomically reserve a non-shared thread for its authenticated owner."""
         with self._db.transaction() as conn:
-            conn.execute(
-                "UPDATE threads SET contributed = ? WHERE thread_id = ?",
-                (bool_int(contributed), thread_id),
+            row = lock_thread(conn, self._db.dialect, thread_id)
+            if row is None:
+                return False
+            expected_key = f"{row['agent_id']}:dashboard:{row['user_id']}:dm"
+            incompatible = conn.execute(
+                "SELECT 1 FROM sessions WHERE thread_id = ? AND "
+                "(session_key != ? OR channel_type != 'dashboard' OR user_id != ?) LIMIT 1",
+                (thread_id, expected_key, user_id),
+            ).fetchone()
+            if incompatible is not None:
+                return False
+            result = conn.execute(
+                "UPDATE threads SET private_knowledge_protected = 1 "
+                "WHERE thread_id = ? AND user_id = ? AND contributed = 0 "
+                "AND channel_type = 'dashboard'",
+                (thread_id, user_id),
             )
+            return result.rowcount == 1
+
+    def set_contributed(self, thread_id: str, contributed: bool) -> bool:
+        with self._db.transaction() as conn:
+            result = conn.execute(
+                "UPDATE threads SET contributed = ? WHERE thread_id = ? "
+                "AND (private_knowledge_protected = 0 OR ? = 0)",
+                (bool_int(contributed), thread_id, bool_int(contributed)),
+            )
+            return result.rowcount == 1
 
     def list_by_session(self, *, session_key: str, limit: int = 50) -> list[ThreadRow]:
         with self._db.connect() as conn:

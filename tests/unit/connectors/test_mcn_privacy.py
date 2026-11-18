@@ -117,7 +117,7 @@ def test_decrypt_keeps_stored_token_when_employee_has_no_live_session(monkeypatc
     assert creds["token"] == "stored"
 
 
-def test_decrypt_uses_the_employees_newest_live_token(monkeypatch) -> None:
+def test_decrypt_does_not_replace_credentials_with_live_token(monkeypatch) -> None:
     monkeypatch.setattr(
         "octop.infra.connectors.service.decrypt_credentials",
         lambda _repo, _blob: {"token": "stored"},
@@ -132,7 +132,7 @@ def test_decrypt_uses_the_employees_newest_live_token(monkeypatch) -> None:
             list_active_for_user=lambda _user_id: [SimpleNamespace(token_blob=b"enc")]
         ),
     )
-    assert svc.decrypt("own")["token"] == "live-token"
+    assert svc.decrypt("own")["token"] == "stored"
 
 
 def test_sid_token_is_refused_for_another_employees_connector(monkeypatch) -> None:
@@ -145,9 +145,29 @@ def test_sid_token_is_refused_for_another_employees_connector(monkeypatch) -> No
         _Repo([_instance(user_id=2, instance_id="two")]),
         sessions=SimpleNamespace(get_active=lambda _sid: session),
     )
+    monkeypatch.setattr(svc, "_verified_bound_session", lambda _session: True)
     assert svc.live_youli_token_for_sid("sid-2", owner_user_id=1) == ""
     assert svc.live_youli_token_for_sid("sid-2", owner_user_id=2) == "employee-two"
     assert svc.live_youli_token_for_sid("sid-2") == "employee-two"
+
+
+def test_live_token_requires_online_revalidation(monkeypatch) -> None:
+    from octop.infra.errors import ErrorCode
+
+    session = SimpleNamespace(sid="sid-2", user_id=2, token_blob=b"enc")
+    sessions = SimpleNamespace(
+        get_active=lambda _sid: session,
+        is_bound_sid=lambda _sid: False,
+    )
+    svc = _service(_Repo([_instance(user_id=2, instance_id="two")]), sessions=sessions)
+    svc._config = SimpleNamespace(youli=object())
+
+    def reject(**kwargs):
+        assert kwargs["strict"] is True
+        raise OctopError(ErrorCode.NETWORK_ERROR, "unavailable")
+
+    monkeypatch.setattr("octop.infra.auth.youli.service.revalidate_business_session", reject)
+    assert svc.live_youli_token_for_sid("sid-2", owner_user_id=2) == ""
 
 
 def test_shared_mcn_connector_is_rejected() -> None:
@@ -253,14 +273,15 @@ async def test_mcp_configs_skip_another_employees_mcn(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_internal_mcp_does_not_wipe_token_when_live_session_is_missing(monkeypatch) -> None:
+async def test_internal_mcp_rejects_stored_token_without_live_session(monkeypatch) -> None:
     from octop.api.routers import internal_mcp
 
     seen: dict[str, object] = {}
 
     def handle(*, kind, creds, body):
         del kind, body
-        seen["token"] = creds["token"]
+        assert "token" not in creds
+        seen["token"] = creds["_token_resolver"]()
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
     monkeypatch.setattr(internal_mcp, "handle_mcp_request", handle)
@@ -287,7 +308,7 @@ async def test_internal_mcp_does_not_wipe_token_when_live_session_is_missing(mon
             return {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
     await internal_mcp.internal_mcp_post("mcn", "own", _Request(), token="internal", server=server)
-    assert seen["token"] == "stored"
+    assert seen["token"] == ""
 
 
 @pytest.mark.asyncio
@@ -298,7 +319,8 @@ async def test_internal_mcp_replaces_token_with_the_live_employee_token(monkeypa
 
     def handle(*, kind, creds, body):
         del kind, body
-        seen["token"] = creds["token"]
+        assert "token" not in creds
+        seen["token"] = creds["_token_resolver"]()
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
     monkeypatch.setattr(internal_mcp, "handle_mcp_request", handle)

@@ -190,6 +190,9 @@ async def fork_dashboard_thread(
     thread_message_repo: Any | None = None,
 ) -> dict[str, Any]:
     """Create a dashboard thread seeded through the selected assistant reply."""
+    current = thread_registry.get_thread(source.thread_id)
+    if current is None or getattr(current, "private_knowledge_protected", False):
+        raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, "private knowledge protected")
     messages = await load_checkpoint_messages(harness, source.thread_id)
     idx = find_assistant_fork_index(
         messages,
@@ -219,6 +222,7 @@ async def fork_dashboard_thread(
         session_key=session_key,
         title=None,
         last_active=0,
+        fork_source_id=source.thread_id,
     )
     try:
         await write_checkpoint_messages(harness, thread_id=dest_id, messages=prefix)

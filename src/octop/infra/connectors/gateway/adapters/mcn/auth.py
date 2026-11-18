@@ -28,13 +28,11 @@ def _turn_context() -> tuple[str, int | None]:
 
 
 def _owner_fallback_allowed(creds: dict[str, Any], sid: str, turn_user: int | None) -> bool:
-    """The stored token belongs to the installer. Another employee must not use it."""
+    """Only the connector owner can use the current owner-session resolver."""
     owner = creds.get("_owner_user_id")
     if owner is None:
         return not sid
-    if turn_user is not None and int(turn_user) != int(owner):
-        return False
-    return not (sid and turn_user is None)
+    return turn_user is not None and int(turn_user) == int(owner)
 
 
 def build_mcn_client(
@@ -49,9 +47,6 @@ def build_mcn_client(
     if not token and _owner_fallback_allowed(creds, sid, turn_user):
         latest = creds.get("_latest_token_resolver")
         token = str(latest() or "").strip() if callable(latest) else ""
-        if not token:
-            # Background work for this same employee has no turn sid.
-            token = str(creds.get("token") or "").strip()
     base_url = (
         str(os.environ.get("OCTOP_YOULI_MCN_URL") or creds.get("base_url") or "")
         .strip()

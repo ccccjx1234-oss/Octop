@@ -156,6 +156,7 @@ import TextDocumentEditorModal, {
   type TextDocumentFormat,
 } from "./TextDocumentEditorModal";
 import KnowledgeGraphModal from "./KnowledgeGraphModal";
+import FeishuKbPanel from "./FeishuKbPanel";
 import styles from "./index.module.less";
 
 type BaseFormValues = {
@@ -2305,11 +2306,14 @@ export default function KnowledgeBasesPage() {
       subtitle={t("knowledgeBases.subtitle")}
       fill
       actions={
-        canConfigureKb ? (
-          <Button icon={<Settings size={15} />} onClick={openSettings}>
-            {t("knowledgeBases.settingsTitle")}
-          </Button>
-        ) : undefined
+        <>
+          <FeishuKbPanel />
+          {canConfigureKb && (
+            <Button icon={<Settings size={15} />} onClick={openSettings}>
+              {t("knowledgeBases.settingsTitle")}
+            </Button>
+          )}
+        </>
       }
     >
       {loading ? (

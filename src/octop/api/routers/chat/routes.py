@@ -288,6 +288,12 @@ async def resume_hitl(
             locale=resolve_request_locale(request),
             is_disconnected=request.is_disconnected,
         ):
+            from octop.infra.errors import OctopError  # noqa: PLC0415
+
+            try:
+                _require_thread(server, agent_id, body.thread_id, user, None)
+            except OctopError:
+                return
             yield frame
 
     return StreamingResponse(gen(), media_type="text/event-stream")

@@ -41,6 +41,12 @@ async def _run_locked(_agent_id: str, _session_key: str, operation) -> None:
     await operation()
 
 
+def _gateway() -> MagicMock:
+    gateway = MagicMock()
+    gateway.thread_registry.get_thread.return_value = None
+    return gateway
+
+
 def _session(*, channel_type: str, thread_id: str = "thr1") -> MagicMock:
     session = MagicMock()
     session.channel_type = channel_type
@@ -101,7 +107,7 @@ async def test_text_dashboard_appends_checkpoint_before_push() -> None:
     async def notify(*_args, **_kwargs):
         order.append("toast")
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = push
@@ -128,7 +134,7 @@ async def test_text_checkpoint_failure_skips_push() -> None:
     agent_manager = MagicMock()
     agent_manager.get_agent.return_value = harness
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = AsyncMock()
@@ -158,7 +164,7 @@ async def test_text_projection_and_toast_failure_still_pushes() -> None:
     agent_manager = MagicMock()
     agent_manager.get_agent.return_value = harness
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = AsyncMock()
@@ -177,7 +183,7 @@ async def test_text_projection_and_toast_failure_still_pushes() -> None:
 async def test_text_im_skips_checkpoint() -> None:
     session = _session(channel_type="feishu")
     agent_manager = MagicMock()
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = AsyncMock()
@@ -208,7 +214,7 @@ async def test_agent_hitl_does_not_push() -> None:
     agent_manager.stream = _stream
     agent_manager.get_row = MagicMock(return_value=None)
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = AsyncMock()
@@ -240,7 +246,7 @@ async def test_agent_empty_reply_does_not_push() -> None:
     agent_manager.stream = _stream
     agent_manager.get_row = MagicMock(return_value=None)
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = AsyncMock()
@@ -274,7 +280,7 @@ async def test_agent_strips_orphan_thinking_prefix() -> None:
     agent_manager.stream = _stream
     agent_manager.get_row = MagicMock(return_value=None)
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
     gateway.push_session_text = AsyncMock()
@@ -521,7 +527,7 @@ async def test_fresh_thread_resets_before_require_session() -> None:
         order.append("require")
         return session
 
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.thread_registry.reset_by_session_key = reset
     gateway.require_session = require
@@ -534,6 +540,24 @@ async def test_fresh_thread_resets_before_require_session() -> None:
     )
     await service.deliver(_command(fresh_thread=True, task_type="text"))
     assert order == ["reset", "require"]
+
+
+@pytest.mark.asyncio
+async def test_protected_thread_refuses_cron_delivery() -> None:
+    session = _session(channel_type="feishu")
+    gateway = _gateway()
+    gateway.run_in_session = _run_locked
+    gateway.require_session.return_value = session
+    gateway.thread_registry.get_thread.return_value = MagicMock(private_knowledge_protected=True)
+    gateway.push_session_text = AsyncMock()
+    agent_manager = MagicMock()
+    service = CronDeliveryService(gateway=gateway, agent_manager=agent_manager, repos=MagicMock())
+
+    with pytest.raises(ValueError, match="private knowledge protected"):
+        await service.deliver(_command())
+    gateway.thread_registry.get_thread.assert_called_once_with(session.thread_id)
+    gateway.push_session_text.assert_not_awaited()
+    agent_manager.get_agent.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -682,7 +706,7 @@ async def test_telegram_cron_reloads_topic_routing_from_persisted_session(tmp_pa
     await registry.reset_by_session_key(key)
     session = SessionRepo(db).get(key)
     assert session is not None
-    gateway = MagicMock()
+    gateway = _gateway()
     gateway.run_in_session = _run_locked
     gateway.require_session.return_value = session
     gateway.push_session_text = AsyncMock()

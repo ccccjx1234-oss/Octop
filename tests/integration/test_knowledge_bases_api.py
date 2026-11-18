@@ -119,3 +119,25 @@ async def test_move_document_into_another_knowledge_base(
         for row in (await client.get("/api/knowledge-bases", headers=admin_auth)).json()
     }
     assert (bases[source["id"]], bases[target["id"]]) == (0, 1)
+
+
+async def test_private_collection_is_not_an_ordinary_knowledge_base(env: Any) -> None:
+    from octop.infra.feishu_kb.private_index import collection
+    from octop.infra.knowledge.plane import open_knowledge_index
+
+    client, server, admin_auth = env
+    private_id = collection(123, "private-source")
+    open_knowledge_index(server.services, private_id).replace_doc_chunks(
+        "private-source", ["private-only content"], [[1.0, 0.0]]
+    )
+    for path in (
+        f"/api/knowledge-bases/{private_id}/documents",
+        f"/api/knowledge-bases/{private_id}/documents/private-source/chunks",
+        f"/api/knowledge-bases/{private_id}/documents/private-source/preview",
+        f"/api/knowledge-bases/{private_id}/documents/private-source/file",
+        f"/api/knowledge-bases/{private_id}/documents/private-source/content",
+        f"/api/knowledge-bases/{private_id}/graph",
+    ):
+        response = await client.get(path, headers=admin_auth)
+        assert response.status_code in (403, 404), (path, response.text)
+        assert "private-only content" not in response.text

@@ -50,6 +50,7 @@ from octop.infra.db.repos.workbench import WorkbenchRepo
 from octop.infra.db.repos.youli import (
     YouliAgentBindingRepo,
     YouliBusinessTemplateRepo,
+    YouliIdentityBindingRepo,
     YouliLoginRequestRepo,
     YouliSessionRepo,
 )
@@ -88,6 +89,7 @@ class RepoBundle:
     user_group_repo: UserGroupRepo
     user_group_member_repo: UserGroupMemberRepo
     resource_group_grant_repo: ResourceGroupGrantRepo
+    youli_identity_binding_repo: YouliIdentityBindingRepo
     youli_login_request_repo: YouliLoginRequestRepo
     youli_session_repo: YouliSessionRepo
     youli_agent_binding_repo: YouliAgentBindingRepo
@@ -133,6 +135,7 @@ class RepoBundle:
             user_group_repo=UserGroupRepo(db),
             user_group_member_repo=UserGroupMemberRepo(db),
             resource_group_grant_repo=ResourceGroupGrantRepo(db),
+            youli_identity_binding_repo=YouliIdentityBindingRepo(db),
             youli_login_request_repo=YouliLoginRequestRepo(db),
             youli_session_repo=YouliSessionRepo(db),
             youli_agent_binding_repo=YouliAgentBindingRepo(db),
@@ -256,6 +259,10 @@ class SharedServices:
     @property
     def sso_repo(self) -> SsoRepo:
         return self.repos.sso_repo
+
+    @property
+    def youli_identity_binding_repo(self) -> YouliIdentityBindingRepo:
+        return self.repos.youli_identity_binding_repo
 
     @property
     def youli_login_request_repo(self) -> YouliLoginRequestRepo:

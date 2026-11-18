@@ -86,3 +86,16 @@ def test_stamp_turn_knowledge_config_writes_catalog() -> None:
     ]
     assert configurable["user_is_admin"] is False
     assert configurable["locale"] == "zh"
+
+
+def test_private_sources_require_explicit_selection() -> None:
+    bases = [SimpleNamespace(id="public", owner_user_id=1, default_open=True, name="Public", description="")]
+    private = [{"id": "private-feishu:mine", "name": "Private", "description": ""}]
+    for explicit, expected in ((None, ["public"]), ([], []), (["public"], ["public"]), (["private-feishu:mine"], ["private-feishu:mine"])):
+        request: dict = {}
+        assert stamp_turn_knowledge_config(
+            request, visible_bases=bases, explicit_ids=explicit, owner_user_id=1,
+            locale="en", private_catalog=private,
+        ) == expected
+        catalog = request["configurable"]["knowledge_base_catalog"]
+        assert (private[0] in catalog) == ("private-feishu:mine" in expected)

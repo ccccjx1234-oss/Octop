@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from contextvars import copy_context
+from types import SimpleNamespace
 from typing import Any
 
 from octop.i18n import tr
@@ -47,10 +49,12 @@ async def retrieve_context(
     if not (query or "").strip() or not knowledge_base_ids or k <= 0 or char_budget <= 0:
         return ""
     loop = asyncio.get_running_loop()
+    context = copy_context()
     try:
         return await loop.run_in_executor(
             None,
-            lambda: _retrieve_context_sync(
+            lambda: context.run(
+                _retrieve_context_sync,
                 services,
                 user_id=user_id,
                 is_admin=is_admin,
@@ -79,6 +83,15 @@ def _retrieve_context_sync(
     locale: str,
     visible_bases: Sequence[Any] | None,
 ) -> str:
+    from octop.infra.knowledge.private_authority import allows
+
+    knowledge_base_ids = [
+        item
+        for item in knowledge_base_ids
+        if not item.startswith("private-feishu:") or allows(user_id, item)
+    ]
+    if not knowledge_base_ids:
+        return ""
     assert_knowledge_usable(services.settings_repo.get, getattr(services, "provider_repo", None))
     query_vectors = embed_knowledge_texts(services, [(query or "").strip()])
     if not query_vectors:
@@ -101,9 +114,21 @@ def _retrieve_context_sync(
 
     use_graph = graph_enabled(services)
     ranked: list[tuple[Any, Hit, Any]] = []
+    private_ranked: list[tuple[Any, Hit, Any, tuple[str, int, str]]] = []
     facts: list[str] = []
     related: list[tuple[Any, Any, int]] = []
     for kb_id in selected_ids:
+        if kb_id.startswith("private-feishu:"):
+            from octop.infra.feishu_kb.private_index import search
+
+            source = kb_id.removeprefix("private-feishu:")
+            result = search(services, user_id, source, query_vectors[0], fetch_k)
+            if result is not None:
+                hits, token = result
+                base = SimpleNamespace(id=kb_id, name="Private Feishu " + source)
+                document = SimpleNamespace(id=source, filename=source, path="")
+                private_ranked.extend((base, hit, document, token) for hit in hits)
+            continue
         base = visible_by_id.get(kb_id)
         if base is None:
             continue
@@ -128,7 +153,29 @@ def _retrieve_context_sync(
     ranked.sort(key=lambda item: item[1].score, reverse=True)
     if rerank:
         ranked = _rerank(services, (query or "").strip(), ranked[:fetch_k])
+    # Private text is never sent to the reranker. Recheck local authorization
+    # immediately before it can leave this function.
+    from octop.infra.feishu_kb.private_index import fence
+
+    private = [
+        (base, hit, document)
+        for base, hit, document, token in private_ranked
+        if allows(user_id, base.id) and fence(services, user_id, document.id, token)
+    ]
+    if private:
+        ranked.extend(private)
+        ranked.sort(key=lambda item: item[1].score, reverse=True)
     top = _with_graph_passages(services, ranked[:k], related, k=k)
+    private_tokens = {document.id: token for _, _, document, token in private_ranked}
+    top = [
+        (base, hit, document)
+        for base, hit, document in top
+        if not str(base.id).startswith("private-feishu:")
+        or (
+            allows(user_id, base.id)
+            and fence(services, user_id, document.id, private_tokens[document.id])
+        )
+    ]
     return _format_context(top, char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS])
 
 
@@ -230,7 +277,8 @@ def _format_context(
     if not sections:
         return ""
     body = tr("knowledge.retrieval.preamble", locale) + "\n\n" + "\n\n".join(sections)
-    return append_citations_marker(body + fact_block, citations_from_ranked(included))
+    public = [item for item in included if not str(item[0].id).startswith("private-feishu:")]
+    return append_citations_marker(body + fact_block, citations_from_ranked(public))
 
 
 def _format_facts(facts: Sequence[str], *, limit: int, locale: str) -> str:

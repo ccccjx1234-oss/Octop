@@ -273,6 +273,7 @@ async def get_thread_trajectory(
         )
 
     events = await asyncio.to_thread(_list)
+    _require_thread(server, agent_id, thread_id, user, as_user)
     has_more = len(events) > page_limit
     page = events[1:] if has_more else events
     return TrajectoryHistoryOut(
@@ -320,6 +321,7 @@ async def get_trajectory_metrics(
     _require_thread(server, agent_id, thread_id, user, as_user)
     service = _trajectory_service(server)
     metrics = await asyncio.to_thread(service.metrics, thread_id)
+    _require_thread(server, agent_id, thread_id, user, as_user)
     return TrajectoryMetricsOut.model_validate(asdict(metrics))
 
 
@@ -354,6 +356,10 @@ async def stream_thread_trajectory(
             thread_id=thread_id,
             after_seq=after_seq,
         ):
+            try:
+                _require_thread(server, agent_id, thread_id, user, as_user)
+            except OctopError:
+                return
             yield frame
 
     return StreamingResponse(
@@ -380,21 +386,32 @@ async def export_thread_trajectory(
     server: Any = Depends(get_server),
 ) -> StreamingResponse | JSONResponse:
     """Download the full trajectory ledger. Default ``jsonl``; ``json`` returns an array."""
-    _require_thread(server, agent_id, thread_id, user, as_user)
+    row = _require_thread(server, agent_id, thread_id, user, as_user)
     service = _trajectory_service(server)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    label = "-private-knowledge-protected" if row.private_knowledge_protected else ""
     if format == "json":
-        filename = f"trajectory-{thread_id}-{stamp}.json"
+        filename = f"trajectory-{thread_id}-{stamp}{label}.json"
         payload = await asyncio.to_thread(
             lambda: [json.loads(line) for line in service.export_jsonl(thread_id)]
         )
+        _require_thread(server, agent_id, thread_id, user, as_user)
         return JSONResponse(
             payload,
             headers={"Content-Disposition": content_disposition(filename)},
         )
-    filename = f"trajectory-{thread_id}-{stamp}.jsonl"
+    filename = f"trajectory-{thread_id}-{stamp}{label}.jsonl"
+
+    def guarded_lines() -> Iterator[str]:
+        for line in _jsonl_lines(service, thread_id):
+            try:
+                _require_thread(server, agent_id, thread_id, user, as_user)
+            except OctopError:
+                return
+            yield line
+
     return StreamingResponse(
-        _jsonl_lines(service, thread_id),
+        guarded_lines(),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": content_disposition(filename)},
     )

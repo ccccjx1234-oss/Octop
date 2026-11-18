@@ -232,6 +232,7 @@ def build_app(server: OctopServer) -> FastAPI:
         workspace,
     )
     from octop.api.routers.decision import router as decision_router
+    from octop.api.routers.feishu_kb import router as feishu_kb_router
     from octop.api.routers.filesystem import router as filesystem_router
     from octop.api.routers.observability import router as observability_router
     from octop.api.routers.providers import admin_router as admin_providers_router
@@ -270,6 +271,7 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(connectors.router, "/api", ["connectors"]),
             _RouterMount(bridge.router, "/api", ["bridge"]),
             _RouterMount(knowledge_bases.router, "/api", ["knowledge"]),
+            _RouterMount(feishu_kb_router, "/api/feishu-kb", ["knowledge"]),
             _RouterMount(internal_mcp.router, "/api", ["internal-mcp"]),
             _RouterMount(channels.router, "/api", ["channels"]),
             _RouterMount(cloud.router, "/api/cloud", ["cloud"]),

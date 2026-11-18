@@ -280,6 +280,7 @@ class UserManager:
                     ):
                         email = None
                     username = allocate_username(self._services.user_repo, claims, subject)
+                    uid = None
                     try:
                         uid = self._services.user_repo.create(
                             username=username,
@@ -300,6 +301,10 @@ class UserManager:
                     except Exception as exc:
                         if not _is_unique_violation(exc):
                             raise
+                        if uid is not None:
+                            # This attempt created a user but lost the identity race.
+                            # Do not leave its legacy SSO pointer as a future takeover path.
+                            self._services.user_repo.delete(uid)
                         row = self._services.user_repo.get_by_sso(provider_id, subject)
                         if row is not None:
                             break
@@ -420,6 +425,10 @@ class UserManager:
                     "set a password before unlinking single sign-on",
                 )
             self._services.user_repo.remove_sso_identity(row.id, provider_id=provider.id)
+            if kind == "feishu":
+                from octop.infra.feishu_kb.private_index import cleanup
+
+                await asyncio.get_running_loop().run_in_executor(None, cleanup, self._services)
             self._services.audit_repo.write(
                 actor=row.username, action="user.sso_unbind", target=row.username
             )

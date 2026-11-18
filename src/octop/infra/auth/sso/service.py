@@ -351,6 +351,33 @@ class SsoService:
 
         if not subject:
             return self._error_redirect(frontend, "invalid_token")
+        if provider.kind == "feishu":
+            # Legacy subjects carry no tenant or app provenance. Only their already
+            # authenticated owner may reconcile them by explicitly binding again.
+            try:
+                import json
+
+                parts = json.loads(subject.removeprefix("feishu-v1:"))
+                if not subject.startswith("feishu-v1:") or len(parts) != 4:
+                    raise ValueError("invalid Feishu subject")
+                legacy = self._services.user_repo.get_by_sso(provider.id, parts[3])
+                if legacy is not None and login_state.user_id != legacy.id:
+                    error = (
+                        "legacy_feishu_recovery"
+                        if login_state.user_id is None
+                        else "identity_taken"
+                    )
+                    return self._error_redirect(frontend, error)
+                if login_state.user_id is not None:
+                    existing = [
+                        i
+                        for i in self._services.user_repo.list_sso_identities(login_state.user_id)
+                        if i.provider_id == provider.id
+                    ]
+                    if existing and existing[0].subject not in (parts[3], subject):
+                        return self._error_redirect(frontend, "identity_taken")
+            except (ValueError, TypeError, IndexError):
+                return self._error_redirect(frontend, "invalid_token")
         try:
             if login_state.user_id is not None:
                 user = await self._user_manager.bind_sso_identity(

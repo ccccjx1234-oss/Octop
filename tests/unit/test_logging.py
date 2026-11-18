@@ -38,6 +38,8 @@ def _isolate_root_logger() -> None:
     root = logging.getLogger()
     saved_root_handlers = list(root.handlers)
     saved_root_level = root.level
+    access = logging.getLogger("uvicorn.access")
+    saved_access_filters = list(access.filters)
     saved_child = {
         name: list(logging.getLogger(name).handlers)
         for name in ("uvicorn", "uvicorn.access", "uvicorn.error")
@@ -45,6 +47,7 @@ def _isolate_root_logger() -> None:
     yield
     root.handlers = saved_root_handlers
     root.setLevel(saved_root_level)
+    access.filters = saved_access_filters
     for name, handlers in saved_child.items():
         logging.getLogger(name).handlers = handlers
 
@@ -397,3 +400,49 @@ def test_purge_stale_logs_still_removes_legacy_names(tmp_path: Path):
     assert not old.exists()
     assert not old_gz.exists()
     assert new.exists()
+
+
+def test_feishu_kb_callback_access_log_redacted_in_all_handlers(tmp_path: Path):
+    import io
+
+    import uvicorn
+
+    server = OctopServer(home=tmp_path / ".octop")
+    server._setup_logging()
+    # Uvicorn configures logging after OctopServer.start().
+    uvicorn.Config(lambda scope, receive, send: None)
+    access = logging.getLogger("uvicorn.access")
+    stream = io.StringIO()
+    console = logging.StreamHandler(stream)
+    access.addHandler(console)
+    # Also exercise propagation into an independent file handler.
+    file_handler = logging.FileHandler(tmp_path / "access.log", encoding="utf-8")
+    root = logging.getLogger()
+    root.addHandler(file_handler)
+    previous_propagate = access.propagate
+    uvicorn_logger = logging.getLogger("uvicorn")
+    previous_parent_propagate = uvicorn_logger.propagate
+    uvicorn_logger.propagate = True
+    access.propagate = True
+    try:
+        fmt = '%s - "%s %s HTTP/%s" %d'
+        access.info(
+            fmt,
+            "client",
+            "GET",
+            "/feishu-kb/callback?code=secret&state=secret&error=secret",
+            "1.1",
+            200,
+        )
+        access.info(fmt, "client", "GET", "/other?code=visible", "1.1", 200)
+        file_handler.flush()
+        for output in (stream.getvalue(), (tmp_path / "access.log").read_text(encoding="utf-8")):
+            assert "secret" not in output
+            assert "/feishu-kb/callback?[redacted]" in output
+            assert "/other?code=visible" in output
+    finally:
+        access.propagate = previous_propagate
+        uvicorn_logger.propagate = previous_parent_propagate
+        access.removeHandler(console)
+        root.removeHandler(file_handler)
+        file_handler.close()

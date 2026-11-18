@@ -397,3 +397,99 @@ async def test_get_bound_thread_id_ignores_deleted_thread(registry: ThreadRegist
     assert registry.get_bound_thread_id(sk) == tid
     registry._threads.delete(tid)
     assert registry.get_bound_thread_id(sk) is None
+
+
+@pytest.mark.asyncio
+async def test_im_switch_rejects_protected_thread_and_allows_public(registry: ThreadRegistry) -> None:
+    from unittest.mock import MagicMock
+
+    from octop.infra.errors import ErrorCode, OctopError
+    from octop.infra.gateway.slash import BufferSink, SlashCommand
+    from octop.infra.gateway.slash.ctx import SlashCtx
+    from octop.infra.gateway.slash.handlers.session import cmd_switch
+
+    key = "a1:feishu:subject:dm"
+    im_thread = await registry.get_or_create(
+        agent_id="a1", user_id=1, channel_type="feishu",
+        channel_subject_id="subject", channel_chat_type="dm",
+    )
+    dashboard = await registry.get_or_create(
+        agent_id="a1", user_id=1, channel_type="dashboard",
+        channel_subject_id="1", channel_chat_type="dm",
+    )
+    assert registry.protect_private_knowledge(dashboard, 1)
+    ctx = SlashCtx(agent_id="a1", user_id=1, channel_type="feishu", session_key=key,
+                   thread_registry=registry, locale="en")
+    with pytest.raises(OctopError) as exc:
+        await cmd_switch(MagicMock(), SlashCommand("switch", dashboard[-6:]), ctx, BufferSink())
+    assert exc.value.code == ErrorCode.THREAD_PRIVATE_KNOWLEDGE
+    assert registry.get_bound_thread_id(key) == im_thread
+    public = registry.create_thread(agent_id="a1", user_id=1, channel_type="dashboard",
+                                    session_key="a1:dashboard:1:dm")
+    await cmd_switch(MagicMock(), SlashCommand("switch", public[-6:]), ctx, BufferSink())
+    assert registry.get_bound_thread_id(key) == public
+
+
+@pytest.mark.asyncio
+async def test_cli_cannot_attach_private_thread(registry: ThreadRegistry) -> None:
+    from octop.infra.errors import OctopError
+    from octop.infra.gateway.cli.turn import prepare_cli_turn
+
+    tid = await registry.get_or_create(
+        agent_id="a1", user_id=1, channel_type="dashboard",
+        channel_subject_id="1", channel_chat_type="dm",
+    )
+    assert registry.protect_private_knowledge(tid, 1)
+    for user_id in (1, 2):
+        with pytest.raises(OctopError):
+            await prepare_cli_turn(registry, agent_id="a1", user_id=user_id,
+                                   thread_id=tid, session_key=None)
+
+
+@pytest.mark.asyncio
+async def test_cli_dashboard_session_allows_public_but_denies_protected(registry: ThreadRegistry) -> None:
+    from octop.infra.errors import OctopError
+    from octop.infra.gateway.cli.turn import prepare_cli_turn
+
+    key = ThreadRegistry.dashboard_key(agent_id="a1", user_id=1)
+    tid = await registry.get_or_create_by_key(
+        session_key=key, agent_id="a1", user_id=1, channel_type="dashboard"
+    )
+    assert await prepare_cli_turn(registry, agent_id="a1", user_id=1, thread_id=None, session_key=key) == (tid, key)
+    with pytest.raises(OctopError):
+        await prepare_cli_turn(registry, agent_id="a1", user_id=2, thread_id=None, session_key=key)
+    assert registry.protect_private_knowledge(tid, 1)
+    with pytest.raises(OctopError):
+        await prepare_cli_turn(registry, agent_id="a1", user_id=1, thread_id=None, session_key=key)
+
+
+@pytest.mark.asyncio
+async def test_fork_refuses_protection_during_checkpoint_read(registry: ThreadRegistry) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from langchain_core.messages import AIMessage
+
+    from octop.infra.agents.threads.fork import fork_dashboard_thread
+    from octop.infra.errors import ErrorCode, OctopError
+
+    key = ThreadRegistry.dashboard_key(agent_id="a1", user_id=1)
+    tid = registry.create_thread(agent_id="a1", user_id=1, channel_type="dashboard", session_key=key)
+    source = registry.get_thread(tid)
+    assert source is not None
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def get_state(_config):
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(values={"messages": [AIMessage(content="private answer")]})
+    graph = SimpleNamespace(aget_state=get_state, aupdate_state=AsyncMock())
+    task = asyncio.create_task(fork_dashboard_thread(thread_registry=registry, harness=SimpleNamespace(graph=graph), source=source, user_id=1, assistant_turns_from_end=1))
+    await entered.wait()
+    assert registry.protect_private_knowledge(tid, 1)
+    release.set()
+    with pytest.raises(OctopError) as exc:
+        await task
+    assert exc.value.code == ErrorCode.THREAD_PRIVATE_KNOWLEDGE
+    graph.aupdate_state.assert_not_called()
+    assert [row.thread_id for row in registry.list_threads(agent_id="a1", user_id=1)] == [tid]

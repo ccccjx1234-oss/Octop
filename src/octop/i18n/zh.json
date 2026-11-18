@@ -421,6 +421,7 @@
     "AGENT_NOT_RUNNING": "此专家未启用。",
     "CHECKPOINT_DELETE_FAILED": "对话数据没有删除，会话已保留，请重试。",
     "THREAD_TURN_ACTIVE": "回复进行中，请先停止再删除。",
+    "THREAD_PRIVATE_KNOWLEDGE": "此会话选择过私有知识源，无法共享。",
     "THREAD_CONTRIBUTE_REQUIRES_SHARE": "只有共享专家上的会话可以共享给其他用户。",
     "AGENT_FAILED": "专家启动失败。",
     "AGENT_BUSY": "专家正忙。",

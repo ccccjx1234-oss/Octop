@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
 
 from octop.api.deps import get_server
-from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.connectors.gateway.protocol import handle_mcp_request
 from octop.infra.connectors.service import ConnectorService
 from octop.infra.errors import ErrorCode, OctopError
@@ -36,23 +35,14 @@ def _service(server: Any) -> ConnectorService:
 
 
 def _live_mcn_token(server: Any, user_id: int) -> str:
-    """Use the employee's current MCN token, not the install-time snapshot."""
-    try:
-        sessions = server.services.repos.youli_session_repo.list_active_for_user(user_id)
-    except Exception:
-        logger.exception("failed to read youli sessions for user %s", user_id)
-        return ""
-    for row in sessions:
-        if row.token_blob is None:
-            continue
-        try:
-            token = decrypt_secret(server.services.secret_repo, row.token_blob)
-        except Exception:
-            logger.exception("failed to decrypt youli token for user %s", user_id)
-            continue
-        if token:
-            return token
-    return ""
+    """Resolve the current session at each call, including MDM revalidation."""
+    return ConnectorService(
+        repo=server.services.repos.connector_repo,
+        secret_repo=server.services.secret_repo,
+        settings_repo=server.services.settings_repo,
+        config=server.services.config,
+        youli_session_repo=server.services.youli_session_repo,
+    ).live_youli_token_for_user(user_id, allow_bound=False)
 
 
 def _negotiate_initialize_result(body: dict[str, Any], resp: dict[str, Any]) -> dict[str, Any]:
@@ -86,9 +76,9 @@ async def internal_mcp_post(
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid internal token")
     if kind == "mcn":
         creds = dict(creds)
-        live = _live_mcn_token(server, inst.user_id)
-        if live:
-            creds["token"] = live
+        live = await asyncio.to_thread(_live_mcn_token, server, inst.user_id)
+        creds.pop("token", None)
+        creds["_token_resolver"] = lambda: live
 
     try:
         body = await request.json()

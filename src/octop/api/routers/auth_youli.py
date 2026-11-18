@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import BaseModel, Field
 
-from octop.api.deps import get_server
-from octop.api.routers.auth import me_payload
+from octop.api.deps import current_user, get_server
+from octop.infra.auth.youli.reauth import FeishuErpReauth, denied
 from octop.infra.auth.youli.service import YouliAuthService
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.users.identity import User
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,74 @@ class YouliExchangeBody(BaseModel):
 class YouliStaffLoginBody(BaseModel):
     mobile: str = Field(min_length=5, max_length=32)
     password: str = Field(min_length=1, max_length=128)
+
+
+class YouliBindingBody(YouliStaffLoginBody):
+    proof: str = Field(min_length=1, max_length=512)
+
+
+class ReauthStartBody(BaseModel):
+    provider_id: int
+
+
+class ReauthCallbackBody(BaseModel):
+    state: str = Field(min_length=1, max_length=256)
+    code: str = Field(min_length=1, max_length=2048)
+
+
+def _bearer(authorization: str | None) -> str:
+    if (
+        not authorization
+        or not authorization.lower().startswith("bearer ")
+        or not authorization[7:]
+    ):
+        raise denied()
+    return authorization[7:]
+
+
+def _reauth(server: Any) -> FeishuErpReauth:
+    return FeishuErpReauth(server.services, server.sso_service)
+
+
+@router.post("/binding/reauth/start", summary="Start Feishu OAuth verification for ERP binding")
+def reauth_start(
+    body: ReauthStartBody,
+    response: Response,
+    authorization: str | None = Header(None),
+    user: User = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "authorization_url": _reauth(server).start(
+            user.id, _bearer(authorization), body.provider_id
+        )
+    }
+
+
+@router.post(
+    "/binding/reauth/callback", summary="Complete Feishu OAuth verification for ERP binding"
+)
+def reauth_callback(
+    body: ReauthCallbackBody,
+    response: Response,
+    authorization: str | None = Header(None),
+    user: User = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "proof": _reauth(server).callback(user.id, _bearer(authorization), body.state, body.code)
+    }
+
+
+class YouliBindingStatus(BaseModel):
+    bound: bool
+    delegation_active: bool = Field(
+        description="An unexpired local delegation exists; MDM is checked on use."
+    )
+    company_id: int | None = None
+    employee_id: int | None = None
 
 
 def _service(server: Any) -> YouliAuthService:
@@ -84,6 +153,8 @@ async def staff_login(
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Validate the employee password upstream, then mint an Octop session."""
+    from octop.api.routers.auth import me_payload
+
     service = _service(server)
     result = await service.staff_login(
         mobile=body.mobile.strip(),
@@ -106,6 +177,8 @@ async def exchange(
     response: Response,
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
+    from octop.api.routers.auth import me_payload
+
     service = _service(server)
     cookie = request.cookies.get(f"youli_sso_{body.request_id}")
     if not cookie:
@@ -127,3 +200,69 @@ async def exchange(
         "expires_in": result.expires_in,
         "user": me_payload(result.user, server),
     }
+
+
+@router.get(
+    "/binding",
+    summary="Get your ERP binding status",
+    response_model=YouliBindingStatus,
+    response_model_exclude_none=True,
+)
+async def binding_status(
+    response: Response, user: User = Depends(current_user), server: Any = Depends(get_server)
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    return _service(server).binding_status(user.id)
+
+
+async def _bind_verified(
+    body: YouliBindingBody,
+    request: Request,
+    response: Response,
+    authorization: str | None,
+    user: User,
+    server: Any,
+) -> dict[str, Any]:
+    """Bind a verified Feishu session to an ERP delegation."""
+    response.headers["Cache-Control"] = "no-store"
+    claim = _reauth(server).claim(user.id, _bearer(authorization), body.proof)
+    service = _service(server)
+    await service.bind_employee(
+        user_id=user.id,
+        mobile=body.mobile.strip(),
+        password=body.password,
+        public_base=str(request.base_url).rstrip("/"),
+        feishu_claim=claim,
+    )
+    return service.binding_status(user.id)
+
+
+@router.post(
+    "/binding",
+    summary="Bind your ERP account after Feishu verification",
+    response_model=YouliBindingStatus,
+    response_model_exclude_none=True,
+)
+async def bind_employee(
+    body: YouliBindingBody,
+    request: Request,
+    response: Response,
+    authorization: str | None = Header(None),
+    user: User = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> dict[str, Any]:
+    return await _bind_verified(body, request, response, authorization, user, server)
+
+
+@router.delete(
+    "/binding",
+    summary="Unlink your ERP account and revoke its delegation",
+    response_model=YouliBindingStatus,
+    response_model_exclude_none=True,
+)
+async def unlink_employee(
+    response: Response, user: User = Depends(current_user), server: Any = Depends(get_server)
+) -> dict[str, bool]:
+    await _service(server).unlink_employee(user.id)
+    response.headers["Cache-Control"] = "no-store"
+    return {"bound": False, "delegation_active": False}

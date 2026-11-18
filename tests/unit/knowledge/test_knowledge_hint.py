@@ -136,3 +136,31 @@ def test_middleware_hides_tool_when_catalog_empty() -> None:
 
     names = [getattr(t, "name", None) for t in (captured[0].tools or [])]
     assert names == ["other"]
+
+
+def test_private_source_keeps_tool_visible_without_ordinary_kb() -> None:
+    from octop.infra.knowledge.default_open import stamp_turn_knowledge_config
+
+    turn = {}
+    private = [
+        {
+            "id": "private-feishu:source",
+            "name": "Private Feishu source",
+            "description": "Owner-only document",
+        }
+    ]
+    stamp_turn_knowledge_config(
+        turn,
+        visible_bases=[],
+        explicit_ids=["private-feishu:source"],
+        owner_user_id=1,
+        locale="en",
+        private_catalog=private,
+    )
+    request = ModelRequest(model=MagicMock(), messages=[], tools=[_dummy_tool()])
+    captured = []
+    with _configurable(**turn["configurable"]):
+        KnowledgeSearchHintMiddleware().wrap_model_call(request, lambda req: captured.append(req))
+    assert turn["configurable"]["knowledge_base_ids"] == ["private-feishu:source"]
+    assert captured[0].tools[0].name == "search_knowledge"
+    assert "Private Feishu source" in captured[0].tools[0].description

@@ -32,7 +32,8 @@ class WebSocketHub:
     thread at a time.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, thread_access: Callable[[str, int | None], bool] | None = None) -> None:
+        self._thread_access = thread_access
         self._connections: dict[str, SendFn] = {}
         self._thread_subscribers: dict[str, set[str]] = {}
         self._conn_thread: dict[str, str] = {}
@@ -145,6 +146,11 @@ class WebSocketHub:
         except Exception:
             logger.exception("ws hub: push failed for %s", connection_id)
 
+    def thread_allowed(self, thread_id: str, connection_id: str) -> bool:
+        return self._thread_access is None or self._thread_access(
+            thread_id, self._conn_user.get(connection_id)
+        )
+
     async def push_to_thread(self, thread_id: str, frame: dict[str, Any]) -> None:
         tid = thread_id.strip()
         conns = self._thread_subscribers.get(tid)
@@ -153,10 +159,16 @@ class WebSocketHub:
             return
         outbound = stamp_thread_id(frame, tid)
         targets = list(conns)
+
+        async def push_authorized(conn_id: str) -> None:
+            if not self.thread_allowed(tid, conn_id):
+                return
+            await self.push(conn_id, outbound)
+
         if len(targets) == 1:
-            await self.push(targets[0], outbound)
+            await push_authorized(targets[0])
             return
-        await asyncio.gather(*(self.push(conn_id, outbound) for conn_id in targets))
+        await asyncio.gather(*(push_authorized(conn_id) for conn_id in targets))
 
     async def push_to_user(self, user_id: int, frame: dict[str, Any]) -> None:
         conns = self._user_conns.get(user_id)

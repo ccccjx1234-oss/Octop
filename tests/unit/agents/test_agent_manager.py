@@ -267,14 +267,52 @@ def test_apply_expert_config_forces_sync_ask_agent(manager: AgentManager) -> Non
         assert out.peer_invoke_mode == "sync"
 
 
+@pytest.fixture
+def dispatch_scope(manager: AgentManager) -> Any:
+    from octop.infra.agents.middleware.private_memory import private_memory_scope
+    from octop.infra.knowledge.private_authority import dashboard_authority, install, reset
+
+    manager._repos.user_repo.create(username="dispatch-owner", password_hash="x", role="user")
+    manager._repos.agent_repo.create(agent_id="host", user_id=1, name="Host")
+    for thread_id in ("t", "thr_parent"):
+        manager._repos.thread_repo.insert(
+            thread_id=thread_id, agent_id="host", user_id=1,
+            channel_type="dashboard", session_key="dispatch-session",
+        )
+    token = install(dashboard_authority(1, []))
+    try:
+        with private_memory_scope(manager._repos.thread_repo, "t"):
+            yield
+    finally:
+        reset(token)
+
+
+def _dispatch_inbox(**overrides: Any) -> SimpleNamespace:
+    methods: dict[str, Any] = {
+        "enqueue": MagicMock(),
+        "_process": AsyncMock(),
+        "_invoke_target": AsyncMock(),
+        "_synthesize_reply": AsyncMock(),
+        "_finish": AsyncMock(),
+        "_call_agent": AsyncMock(),
+        "cancel": MagicMock(),
+        "_set_status": MagicMock(),
+        "_prune_terminal": MagicMock(),
+    }
+    methods.update(overrides)
+    return SimpleNamespace(**methods)
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_team_host_dispatch_uses_inbox(manager: AgentManager) -> None:
     from dataclasses import replace as dc_replace
 
     team = MagicMock()
+    team.inbox = _dispatch_inbox()
     team.enabled = True
     team.call_peer = AsyncMock(return_value="sync")
-    team.submit_peer = MagicMock(return_value="queued")
+    team.submit_peer = submit_peer = MagicMock(return_value="queued")
     team._enrich_request = None
     manager._harness_manager = SimpleNamespace(team=team)
     manager._team_processor = SimpleNamespace(take_team_peer_prompt=MagicMock(return_value=None))
@@ -291,15 +329,17 @@ async def test_install_team_host_dispatch_uses_inbox(manager: AgentManager) -> N
         session_key="sk",
     )
     assert result == "queued"
-    team.submit_peer.assert_called_once()
+    submit_peer.assert_called_once()
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_expert_dispatch_keeps_sync_call_peer(manager: AgentManager) -> None:
     team = MagicMock()
+    team.inbox = _dispatch_inbox()
     team.enabled = True
     team.call_peer = AsyncMock(return_value="sync")
-    team.submit_peer = MagicMock(return_value="queued")
+    team.submit_peer = submit_peer = MagicMock(return_value="queued")
     team._enrich_request = None
     manager._harness_manager = SimpleNamespace(team=team)
     manager._team_processor = SimpleNamespace(take_team_peer_prompt=MagicMock(return_value=None))
@@ -314,14 +354,15 @@ async def test_install_expert_dispatch_keeps_sync_call_peer(manager: AgentManage
         session_key="sk",
     )
     assert result == "sync"
-    team.submit_peer.assert_not_called()
+    submit_peer.assert_not_called()
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_expert_inbox_call_agent_stays_sync(manager: AgentManager) -> None:
     original_call = AsyncMock(return_value={"ok": True})
     stream_host = AsyncMock(side_effect=AssertionError("expert inbox must not room-stream"))
-    inbox = SimpleNamespace(_call_agent=original_call)
+    inbox = _dispatch_inbox(_call_agent=original_call)
     team = MagicMock()
     team.enabled = True
     team.call_peer = AsyncMock(return_value="sync")
@@ -346,6 +387,7 @@ async def test_install_expert_inbox_call_agent_stays_sync(manager: AgentManager)
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_team_host_dispatch_stream_skips_unknown_job_id(
     manager: AgentManager,
 ) -> None:
@@ -379,6 +421,7 @@ async def test_install_team_host_dispatch_stream_skips_unknown_job_id(
         return {"messages": [], "team_live_streamed": True}
 
     team = MagicMock()
+    team.inbox = _dispatch_inbox()
     team.enabled = True
     team.call_peer = AsyncMock(return_value="sync")
     team.submit_peer = MagicMock()
@@ -413,6 +456,7 @@ async def test_install_team_host_dispatch_stream_skips_unknown_job_id(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_async_dispatch_streams_non_team_inbox(manager: AgentManager) -> None:
     seen: dict[str, object] = {}
 
@@ -442,6 +486,7 @@ async def test_install_async_dispatch_streams_non_team_inbox(manager: AgentManag
         return {"messages": [], "team_live_streamed": True}
 
     team = MagicMock()
+    team.inbox = _dispatch_inbox()
     team.enabled = True
     team.call_peer = AsyncMock(return_value="sync")
     team.submit_peer = MagicMock()
@@ -502,6 +547,7 @@ async def test_install_team_host_enrich_uses_host_assignment(manager: AgentManag
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_team_host_dispatch_streams_inbox_wrapup(
     manager: AgentManager,
 ) -> None:
@@ -524,7 +570,7 @@ async def test_install_team_host_dispatch_streams_inbox_wrapup(
         }
 
     original_call = AsyncMock(side_effect=AssertionError("wrap-up must stream"))
-    inbox = SimpleNamespace(_call_agent=original_call)
+    inbox = _dispatch_inbox(_call_agent=original_call)
     team = MagicMock()
     team.enabled = True
     team.call_peer = AsyncMock(return_value="sync")
@@ -551,6 +597,7 @@ async def test_install_team_host_dispatch_streams_inbox_wrapup(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("dispatch_scope")
 async def test_install_team_host_dispatch_patches_inbox_synthesize(
     manager: AgentManager,
 ) -> None:
@@ -575,7 +622,7 @@ async def test_install_team_host_dispatch_patches_inbox_synthesize(
     async def original_synth(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("wrap-up must stream, not call()")
 
-    inbox = SimpleNamespace(
+    inbox = _dispatch_inbox(
         _synthesize_reply=original_synth,
         _processor=SimpleNamespace(compose_followup=lambda *_a, **_k: "请收口"),
         _is_cancelled=lambda _msg: False,

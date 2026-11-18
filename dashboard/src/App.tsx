@@ -17,6 +17,8 @@ import MainLayout from "./layouts/MainLayout";
 import LoginPage from "./pages/Login";
 import OidcComplete from "./pages/Login/OidcComplete";
 import YouliComplete from "./pages/Login/YouliComplete";
+import YouliReauthCallback from "./pages/Login/YouliReauthCallback";
+import FeishuKbCallback from "./pages/KnowledgeBases/FeishuKbCallback";
 import SetupPage from "./pages/Setup";
 import InvitePage from "./pages/Invite";
 import AuthGuard from "./components/AuthGuard";
@@ -147,6 +149,11 @@ function ThemedApp() {
             <Route path="/manageLogin" element={<LoginPage key="manage" />} />
             <Route path="/login/oidc/complete" element={<OidcComplete />} />
             <Route path="/login/youli/complete" element={<YouliComplete />} />
+            <Route
+              path="/youli/reauth/callback"
+              element={<YouliReauthCallback />}
+            />
+            <Route path="/feishu-kb/callback" element={<FeishuKbCallback />} />
             <Route path="/setup" element={<SetupPage />} />
             <Route path="/invite" element={<InvitePage />} />
             <Route

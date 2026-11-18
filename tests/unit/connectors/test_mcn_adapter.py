@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from octop.infra.connectors.gateway.adapters import mcn
 
 
@@ -128,6 +130,47 @@ def test_foreign_turn_does_not_use_owner_token(monkeypatch) -> None:
     else:
         raise AssertionError("foreign turn borrowed the owner token")
     assert "latest" not in seen
+
+
+def test_stored_token_is_never_used_without_live_resolver(monkeypatch) -> None:
+    monkeypatch.setattr(mcn, "_turn_context", lambda: ("", None))
+    with pytest.raises(mcn.McnClientError):
+        mcn._client({"token": "stale", "base_url": "http://mcn"})
+
+
+@pytest.mark.asyncio
+async def test_connector_test_rejects_stale_stored_token(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from octop.api.routers import connectors
+
+    instance = SimpleNamespace(kind="mcn", user_id=1)
+    user = SimpleNamespace(id=1)
+
+    class Service:
+        async def ensure_fresh_credentials(self, *_args):
+            return {"token": "stale", "base_url": "http://mcn"}
+
+        def live_youli_token_for_user(self, _user_id):
+            return ""
+
+    async def probe(_entry, creds, **_kwargs):
+        mcn._client(creds)
+        return {"ok": True}
+
+    server = SimpleNamespace(
+        services=SimpleNamespace(
+            repos=SimpleNamespace(connector_repo=SimpleNamespace(get=lambda _: instance)),
+            config=object(),
+        )
+    )
+    monkeypatch.setattr(connectors, "_resolve_custom_target", lambda *args, **kwargs: None)
+    monkeypatch.setattr(connectors, "_assert_can_manage_connector", lambda *args: None)
+    monkeypatch.setattr(connectors, "_connector_service", lambda _: Service())
+    monkeypatch.setattr(connectors, "probe_connector", probe)
+    monkeypatch.setattr(mcn, "_turn_context", lambda: ("", None))
+    result = await connectors.test_instance("instance", None, user, server)
+    assert result["ok"] is False
 
 
 def test_owner_background_uses_own_live_token(monkeypatch) -> None:

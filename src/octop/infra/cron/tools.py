@@ -91,6 +91,18 @@ def _require_agent_owner(mgr: CronManager, agent_id: str, user_id: int) -> None:
         raise ValueError("cron jobs can only be managed by the expert owner")
 
 
+def _require_public_source(mgr: CronManager) -> None:
+    from octop.infra.agents.middleware.private_memory import (
+        invocation_is_protected,
+        invocation_root_thread,
+    )
+
+    thread_id = invocation_root_thread()
+    row = mgr._repos.thread_repo.get(thread_id) if thread_id else None
+    if invocation_is_protected() or row is None or row.private_knowledge_protected:
+        raise ValueError("Scheduled jobs are unavailable for this conversation.")
+
+
 def _get_owned(mgr: CronManager, cron_id: str, agent_id: str, user_id: int) -> CronJobRow:
     _require_agent_owner(mgr, agent_id, user_id)
     row = mgr.get(cron_id)
@@ -204,6 +216,7 @@ def build_cronjob_tools(cron_manager: CronManager) -> list[StructuredTool]:
         ] = "text",
     ) -> str:
         try:
+            _require_public_source(mgr)
             agent_id, user_id, channel_key = _tool_ctx()
             _require_agent_owner(mgr, agent_id, user_id)
             cron_id = new_cron_id()
@@ -251,6 +264,7 @@ def build_cronjob_tools(cron_manager: CronManager) -> list[StructuredTool]:
         task_type: Annotated[str | None, Field(description=_TASK_TYPE_HELP)] = None,
     ) -> str:
         try:
+            _require_public_source(mgr)
             agent_id, user_id, channel_key = _tool_ctx()
             existing = _get_owned(mgr, cron_id, agent_id, user_id)
             cleaned_prompt = require_cron_prompt(prompt) if prompt is not None else None

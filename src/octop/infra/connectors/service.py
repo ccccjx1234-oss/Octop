@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -128,10 +129,6 @@ class ConnectorService:
         creds = decrypt_credentials(self._secret_repo, row.credential_blob)
         if row.kind == "mcn":
             creds = dict(creds)
-            if self._youli_session_repo is not None:
-                live = self._live_youli_token(row.user_id)
-                if live:
-                    creds["token"] = live
             youli_cfg = getattr(getattr(self, "_config", None), "youli", None)
             mcn_url = str(getattr(youli_cfg, "mcn_base_url", "") or "").strip().rstrip("/")
             if mcn_url:
@@ -141,7 +138,27 @@ class ConnectorService:
                 creds["ca_file"] = ca_file
         return creds
 
-    def _live_youli_token(self, user_id: int) -> str:
+    def _verified_bound_session(self, session: Any) -> bool:
+        repo = self._youli_session_repo
+        if repo is None:
+            return False
+        bound = repo.is_bound_sid(session.sid)
+        from octop.infra.auth.youli.service import revalidate_business_session
+
+        try:
+            revalidate_business_session(
+                services=SimpleNamespace(secret_repo=self._secret_repo, youli_session_repo=repo),
+                cfg=self._config.youli,
+                session=session,
+                strict=True,
+            )
+        except OctopError:
+            return False
+        return (not bound or repo.is_bound_sid(session.sid)) and repo.get_active(
+            session.sid
+        ) is not None
+
+    def _live_youli_token(self, user_id: int, *, allow_bound: bool = True) -> str:
         """Resolve the employee's current MCN token; a re-login replaces it."""
         if self._youli_session_repo is None:
             return ""
@@ -151,7 +168,13 @@ class ConnectorService:
             logger.exception("failed to read youli sessions for user %s", user_id)
             return ""
         for row in sessions:
-            if row.token_blob is None:
+            if not allow_bound and self._youli_session_repo.is_bound_sid(row.sid):
+                continue
+            if (
+                self._youli_session_repo.get_active(row.sid) is None
+                or row.token_blob is None
+                or not self._verified_bound_session(row)
+            ):
                 continue
             try:
                 token = decrypt_secret(self._secret_repo, row.token_blob)
@@ -162,9 +185,9 @@ class ConnectorService:
                 return token
         return ""
 
-    def live_youli_token_for_user(self, user_id: int) -> str:
+    def live_youli_token_for_user(self, user_id: int, *, allow_bound: bool = True) -> str:
         """Newest token for the employee, resolved at tool-call time."""
-        return self._live_youli_token(user_id)
+        return self._live_youli_token(user_id, allow_bound=allow_bound)
 
     def live_youli_token_for_sid(self, sid: str, owner_user_id: int | None = None) -> str:
         """Token for the employee who is running this turn, if they own MCN."""
@@ -178,6 +201,8 @@ class ConnectorService:
         if session is None or session.token_blob is None:
             return ""
         if owner_user_id is not None and int(session.user_id) != int(owner_user_id):
+            return ""
+        if not self._verified_bound_session(session):
             return ""
         owns_mcn = any(
             inst.kind == "mcn" and inst.status == "active"

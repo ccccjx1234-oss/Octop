@@ -602,3 +602,144 @@ async def test_fork_thread_from_assistant_message(env: Any) -> None:
         json={"message_id": "a1", "assistant_turns_from_end": 2},
     )
     assert denied.status_code in {403, 404}
+
+
+async def test_ws_private_knowledge_transport_to_executed_tool(env: Any, monkeypatch: Any) -> None:
+    """Authenticated selection reaches the tool; forged contexts cannot grant it."""
+    import json
+    import time
+    from types import SimpleNamespace
+
+    from langgraph.config import var_child_runnable_config
+
+    from octop.infra.auth.sso.crypto import encrypt_secret
+    from octop.infra.feishu_kb import private_index
+    from octop.infra.feishu_kb.service import FeishuKbService
+    from octop.infra.knowledge import retrieve
+    from octop.infra.knowledge.tools import build_knowledge_tools
+
+    c, srv, _fake, alice_auth, bob_auth, aid = env
+    services = srv.services
+    uid = srv.app_runtime.agent_registry.get_row(aid).user_id
+    subject = 'feishu-v1:["feishu","app","tenant","person"]'
+    secret = encrypt_secret(services.secret_repo, "app-secret")
+    token_blob = encrypt_secret(services.secret_repo, json.dumps({"access": "test", "refresh": "test"}))
+    with services.db.transaction() as db:
+        db.execute("INSERT INTO sso_providers (id,kind,enabled,client_id,client_secret_enc,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", (9876, "feishu", 1, "app", secret, 1, 1))
+        db.execute("INSERT INTO user_sso_identities(user_id,provider_id,subject,created_at) VALUES (?,?,?,?)", (uid, 9876, subject, 1))
+        db.execute("INSERT INTO feishu_kb_grant(user_id,provider_id,subject,token_blob,expires_at) VALUES (?,?,?,?,?)", (uid, 9876, subject, token_blob, int(time.time()) + 3600))
+        db.execute("INSERT INTO feishu_kb_source(source_id,user_id,provider_id,document_id,enabled,retrieval_enabled) VALUES (?,?,?,?,1,1)", ("test-source", uid, 9876, "doc"))
+    monkeypatch.setattr(FeishuKbService, "_client", lambda *_: SimpleNamespace(raw_content=lambda *_: "private fact"))
+    monkeypatch.setattr(private_index, "assert_knowledge_usable", lambda *_: None)
+    monkeypatch.setattr(retrieve, "assert_knowledge_usable", lambda *_: None)
+    monkeypatch.setattr(private_index, "embed_knowledge_texts", lambda _, texts: [[1.0, 0.0] for _ in texts])
+    monkeypatch.setattr(retrieve, "embed_knowledge_texts", lambda _, texts: [[1.0, 0.0] for _ in texts])
+    monkeypatch.setattr(retrieve, "get_rerank_capability", lambda *_: {"usable": False})
+    monkeypatch.setattr(retrieve, "graph_enabled", lambda *_: False)
+    tool = build_knowledge_tools(services)[0]
+    agent = srv.app_runtime.agent_registry.get_agent(aid)
+    observed = []
+
+    async def run_tool(request: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        config = dict(request.get("configurable") or {})
+        config["user"] = request["user"]
+        ctx = var_child_runnable_config.set({"configurable": config})
+        try:
+            observed.append((config, await tool.ainvoke({"query": "fact", "user_id": int(uid) + 10000})))
+            forged = dict(config, user=str(int(uid) + 10000), user_is_admin=True)
+            forged_ctx = var_child_runnable_config.set({"configurable": forged})
+            try:
+                observed.append((forged, await tool.ainvoke({"query": "fact"})))
+            finally:
+                var_child_runnable_config.reset(forged_ctx)
+        finally:
+            var_child_runnable_config.reset(ctx)
+        yield {"type": "token", "content": "complete"}
+
+    agent.stream = run_tool
+    selected = "private-feishu:test-source"
+    await _consume_ws_turn(c, aid, alice_auth, extra={"knowledge_base_ids": [selected]})
+    assert selected in observed[0][0]["knowledge_base_ids"]
+    assert "private fact" in observed[0][1]
+    assert "private fact" not in observed[1][1]
+    await _consume_ws_turn(c, aid, alice_auth, extra={"knowledge_base_ids": []})
+    assert observed[2][0]["knowledge_base_ids"] == []
+    assert "private fact" not in observed[2][1]
+    with pytest.raises(WebSocketDisconnect):
+        async with _chat_ws(c, aid, bob_auth):
+            pass
+    bob_agent_id = await create_agent(c, bob_auth)
+    bob_agent = srv.app_runtime.agent_registry.get_agent(bob_agent_id)
+    bob_agent.stream = run_tool
+    await _consume_ws_turn(c, bob_agent_id, bob_auth, extra={"knowledge_base_ids": [selected]})
+    assert "private fact" not in observed[4][1]
+    # IM/cron-style runnable configuration alone has no transport capability.
+    ctx = var_child_runnable_config.set({"configurable": {"user": str(uid), "user_is_admin": True, "knowledge_base_ids": [selected]}})
+    try:
+        assert "private fact" not in await tool.ainvoke({"query": "fact"})
+    finally:
+        var_child_runnable_config.reset(ctx)
+
+
+async def test_private_selection_blocks_sharing_and_existing_subscriber(env: Any) -> None:
+    """A former subscriber must not receive a later private turn or its history."""
+    c, srv, _fake, alice_auth, bob_auth, aid = env
+    srv.services.agent_repo.set_shared(aid, True)
+    created = await c.post(f"/api/agents/{aid}/threads", headers=alice_auth)
+    tid = created.json()["thread_id"]
+    path = f"/api/agents/{aid}/threads/{tid}"
+    shared = await c.patch(path, headers=alice_auth, json={"contributed": True})
+    assert shared.status_code == 200, shared.text
+
+    async with _chat_ws(c, aid, bob_auth) as bob:
+        await bob.send_json({"type": "subscribe", "thread_id": tid})
+        assert (await bob.receive_json())["type"] == "turn_status"
+        snapshot = await bob.receive_json()
+        assert snapshot["type"] == "steer.queue_snapshot"
+        assert snapshot["items"] == []
+        denied = await _consume_ws_turn(
+            c, aid, alice_auth, thread_id=tid,
+            extra={"knowledge_base_ids": ["private-feishu:source"]},
+        )
+        assert denied[0]["type"] == "error"
+        assert not srv.app_runtime.gateway.thread_registry.get_thread(tid).private_knowledge_protected
+        # The subscription snapshot precedes the private turn, not a broadcast from it.
+        await bob.send_json({"type": "ping"})
+        assert (await bob.receive_json())["type"] == "pong"
+        unshared = await c.patch(path, headers=alice_auth, json={"contributed": False})
+        assert unshared.status_code == 200
+        private_text = "private-turn-distinct-canary"
+        frames = await _consume_ws_turn(
+            c, aid, alice_auth, text=private_text, thread_id=tid,
+            extra={"knowledge_base_ids": ["private-feishu:source"]},
+        )
+        assert any(frame.get("type") == "token" for frame in frames)
+        assert srv.app_runtime.gateway.thread_registry.get_thread(tid).private_knowledge_protected
+        await bob.send_json({"type": "ping"})
+        while True:
+            frame = await bob.receive_json()
+            if frame["type"] == "pong":
+                break
+            # Refusals can be delivered to the socket; private turn events cannot.
+            assert frame["type"] == "error", frame
+            assert private_text not in str(frame)
+            assert "Hello " not in str(frame) and "Bob." not in str(frame)
+        await bob.send_json({"type": "subscribe", "thread_id": tid})
+        refusal = await bob.receive_json()
+        assert refusal["type"] == "error", refusal
+        assert private_text not in str(refusal)
+
+    for suffix in ("/history", "/trajectory/export", "/trajectory/stream"):
+        response = await c.get(path + suffix, headers=bob_auth)
+        assert response.status_code == 403, (suffix, response.text)
+    response = await c.patch(path, headers=alice_auth, json={"contributed": True})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "THREAD_PRIVATE_KNOWLEDGE"
+    fork = await c.post(path + "/fork", headers=alice_auth, json={"message_id": "missing"})
+    assert fork.status_code == 403
+    ordinary = await c.post(f"/api/agents/{aid}/threads", headers=alice_auth)
+    ordinary_id = ordinary.json()["thread_id"]
+    assert (await c.patch(
+        f"/api/agents/{aid}/threads/{ordinary_id}",
+        headers=alice_auth, json={"contributed": True},
+    )).status_code == 200

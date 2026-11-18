@@ -145,3 +145,31 @@ def test_business_template_whitelist(services):
     assert repo.is_business_template(101) is True
     assert repo.is_business_template(102) is False
     assert [row.published_expert_id for row in repo.list()] == [101]
+
+
+def test_binding_schema_upgrades_from_v27_and_is_idempotent(services):
+    db = services.db
+    with db.transaction() as conn:
+        conn.execute("DROP TABLE feishu_kb_private_index_versions")
+        conn.execute("DROP TABLE feishu_kb_private_index")
+        conn.execute("DROP TABLE feishu_erp_reauth_state")
+        conn.execute("DROP TABLE feishu_erp_reauth_proof")
+        conn.execute("DROP TABLE feishu_kb_source")
+        conn.execute("DROP TABLE feishu_kb_grant")
+        conn.execute("DROP TABLE feishu_kb_state")
+        conn.execute("DROP TABLE youli_identity_binding")
+        conn.execute("DROP TABLE youli_binding_generation")
+        conn.execute("ALTER TABLE threads DROP COLUMN private_knowledge_protected")
+        conn.execute("UPDATE _schema_version SET version = 27")
+    run_migrations(db)
+    run_migrations(db)
+    with db.connect() as conn:
+        version = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'youli_%'"
+            ).fetchall()
+        }
+    assert version == 34
+    assert {"youli_identity_binding", "youli_binding_generation"} <= names

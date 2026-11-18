@@ -647,7 +647,7 @@ def _mcn_turn_token_resolver(svc: Any, owner_user_id: int) -> Any:
         except Exception:
             return ""
         sid = str(configurable.get("youli_sid") or "").strip()
-        if not sid:
+        if not sid or str(configurable.get("octop_user_id") or "") != str(owner_user_id):
             return ""
         return cast(str, svc.live_youli_token_for_sid(sid, owner_user_id=owner_user_id))
 
