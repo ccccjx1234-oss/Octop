@@ -13,6 +13,10 @@ export interface OauthProviderDef {
   enabledAriaKey: string;
   /** Feishu/Lark region selector. */
   hasRegion?: boolean;
+  /** Allow automatic account linking by normalized mobile number. */
+  hasMobileLink?: boolean;
+  /** Tenant allowlist required before mobile auto-linking (Feishu). */
+  hasAllowedTenants?: boolean;
   /** WeCom CorpApp Agent ID in ``extra.agent_id``. */
   hasAgentId?: boolean;
   /** Override default App ID field label (e.g. WeCom CorpID). */
@@ -37,6 +41,8 @@ export const OAUTH_APP_PROVIDERS: OauthProviderDef[] = [
     defaultNameKey: "login.providerKind.feishu",
     enabledAriaKey: "adminSso.feishuEnabled",
     hasRegion: true,
+    hasMobileLink: true,
+    hasAllowedTenants: true,
   },
   {
     kind: "dingtalk",
@@ -45,6 +51,7 @@ export const OAUTH_APP_PROVIDERS: OauthProviderDef[] = [
     descKey: "adminSso.dingtalkDesc",
     defaultNameKey: "login.providerKind.dingtalk",
     enabledAriaKey: "adminSso.dingtalkEnabled",
+    hasMobileLink: true,
   },
   {
     kind: "wecom",

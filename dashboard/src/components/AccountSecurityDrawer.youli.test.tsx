@@ -20,7 +20,7 @@ vi.mock("@/utils/antdMessage", () => ({
   message: { error: mocks.error, success: vi.fn() },
 }));
 
-const url = "https://accounts.feishu.cn/open-apis/authen/v1/authorize?state=test";
+const url = "https://accounts.feishu.cn/oauth/v3/authorize?state=test";
 function deferred() {
   let resolve!: (value: { authorization_url: string }) => void;
   let reject!: (reason: Error) => void;

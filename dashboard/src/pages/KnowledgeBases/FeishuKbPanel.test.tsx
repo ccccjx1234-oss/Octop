@@ -94,7 +94,7 @@ beforeEach(() => {
   mocks.sources.mockResolvedValue([source]);
   mocks.callback.mockResolvedValue(undefined);
   mocks.authorize.mockResolvedValue({
-    url: `https://accounts.feishu.cn/open-apis/authen/v1/authorize?state=state&redirect_uri=${encodeURIComponent(
+    url: `https://accounts.feishu.cn/oauth/v3/authorize?state=state&redirect_uri=${encodeURIComponent(
       window.location.origin + "/feishu-kb/callback",
     )}`,
   });

@@ -222,3 +222,19 @@ This snapshot supersedes earlier statements above that the offline tests have no
 - No real Feishu/ERP/embedding integration, production migration, deployment or tenant validation has been performed. Feishu scheduling and private semantic retrieval remain disabled by default. A separate test app, registered callbacks and explicit account authorization are still required.
 
 These results are local implementation evidence, not a production-readiness claim.
+
+## Upstream upgrade and merge notes (Octop core modifications)
+
+When pulling or rebasing against upstream Octop, watch these core touchpoints added on this branch:
+
+1. **Database schema (`035_user_mobile_linking.{sql,pg.sql}`)**:
+   - Adds nullable `users.mobile` and partial unique index `idx_users_mobile_unique` (`WHERE mobile IS NOT NULL`), bumping `_schema_version` to `35` (and `tests/unit/db/test_db_pool.py`).
+   - If upstream also adds a `035_*` migration, renumber this pair to the next free version (`0NN_user_mobile_linking.{sql,pg.sql}`), update `UPDATE _schema_version SET version = NN`, and update `test_db_pool.py` accordingly.
+2. **Core user & SSO classes (`UserRepo`, `UserManager`, `SsoService`)**:
+   - Business logic for phone normalization and tenant allowlist checks lives in the isolated module `src/octop/infra/auth/sso/mobile_linking.py`.
+   - `UserRepo` (`infra/db/repos/users.py`) only adds `UserRow.mobile`, optional `create(..., mobile=None)`, `get_by_mobile`, and `set_mobile_if_empty`.
+   - `UserManager.resolve_or_create_sso_user` (`infra/users/manager.py`) only adds optional `allow_mobile_link: bool = False` (default off).
+   - `SsoService` (`infra/auth/sso/service.py`) only stores `auto_link_mobile` / `allowed_tenants` in `extra` and passes `allow_mobile_link` inside `handle_callback`.
+   - When resolving merge conflicts with upstream, keep `mobile_linking.py` intact and re-apply only those small opt-in hooks.
+3. **Feishu OAuth PKCE endpoint alignment**:
+   - `FeishuAdapter.authorize_url`, `feishu_kb/client.py`, `FeishuKbPanel.tsx`, and `AccountSecurityDrawer.tsx` use `https://accounts.feishu.cn/oauth/v3/authorize` to match `https://accounts.feishu.cn/oauth/v3/token` strict PKCE validation (real Feishu rejects `/open-apis/authen/v1/authorize` + `/oauth/v3/token` with `PKCE code challenge failed.`).

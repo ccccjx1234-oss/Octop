@@ -194,7 +194,7 @@ export function YouliBindingCard({ providerId }: { providerId: number }) {
           "https://accounts.feishu.cn",
           "https://accounts.larksuite.com",
         ].includes(url.origin) ||
-        url.pathname !== "/open-apis/authen/v1/authorize" ||
+        url.pathname !== "/oauth/v3/authorize" ||
         session !== getAuthToken()
       )
         throw new Error("invalid authorization");

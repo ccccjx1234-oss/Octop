@@ -47,7 +47,7 @@ def authorize_url(*, client_id: str, redirect_uri: str, state: str, challenge: s
             "scope": "docx:document:readonly offline_access",
         }
     )
-    return f"{_ACCOUNTS}/open-apis/authen/v1/authorize?{query}"
+    return f"{_ACCOUNTS}/oauth/v3/authorize?{query}"
 
 
 def _data(response: httpx.Response) -> dict[str, object]:

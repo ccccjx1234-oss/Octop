@@ -38,8 +38,8 @@ def _unwrap(payload: object) -> dict[str, Any]:
         raise ValueError("Feishu response is not an object")
     code = payload.get("code")
     if code not in (0, "0") and not (code is None and "access_token" in payload):
-        msg = payload.get("msg")
-        detail = msg if isinstance(msg, str) and msg else f"Feishu error {code}"
+        err = payload.get("error_description") or payload.get("error") or payload.get("msg")
+        detail = err if isinstance(err, str) and err else f"Feishu error {code}"
         raise ValueError(detail)
     data = payload.get("data")
     if isinstance(data, dict):
@@ -48,6 +48,18 @@ def _unwrap(payload: object) -> dict[str, Any]:
         # OAuth token responses may put access_token at the top level.
         return payload
     raise ValueError("Feishu response has no data object")
+
+
+def _parse_response(response: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError:
+        response.raise_for_status()
+        raise
+    if response.is_error:
+        _unwrap(payload)
+        response.raise_for_status()
+    return _unwrap(payload)
 
 
 class FeishuAdapter:
@@ -83,7 +95,7 @@ class FeishuAdapter:
         scopes = row.scopes.strip()
         if scopes:
             params["scope"] = scopes
-        return f"{_FEISHU_ACCOUNTS[region]}/open-apis/authen/v1/authorize?{urlencode(params)}"
+        return f"{_FEISHU_ACCOUNTS[region]}/oauth/v3/authorize?{urlencode(params)}"
 
     def complete_login(
         self,
@@ -111,8 +123,7 @@ class FeishuAdapter:
                 },
             )
             try:
-                token_response.raise_for_status()
-                token_data = _unwrap(token_response.json())
+                token_data = _parse_response(token_response)
             except (httpx.HTTPError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
             access_token = token_data.get("access_token")
@@ -123,8 +134,7 @@ class FeishuAdapter:
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             try:
-                user_response.raise_for_status()
-                identity = _unwrap(user_response.json())
+                identity = _parse_response(user_response)
             except (httpx.HTTPError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
         subject = identity.get("union_id") or identity.get("open_id")

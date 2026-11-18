@@ -19,6 +19,7 @@ import jwt
 from octop.infra.auth.sso.crypto import decrypt_secret, encrypt_secret
 from octop.infra.auth.sso.discovery import DiscoveryCache
 from octop.infra.auth.sso.id_token import verify_id_token
+from octop.infra.auth.sso.mobile_linking import parse_allowed_tenants, should_auto_link_mobile
 from octop.infra.auth.sso.pkce import new_pkce_pair
 from octop.infra.auth.sso.providers import build_adapters
 from octop.infra.auth.sso.providers.base import SSO_KINDS, IdentityProvider
@@ -159,13 +160,19 @@ class SsoService:
             extra.update({str(key): value for key, value in raw_extra.items()})
         if kind == "feishu":
             region = extra.get("region", "feishu")
-            extra = {"region": "lark" if region == "lark" else "feishu"}
+            feishu_extra: dict[str, Any] = {"region": "lark" if region == "lark" else "feishu"}
+            if bool(extra.get("auto_link_mobile")):
+                feishu_extra["auto_link_mobile"] = True
+            allowed = parse_allowed_tenants(extra.get("allowed_tenants"))
+            if allowed:
+                feishu_extra["allowed_tenants"] = allowed
+            extra = feishu_extra
         elif kind == "wecom":
             agent_raw = extra.get("agent_id", "")
             agent_id = str(agent_raw).strip() if agent_raw is not None else ""
             extra = {"agent_id": agent_id}
         elif kind == "dingtalk":
-            extra = {}
+            extra = {"auto_link_mobile": True} if bool(extra.get("auto_link_mobile")) else {}
 
         dashboard_origin = self._nullable_string(body, "dashboard_origin", current)
         if kind in {"feishu", "dingtalk", "wecom"}:
@@ -379,16 +386,21 @@ class SsoService:
             except (ValueError, TypeError, IndexError):
                 return self._error_redirect(frontend, "invalid_token")
         try:
+            allow_mobile_link = should_auto_link_mobile(provider.kind, provider.extra, subject)
             if login_state.user_id is not None:
                 user = await self._user_manager.bind_sso_identity(
                     user_id=login_state.user_id,
                     provider_id=provider.id,
                     subject=subject,
                     claims=claims,
+                    allow_mobile_link=allow_mobile_link,
                 )
             else:
                 user = await self._user_manager.resolve_or_create_sso_user(
-                    provider_id=provider.id, subject=subject, claims=claims
+                    provider_id=provider.id,
+                    subject=subject,
+                    claims=claims,
+                    allow_mobile_link=allow_mobile_link,
                 )
         except OctopError as exc:
             if exc.code is ErrorCode.USER_DISABLED:

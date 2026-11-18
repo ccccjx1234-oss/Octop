@@ -300,7 +300,7 @@ export default function FeishuKbPanel() {
       const state = parsed.searchParams.get("state") || "";
       if (
         parsed.origin !== "https://accounts.feishu.cn" ||
-        parsed.pathname !== "/open-apis/authen/v1/authorize" ||
+        parsed.pathname !== "/oauth/v3/authorize" ||
         redirect.origin !== window.location.origin ||
         redirect.pathname !== "/feishu-kb/callback" ||
         redirect.search ||
