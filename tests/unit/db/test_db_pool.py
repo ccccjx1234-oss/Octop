@@ -766,7 +766,21 @@ def test_v14_to_v15_adds_sso_provider_kind_without_rebuilding(tmp_path: Path) ->
     run_migrations(pool)
     with pool.connect() as conn:
         # Reconstruct the tables and columns absent before the later migrations.
+        conn.execute("DROP INDEX IF EXISTS idx_kb_feishu_document_identity")
+        conn.execute("ALTER TABLE knowledge_documents DROP COLUMN feishu_origin")
+        conn.execute("ALTER TABLE knowledge_documents DROP COLUMN feishu_document_id")
+        conn.execute("ALTER TABLE knowledge_documents DROP COLUMN feishu_source_id")
         for table in (
+            "resource_subject_grant",
+            "resource_scope_policy",
+            "erp_employee_departments",
+            "erp_directory_employees",
+            "erp_department_closure",
+            "erp_departments",
+            "kb_feishu_blob_cleanup",
+            "kb_feishu_sources",
+            "kb_feishu_connection_states",
+            "kb_feishu_connections",
             "feishu_kb_private_index_versions",
             "feishu_kb_private_index",
             "feishu_erp_reauth_state",
