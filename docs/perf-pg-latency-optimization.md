@@ -87,6 +87,8 @@ graph TD
 | 前端请求去重 | `dashboard/src/api/request.ts` | 对无自定义 `headers` / `signal` / `body` 的纯 `GET` 请求增加按 `url + token` 隔离的 in-flight Promise 去重 | 请求结束（`finally`）立即移除，不缓存历史响应，零脏数据风险，不影响带 `AbortSignal` 的请求 |
 | 前端轮询收敛 | `dashboard/src/pages/Chat/hooks/useMemoryMaintenance.ts` | 活跃维护期与断连探测期保持 `2000ms`；空闲 `idle` 期退避至 `15000ms`（标签页隐藏时 `30000ms`） | 记忆维护期间仍保持 2 秒实时刷新，兼容原有全部单元测试 |
 | 前端卡片轮询 | `dashboard/src/pages/Experts/components/AgentCard.tsx` | 首次拉取 `/status` 若非维护中立即停止定时轮询，不再强制轮询 15 秒 | 正在维护中的卡片继续每 2 秒更新直到结束 |
+| 其余高频只读路由 | `providers.py` / `connectors.py` / `knowledge_bases.py` / `preferences.py` / `bridge.py` | 将无 `await` 的同步只读路由（`list_resolved_models`、`get_active_model`、`list_instances`、`capability`、`get_preferences`、`list_connections`）改为普通 `def` | 由 FastAPI 线程池并发执行，彻底释放主事件循环，无缓存、零脏数据风险 |
+| 消除列表 N+1 | `groups.py` / `agents.py` / `connectors.py` | `GroupAccess.visibility()` 支持 `preloaded_group_ids`；`list_agents` 与 `list_instances` 改用 `group_ids_by_resource()` 单次批量查询并复用内存用户缓存 | 纯 SQL 合并，100% 实时强一致，完全向后兼容原签名 |
 
 ---
 

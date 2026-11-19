@@ -156,7 +156,7 @@ def _sidebar_nav_response(raw: str | None) -> SidebarNavLayoutModel | None:
 
 
 @router.get("/preferences", summary="Current user preferences", response_model=PreferencesResponse)
-async def get_preferences(
+def get_preferences(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> PreferencesResponse:

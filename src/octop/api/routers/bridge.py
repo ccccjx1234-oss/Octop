@@ -225,7 +225,7 @@ async def probe_connection(
 
 
 @router.get("/bridge/connections", summary="List bridge connections")
-async def list_connections(
+def list_connections(
     user: Any = Depends(require_permission("bridge")),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:

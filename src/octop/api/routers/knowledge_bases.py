@@ -497,7 +497,7 @@ def _capability_payload(server: OctopServer) -> dict[str, Any]:
 
 
 @router.get("/capability", summary="Get knowledge-base feature capability")
-async def capability(
+def capability(
     server: OctopServer = Depends(get_server),
     _user: User = Depends(current_user),
 ) -> dict[str, Any]:

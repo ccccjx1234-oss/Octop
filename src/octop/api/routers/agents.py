@@ -192,6 +192,7 @@ def _row_dict(
     owner_username: str | None = None,
     bootstrap_pending: bool | None = None,
     server: Any | None = None,
+    preloaded_group_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     cfg = parse_config_json(row.config_json)
     public_cfg = {
@@ -256,6 +257,7 @@ def _row_dict(
                 RESOURCE_EXPERT,
                 row.agent_id,
                 shared=payload["is_shared"],
+                preloaded_group_ids=preloaded_group_ids,
             )
         )
     return payload
@@ -290,14 +292,30 @@ def list_agents(
 
     assert server.app_runtime is not None
     registry = server.app_runtime.agent_registry
+    repos = getattr(getattr(server, "services", None), "repos", None)
+    grants_by_agent: dict[str, set[str]] | None = (
+        repos.resource_group_grant_repo.group_ids_by_resource(RESOURCE_EXPERT)
+        if repos is not None
+        else None
+    )
+    user_manager = getattr(server, "user_manager", None)
+
+    def _lookup_username(uid: int) -> str | None:
+        if user_manager is not None:
+            cached_user = user_manager.get_by_id(uid)
+            if cached_user is not None:
+                return str(cached_user.username)
+        owner = server.services.user_repo.get(uid)
+        return owner.username if owner is not None else None
+
     if scope == "all":
         rows = registry.list_rows()
         user_ids = {r.user_id for r in rows if r.user_id is not None}
         username_by_id: dict[int, str] = {}
         for uid in user_ids:
-            owner = server.services.user_repo.get(uid)
-            if owner is not None:
-                username_by_id[uid] = owner.username
+            uname = _lookup_username(uid)
+            if uname is not None:
+                username_by_id[uid] = uname
         payloads = [
             _row_dict(
                 r,
@@ -305,6 +323,9 @@ def list_agents(
                 owner_username=username_by_id.get(r.user_id) if r.user_id is not None else None,
                 bootstrap_pending=_bootstrap_pending_for(server, r.agent_id),
                 server=server,
+                preloaded_group_ids=(
+                    grants_by_agent.get(r.agent_id, set()) if grants_by_agent is not None else None
+                ),
             )
             for r in rows
         ]
@@ -320,9 +341,9 @@ def list_agents(
     for row in shared:
         if row.user_id is None or row.user_id in shared_owner_username_by_id:
             continue
-        owner = server.services.user_repo.get(row.user_id)
-        if owner is not None:
-            shared_owner_username_by_id[row.user_id] = owner.username
+        uname = _lookup_username(row.user_id)
+        if uname is not None:
+            shared_owner_username_by_id[row.user_id] = uname
     return _attach_viewer_stats(
         server,
         user.id,
@@ -335,6 +356,9 @@ def list_agents(
                 ),
                 bootstrap_pending=_bootstrap_pending_for(server, r.agent_id),
                 server=server,
+                preloaded_group_ids=(
+                    grants_by_agent.get(r.agent_id, set()) if grants_by_agent is not None else None
+                ),
             )
             for r in rows
         ],

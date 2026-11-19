@@ -705,16 +705,22 @@ async def detect_weknora_on_octop_host(
 
 
 @router.get("/connector-instances", summary="List connector instances")
-async def list_instances(
+def list_instances(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
     """List the current user's connected accounts (custom MCP expanded per server)."""
     access = GroupAccess(server.services.repos)
+    grants_by_connector = (
+        server.services.repos.resource_group_grant_repo.group_ids_by_resource(RESOURCE_CONNECTOR)
+    )
     rows = _connector_service(server).list_instances_for_api(user.id)
+    owner_cache: dict[int, Any] = {}
     for item in rows:
         owner_id = int(item.get("owner_user_id") or user.id)
-        owner = server.services.user_repo.get(owner_id)
+        if owner_id not in owner_cache:
+            owner_cache[owner_id] = server.services.user_repo.get(owner_id)
+        owner = owner_cache[owner_id]
         item["owner_username"] = owner.username if owner is not None else None
         item["owner_display_name"] = (
             owner.display_name or owner.username if owner is not None else None
@@ -727,6 +733,7 @@ async def list_instances(
                     RESOURCE_CONNECTOR,
                     instance_id,
                     shared=bool(item.get("shared")),
+                    preloaded_group_ids=grants_by_connector.get(instance_id, set()),
                 )
             )
     return rows

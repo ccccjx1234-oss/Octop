@@ -172,7 +172,12 @@ class GroupAccess:
         return {row.user_group_id for row in self._groups.list_all() if row.enabled}
 
     def visibility(
-        self, resource_type: str, resource_key: str, *, shared: bool | None
+        self,
+        resource_type: str,
+        resource_key: str,
+        *,
+        shared: bool | None,
+        preloaded_group_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Public visibility for one resource.
 
@@ -181,7 +186,12 @@ class GroupAccess:
         """
         if shared is False:
             return {"visibility": VISIBILITY_OWNER, "group_ids": []}
-        group_ids = sorted(self._grants.group_ids(resource_type, resource_key))
+        raw = (
+            preloaded_group_ids
+            if preloaded_group_ids is not None
+            else self._grants.group_ids(resource_type, resource_key)
+        )
+        group_ids = sorted(raw)
         if not group_ids:
             return {"visibility": VISIBILITY_ALL, "group_ids": []}
         return {"visibility": VISIBILITY_GROUPS, "group_ids": group_ids}

@@ -319,7 +319,7 @@ async def list_provider_presets(
 
 
 @router.get("/resolved")
-async def list_resolved_models(
+def list_resolved_models(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
@@ -341,7 +341,7 @@ class ActiveModelBody(BaseModel):
 
 
 @router.get("/active-model")
-async def get_active_model(
+def get_active_model(
     _: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, str]:
