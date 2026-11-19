@@ -76,12 +76,21 @@ export function useMemoryMaintenance(
     let stop = false;
     let timer: number | null = null;
     const pull = async () => {
-      const nextDelay = 2000;
+      let nextDelay = 15_000;
       try {
         const row = await request<{
           memory_maintenance?: MemoryMaintenanceStatus | null;
         }>(`/agents/${agentId}/status`);
         const next = row.memory_maintenance ?? null;
+        const nextPhase = next?.phase ?? "idle";
+        if (VISIBLE.has(nextPhase)) {
+          nextDelay = 2000;
+        } else if (
+          typeof document !== "undefined" &&
+          document.visibilityState === "hidden"
+        ) {
+          nextDelay = 30_000;
+        }
         if (!stop) {
           setStatus(next);
           setConnectionLost(false);
@@ -96,6 +105,7 @@ export function useMemoryMaintenance(
             setConnectionLost(false);
             stop = true;
           } else {
+            nextDelay = 2000;
             setConnectionLost(true);
           }
         }

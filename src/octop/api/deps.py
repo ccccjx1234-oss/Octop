@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -121,16 +122,44 @@ def extract_raw_token(
     return None
 
 
-def _decode(server: OctopServer, token: str) -> dict[str, Any]:
+_JWT_SECRET_CACHE_TTL_SECONDS = 30.0
+_JWT_SECRET_CACHE: weakref.WeakKeyDictionary[Any, tuple[str, float]] = weakref.WeakKeyDictionary()
+_JWT_SECRET_CACHE_LOCK = threading.Lock()
+
+
+def _get_jwt_secret(server: OctopServer, *, force_refresh: bool = False) -> str:
     assert server.services is not None
-    secret = server.services.secret_repo.get("jwt")
+    repo = server.services.secret_repo
+    now = time.monotonic()
+    if not force_refresh:
+        with _JWT_SECRET_CACHE_LOCK:
+            cached = _JWT_SECRET_CACHE.get(repo)
+            if cached is not None and cached[1] > now:
+                return cached[0]
+    secret = repo.get("jwt")
     if secret is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
+    with _JWT_SECRET_CACHE_LOCK:
+        _JWT_SECRET_CACHE[repo] = (secret, now + _JWT_SECRET_CACHE_TTL_SECONDS)
+    return secret
+
+
+def _decode(server: OctopServer, token: str) -> dict[str, Any]:
+    secret = _get_jwt_secret(server)
     try:
         return decode_token(secret, token)
     except TokenExpired as exc:
         raise OctopError(ErrorCode.TOKEN_EXPIRED, "token expired") from exc
     except InvalidToken as exc:
+        # Handle secret rotation (e.g. backup restore) without waiting for TTL.
+        fresh = _get_jwt_secret(server, force_refresh=True)
+        if fresh != secret:
+            try:
+                return decode_token(fresh, token)
+            except TokenExpired as exc2:
+                raise OctopError(ErrorCode.TOKEN_EXPIRED, "token expired") from exc2
+            except InvalidToken as exc2:
+                raise OctopError(ErrorCode.AUTH_FAILED, "invalid token") from exc2
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid token") from exc
 
 
@@ -176,9 +205,9 @@ def resolve_user_from_token(server: OctopServer, token: str) -> User:
 
 
 async def async_resolve_user_from_token(server: OctopServer, token: str) -> User:
-    payload = _decode(server, token)
+    payload = await asyncio.to_thread(_decode, server, token)
     await _async_require_active_session(server, payload)
-    return _resolve_user_from_payload(server, payload)
+    return await asyncio.to_thread(_resolve_user_from_payload, server, payload)
 
 
 def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> str | None:

@@ -262,7 +262,7 @@ def _row_dict(
 
 
 @router.get("", summary="List agents")
-async def list_agents(
+def list_agents(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
     scope: Literal["mine", "all"] = Query(
@@ -647,7 +647,7 @@ async def reload_agent(
 
 
 @router.get("/{agent_id}/status", summary="Agent runtime status")
-async def agent_status(
+def agent_status(
     agent_id: str,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),

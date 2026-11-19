@@ -181,14 +181,17 @@ def _split_sql_statements(sql: str) -> list[str]:
 class PostgresPool:
     dialect: str = "postgresql"
 
-    def __init__(self, conninfo: str, *, min_size: int = 1, max_size: int = 8) -> None:
+    def __init__(self, conninfo: str, *, min_size: int = 1, max_size: int = 16) -> None:
         from psycopg_pool import ConnectionPool
 
+        # Match SqlitePool(isolation_level=None): autocommit avoids an extra
+        # implicit ROLLBACK round-trip on every read-only pool.connect() exit,
+        # while transaction() still opens an explicit BEGIN/COMMIT block.
         self._pool = ConnectionPool(
             conninfo=conninfo,
             min_size=min_size,
             max_size=max_size,
-            kwargs={"row_factory": _compat_row_factory},
+            kwargs={"row_factory": _compat_row_factory, "autocommit": True},
             open=True,
         )
 

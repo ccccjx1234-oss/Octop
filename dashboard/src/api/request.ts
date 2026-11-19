@@ -498,6 +498,8 @@ async function retryWithDesktopSession(
   });
 }
 
+const _inFlightGets = new Map<string, Promise<unknown>>();
+
 export async function request<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -505,7 +507,36 @@ export async function request<T = unknown>(
   assertNotSetupLocked(path);
 
   const url = getApiUrl(path);
+  const method = (options.method ?? "GET").toUpperCase();
+  const canDedupe =
+    method === "GET" &&
+    options.body === undefined &&
+    options.signal === undefined &&
+    options.headers === undefined;
 
+  if (canDedupe) {
+    const key = `${url}\0${getAuthToken() ?? ""}`;
+    const existing = _inFlightGets.get(key);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+    const pending = _executeRequest<T>(path, url, options).finally(() => {
+      if (_inFlightGets.get(key) === pending) {
+        _inFlightGets.delete(key);
+      }
+    });
+    _inFlightGets.set(key, pending);
+    return pending;
+  }
+
+  return _executeRequest<T>(path, url, options);
+}
+
+async function _executeRequest<T = unknown>(
+  path: string,
+  url: string,
+  options: RequestInit,
+): Promise<T> {
   const headers = buildHeaders(path, options.headers);
 
   let response = await fetch(url, {

@@ -177,7 +177,6 @@ export const AgentCard = memo(function AgentCard({
       return;
     }
     let cancelled = false;
-    const startedAt = Date.now();
     const pull = () =>
       request<{
         memory_maintenance?: { phase?: string } | null;
@@ -188,13 +187,7 @@ export const AgentCard = memo(function AgentCard({
           const active =
             phase === "queued" || phase === "pruning" || phase === "compacting";
           setMemorySlimming(!!active);
-          // First tick is ~1s after start; don't drop the poll on the
-          // idle snapshot before compact begins. Keep going while active.
-          if (
-            !active &&
-            Date.now() - startedAt > 15_000 &&
-            maintPollRef.current
-          ) {
+          if (!active && maintPollRef.current) {
             clearInterval(maintPollRef.current);
             maintPollRef.current = null;
           }
