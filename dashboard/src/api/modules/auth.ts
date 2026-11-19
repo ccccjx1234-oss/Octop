@@ -116,6 +116,41 @@ export function isMfaChallenge(
   return (result as MfaChallengeResponse).mfa_required === true;
 }
 
+export type ErpBindReason =
+  | "erp_not_found"
+  | "erp_ambiguous_phone"
+  | "feishu_no_mobile"
+  | "erp_must_change_password"
+  | "erp_disabled"
+  | "erp_no_company"
+  | "erp_login_forbidden"
+  | "erp_company_expired"
+  | string;
+
+/** Feishu OAuth verified the user, but an ERP account match/binding is required. */
+export interface ErpBindChallengeResponse {
+  erp_bind_required: true;
+  bind_ticket: string;
+  reason: ErpBindReason;
+  provider: string;
+  provider_name: string;
+  display_name: string;
+  mobile_masked: string;
+  expires_in: number;
+}
+
+export type OidcExchangeResult = LoginResponse | ErpBindChallengeResponse;
+
+export function isErpBindChallenge(
+  result: unknown,
+): result is ErpBindChallengeResponse {
+  return Boolean(
+    result &&
+      typeof result === "object" &&
+      (result as ErpBindChallengeResponse).erp_bind_required === true,
+  );
+}
+
 /** Reauth grant for factor enrollment / disable / regenerate. */
 export interface MfaReauthResponse {
   reauth_token: string;
@@ -417,10 +452,15 @@ export const authApi = {
   staffLogin: async (
     mobile: string,
     password: string,
+    bindTicket?: string,
   ): Promise<LoginResponse> => {
     const raw = await request<RawLoginResponse>("/auth/youli/staff-login", {
       method: "POST",
-      body: JSON.stringify({ mobile, password }),
+      body: JSON.stringify(
+        bindTicket
+          ? { mobile, password, bind_ticket: bindTicket }
+          : { mobile, password },
+      ),
     });
     const result = toLoginResult(raw);
     if (isMfaChallenge(result))
@@ -489,11 +529,17 @@ export const authApi = {
     }),
 
   /** Exchange the one-time browser code for the standard JWT login response. */
-  exchangeOidcCode: async (code: string): Promise<LoginResponse> => {
-    const raw = await request<RawLoginResponse>("/auth/oidc/exchange", {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    });
+  exchangeOidcCode: async (code: string): Promise<OidcExchangeResult> => {
+    const raw = await request<RawLoginResponse | ErpBindChallengeResponse>(
+      "/auth/oidc/exchange",
+      {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      },
+    );
+    if (isErpBindChallenge(raw)) {
+      return raw;
+    }
     const result = toLoginResult(raw);
     if (isMfaChallenge(result)) {
       // SSO paths do not use Octop MFA; treat as protocol error if seen.

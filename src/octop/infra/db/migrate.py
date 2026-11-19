@@ -1683,6 +1683,60 @@ def _ensure_thread_contributed_schema(db: DatabasePool) -> None:
     _ensure_column(db, "threads", "contributed", "INTEGER NOT NULL DEFAULT 0")
 
 
+def _ensure_sso_pending_binds_schema(db: DatabasePool) -> None:
+    """Create ``sso_pending_binds`` and ``sso_login_states.youli_sid`` idempotently."""
+    if _table_exists(db, "sso_login_states"):
+        _ensure_column(db, "sso_login_states", "youli_sid", "TEXT")
+    if not _table_exists(db, "sso_providers"):
+        return
+    if db.dialect == "postgresql":
+        with db.connect() as conn, conn.transaction():
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sso_pending_binds (
+                  ticket        TEXT PRIMARY KEY,
+                  login_code    TEXT UNIQUE,
+                  provider_id   BIGINT NOT NULL REFERENCES sso_providers(id) ON DELETE CASCADE,
+                  provider_kind TEXT NOT NULL,
+                  subject       TEXT NOT NULL,
+                  display_name  TEXT NOT NULL DEFAULT '',
+                  email         TEXT,
+                  mobile_masked TEXT NOT NULL DEFAULT '',
+                  reason        TEXT NOT NULL,
+                  expires_at    BIGINT NOT NULL,
+                  consumed_at   BIGINT,
+                  created_at    BIGINT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sso_pending_binds_expires "
+                "ON sso_pending_binds(expires_at)"
+            )
+        return
+    with db.connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sso_pending_binds (
+              ticket        TEXT PRIMARY KEY,
+              login_code    TEXT UNIQUE,
+              provider_id   INTEGER NOT NULL REFERENCES sso_providers(id) ON DELETE CASCADE,
+              provider_kind TEXT NOT NULL,
+              subject       TEXT NOT NULL,
+              display_name  TEXT NOT NULL DEFAULT '',
+              email         TEXT,
+              mobile_masked TEXT NOT NULL DEFAULT '',
+              reason        TEXT NOT NULL,
+              expires_at    INTEGER NOT NULL,
+              consumed_at   INTEGER,
+              created_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sso_pending_binds_expires
+              ON sso_pending_binds(expires_at);
+            """
+        )
+
+
 _LOGIN_AUDIT_ACTIONS_SQL = (
     "'auth.login', 'auth.ldap_login', 'auth.oidc_login', 'auth.passkey_login'"
 )
@@ -2521,6 +2575,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_instance_lease_schema(db)
     _ensure_control_blobs_schema(db)
     _ensure_thread_contributed_schema(db)
+    _ensure_sso_pending_binds_schema(db)
     _grant_default_nav_permissions(db)
     _grant_personalization_tab_permissions(db)
     _grant_bridge_permission(db)

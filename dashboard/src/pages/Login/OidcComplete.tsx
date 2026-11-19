@@ -8,11 +8,12 @@ import {
   isSessionOnlyAuth,
   setAuthToken,
 } from "../../api";
-import { authApi } from "../../api/modules/auth";
+import { authApi, isErpBindChallenge } from "../../api/modules/auth";
 import { refreshServerLabels } from "../../i18n";
 import { apiErrorMessage } from "../../utils/apiError";
 import { applyUserLocale } from "../../utils/locale";
 import { notifySsoOpener } from "../../utils/ssoPopup";
+import { savePendingErpBind } from "./pendingErpBindStorage";
 
 const DEFAULT_REDIRECT = "/chat";
 
@@ -80,6 +81,14 @@ export default function OidcComplete() {
     void authApi
       .exchangeOidcCode(code)
       .then(async (res) => {
+        if (isErpBindChallenge(res)) {
+          if (notifySsoOpener({ ok: false, erp_bind: res })) {
+            return;
+          }
+          savePendingErpBind(res);
+          navigate("/login", { replace: true, state: { erpBind: res } });
+          return;
+        }
         const dest = safeRedirect(redirect);
         if (bind) {
           // Account-link popups: opener already holds the session — do not

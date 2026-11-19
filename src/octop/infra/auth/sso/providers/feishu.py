@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
@@ -14,6 +15,32 @@ from octop.infra.db.repos.sso import SsoLoginStateRow, SsoProviderRow
 
 if TYPE_CHECKING:
     from octop.infra.auth.sso.service import SsoService
+
+_CN_MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
+_FEISHU_PHONE_SCOPE = "contact:user.phone:readonly"
+
+
+def normalize_cn_mobile(raw: str | None) -> str:
+    """Normalize a Feishu/ERP mobile string into a mainland China 11-digit number when applicable."""
+    if not raw:
+        return ""
+    cleaned = re.sub(r"[\s\-()]+", "", str(raw).strip())
+    if cleaned.startswith("+86"):
+        cleaned = cleaned[3:]
+    elif len(cleaned) == 13 and cleaned.startswith("861"):
+        cleaned = cleaned[2:]
+    digits = re.sub(r"\D+", "", cleaned)
+    if _CN_MOBILE_RE.match(digits):
+        return digits
+    return digits
+
+
+def mask_mobile(raw: str | None) -> str:
+    """Return a masked display mobile (e.g. ``138****0000``), or empty when unavailable."""
+    normalized = normalize_cn_mobile(raw)
+    if len(normalized) >= 7:
+        return f"{normalized[:3]}****{normalized[-4:]}"
+    return ""
 
 _FEISHU_ACCOUNTS = {
     "feishu": "https://accounts.feishu.cn",
@@ -79,7 +106,13 @@ class FeishuAdapter:
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
-        scopes = row.scopes.strip()
+        scope_tokens = [part for part in row.scopes.split() if part]
+        if (
+            bool(getattr(self._service._services.config.youli, "enabled", False))
+            and _FEISHU_PHONE_SCOPE not in scope_tokens
+        ):
+            scope_tokens.append(_FEISHU_PHONE_SCOPE)
+        scopes = " ".join(scope_tokens)
         if scopes:
             params["scope"] = scopes
         return f"{_FEISHU_ACCOUNTS[region]}/open-apis/authen/v1/authorize?{urlencode(params)}"

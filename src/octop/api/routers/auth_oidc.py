@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from functools import partial
 from typing import Any, cast
 
@@ -63,12 +64,25 @@ def _login_error_redirect(server: Any, public_base: str) -> str:
 
 async def exchange_login_code_response(code: str, server: Any) -> dict[str, Any]:
     """Exchange a one-time SSO login code for the standard JWT login response."""
+    sso_service = _service(server)
+    pending_bind = sso_service.take_pending_bind_by_login_code(code)
+    if pending_bind is not None:
+        return pending_bind
+    youli_sid = server.services.sso_repo.peek_login_code_sid(code)
     try:
-        user = await _service(server).exchange_login_code(code)
+        user = await sso_service.exchange_login_code(code)
     except ValueError as exc:
         raise _bad_request(exc) from exc
     secret = server.services.secret_repo.get("jwt")
-    ttl = server.services.config.access_token_ttl_seconds
+    ttl = int(server.services.config.access_token_ttl_seconds)
+    sid: str | None = None
+    if youli_sid:
+        session = server.services.youli_session_repo.get_active(youli_sid)
+        if session is not None and session.user_id == user.id:
+            remaining_abs = int(session.abs_expires_at) - int(time.time())
+            if remaining_abs > 0:
+                sid = youli_sid
+                ttl = min(ttl, remaining_abs)
     row = server.services.user_repo.get(user.id)
     mfa_version = int(row.mfa_version) if row is not None else 0
     password_version = int(row.password_version) if row is not None else 0
@@ -82,6 +96,7 @@ async def exchange_login_code_response(code: str, server: Any) -> dict[str, Any]
             ttl_seconds=ttl,
             mfa_version=mfa_version,
             password_version=password_version,
+            sid=sid,
         ),
         "token_type": "Bearer",
         "expires_in": ttl,

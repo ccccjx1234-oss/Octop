@@ -9,9 +9,13 @@ import httpx
 import jwt
 import pytest
 
-from octop.config import OctopConfig
+from octop.config import OctopConfig, YouliConfig
 from octop.infra.auth.sso.crypto import encrypt_secret
-from octop.infra.auth.sso.providers.feishu import FeishuAdapter
+from octop.infra.auth.sso.providers.feishu import (
+    FeishuAdapter,
+    mask_mobile,
+    normalize_cn_mobile,
+)
 from octop.infra.auth.sso.service import SsoService
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
@@ -225,3 +229,36 @@ def test_feishu_missing_subject_is_invalid_token(service: SsoService) -> None:
             login_state=login_state,  # type: ignore[arg-type]
             redirect_uri="https://octop.example/api/auth/oauth/callback",
         )
+
+
+def test_normalize_and_mask_mobile() -> None:
+    assert normalize_cn_mobile("13800001234") == "13800001234"
+    assert normalize_cn_mobile("+86-138 0000 1234") == "13800001234"
+    assert normalize_cn_mobile("8613800001234") == "13800001234"
+    assert normalize_cn_mobile("") == ""
+    assert normalize_cn_mobile(None) == ""
+    assert normalize_cn_mobile("abc") == ""
+    assert mask_mobile("+86 138-0000-1234") == "138****1234"
+    assert mask_mobile("123456") == ""
+    assert mask_mobile(None) == ""
+
+
+def test_feishu_authorize_url_requests_phone_scope_when_youli_enabled(tmp_path) -> None:
+    paths = PathLayout(tmp_path / ".octop-youli")
+    paths.ensure_root()
+    db = SqlitePool(paths.db)
+    run_migrations(db)
+    cfg = OctopConfig(youli=YouliConfig(enabled=True))
+    services = build_shared_services(db=db, paths=paths, config=cfg)
+    svc = SsoService(services, UserManager(services))
+    adapter = FeishuAdapter(svc)
+    row = _feishu_row(svc, region="feishu")
+    url = adapter.authorize_url(
+        row=row,
+        state="st",
+        nonce="ignored",
+        code_challenge="challenge",
+        redirect_uri="https://octop.example/api/auth/oauth/callback",
+    )
+    query = httpx.QueryParams(url.split("?", 1)[1])
+    assert query["scope"] == "contact:user.phone:readonly"

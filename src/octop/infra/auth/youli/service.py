@@ -22,6 +22,7 @@ from octop.infra.auth.youli.client import (
     YouliClient,
     YouliClientError,
     YouliClientUnavailable,
+    YouliInnerLookupResult,
     YouliIssuedToken,
 )
 from octop.infra.db.repos.youli import YouliSessionRow
@@ -284,11 +285,38 @@ class YouliAuthService:
             )
         except YouliClientError as exc:
             raise OctopError(ErrorCode.AUTH_FAILED, "handoff exchange failed") from exc
+        user, session, expires_in = await self._activate_issued_identity(issued)
+        secret = self._services.secret_repo.get("jwt")
+        if secret is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
+        user_row = self._services.user_repo.get(user.id)
+        access_token = sign_token(
+            secret,
+            sub=user.id,
+            uname=user.username,
+            role=user.role,
+            purpose=PURPOSE_ACCESS,
+            mfa_version=int(user_row.mfa_version) if user_row is not None else 0,
+            password_version=int(user_row.password_version) if user_row is not None else 0,
+            ttl_seconds=expires_in,
+            sid=session.sid,
+        )
+        return YouliExchangeResult(
+            user=user,
+            access_token=access_token,
+            expires_in=expires_in,
+            session=session,
+        )
+
+    async def _activate_issued_identity(
+        self, issued: YouliIssuedToken
+    ) -> tuple[User, YouliSessionRow, int]:
         try:
             await self._verify_identity(issued)
         except Exception:
             await self._revoke_upstream(issued)
             raise
+        now = int(time.time())
         user = await self._users.resolve_or_create_sso_user(
             provider_id=self.ensure_provider(),
             subject=f"youli:{issued.company_id}:{issued.employee_id}",
@@ -328,27 +356,87 @@ class YouliAuthService:
                     )
                 except Exception:  # noqa: BLE001 - best-effort notification
                     logger.debug("youli session_revoked push failed for sid %s", old_sid)
-        secret = self._services.secret_repo.get("jwt")
-        if secret is None:
-            raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
-        user_row = self._services.user_repo.get(user.id)
-        access_token = sign_token(
-            secret,
-            sub=user.id,
-            uname=user.username,
-            role=user.role,
-            purpose=PURPOSE_ACCESS,
-            mfa_version=int(user_row.mfa_version) if user_row is not None else 0,
-            password_version=int(user_row.password_version) if user_row is not None else 0,
-            ttl_seconds=abs_expires - now,
-            sid=sid,
+        return user, session, max(1, abs_expires - now)
+
+    def _reusable_sid(self, user_id: int, *, company_id: int, employee_id: int) -> str | None:
+        now = int(time.time())
+        for item in self._services.youli_session_repo.list_active_for_user(user_id):
+            if (
+                item.active
+                and item.abs_expires_at > now
+                and item.company_id == company_id
+                and item.employee_id == employee_id
+            ):
+                return item.sid
+        return None
+
+    async def resolve_feishu_erp_by_phone(
+        self, *, phone: str
+    ) -> tuple[YouliInnerLookupResult, User | None, str | None]:
+        """Match an ERP account by phone and activate/reuse its Octop user and session."""
+        lookup = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self._client.inner_login_by_phone(phone=phone, terminal=10)
         )
-        return YouliExchangeResult(
-            user=user,
-            access_token=access_token,
-            expires_in=max(1, abs_expires - now),
-            session=session,
+        if lookup.status == "ok" and lookup.issued is not None:
+            user, session, _ = await self._activate_issued_identity(lookup.issued)
+            return lookup, user, session.sid
+        if lookup.status == "ok_no_token":
+            display_name = lookup.nick_name or lookup.username or phone
+            user = await self._users.resolve_or_create_sso_user(
+                provider_id=self.ensure_provider(),
+                subject=f"youli:{lookup.company_id}:{lookup.employee_id}",
+                claims={
+                    "name": display_name,
+                    "company_id": lookup.company_id,
+                    "employee_id": lookup.employee_id,
+                },
+                role_assignment=YOULI_ROLE_ASSIGNMENT,
+            )
+            sid = self._reusable_sid(
+                user.id, company_id=lookup.company_id, employee_id=lookup.employee_id
+            )
+            return lookup, user, sid
+        return lookup, None, None
+
+    async def resolve_feishu_erp_by_employee(
+        self, *, user_id: int, company_id: int, employee_id: int
+    ) -> tuple[YouliInnerLookupResult, User | None, str | None]:
+        """Verify an existing linked ERP employee and refresh/reuse its Youli session."""
+        lookup = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self._client.inner_login_by_employee(
+                company_id=company_id, employee_id=employee_id, terminal=10
+            ),
         )
+        if lookup.status == "ok" and lookup.issued is not None:
+            user, session, _ = await self._activate_issued_identity(lookup.issued)
+            return lookup, user, session.sid
+        if lookup.status == "ok_no_token":
+            user = self._users.get_by_id(user_id)
+            if user is None:
+                user = await self._users.resolve_or_create_sso_user(
+                    provider_id=self.ensure_provider(),
+                    subject=f"youli:{company_id}:{employee_id}",
+                    claims={"company_id": company_id, "employee_id": employee_id},
+                    role_assignment=YOULI_ROLE_ASSIGNMENT,
+                )
+            sid = self._reusable_sid(user.id, company_id=company_id, employee_id=employee_id)
+            return lookup, user, sid
+        return lookup, None, None
+
+    @staticmethod
+    def parse_youli_subject(subject: str) -> tuple[int, int] | None:
+        parts = str(subject or "").strip().split(":")
+        if len(parts) != 3 or parts[0] != "youli":
+            return None
+        try:
+            company_id = int(parts[1])
+            employee_id = int(parts[2])
+        except ValueError:
+            return None
+        if company_id <= 0 or employee_id <= 0:
+            return None
+        return company_id, employee_id
 
     async def _verify_identity(self, issued: YouliIssuedToken) -> None:
         payload = await asyncio.get_running_loop().run_in_executor(

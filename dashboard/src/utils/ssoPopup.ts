@@ -1,3 +1,5 @@
+import type { ErpBindChallengeResponse } from "../api/modules/auth";
+
 export const SSO_MESSAGE_TYPE = "octop-sso";
 
 export type SsoPopupMessage = {
@@ -6,6 +8,7 @@ export type SsoPopupMessage = {
   redirect?: string;
   bind?: boolean;
   error?: string;
+  erp_bind?: ErpBindChallengeResponse;
   /** Present on successful login popups so the opener can store session-only tokens. */
   access_token?: string;
   remember?: boolean;

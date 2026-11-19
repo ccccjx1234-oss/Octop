@@ -356,7 +356,12 @@ class OctopServer:
             or getattr(self._sso_service, "_services", None) is not self.services
             or getattr(self._sso_service, "_user_manager", None) is not self.user_manager
         ):
-            self._sso_service = SsoServiceCls(self.services, self.user_manager)
+            gateway = getattr(self.app_runtime, "gateway", None) if self.app_runtime else None
+            self._sso_service = SsoServiceCls(
+                self.services,
+                self.user_manager,
+                ws_hub=getattr(gateway, "ws_hub", None),
+            )
         return self._sso_service
 
     @property

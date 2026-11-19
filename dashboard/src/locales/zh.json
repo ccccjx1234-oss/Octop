@@ -6424,6 +6424,7 @@
       "invalid_token": "身份提供商返回了无效令牌。",
       "exchange": "无法验证身份提供商登录。",
       "identity_taken": "该登录身份已绑定到其他 Octop 账号。",
+      "erp_unavailable": "暂时无法连接会火 ERP 校验账号，请稍后重试或直接使用 ERP 账号密码登录。",
       "generic": "单点登录失败，请重试。"
     },
     "providerKind": {
@@ -6438,6 +6439,40 @@
       "missingCode": "单点登录响应缺少登录代码。",
       "failed": "无法完成单点登录",
       "backToLogin": "返回登录"
+    },
+    "feishuErpBind": {
+      "title": "请先绑定会火 ERP 账号再登录",
+      "subtitle": "飞书仅限已关联会火 ERP 账号的成员使用，绑定一次后即可直接扫码登录。",
+      "feishuVerifiedBadge": "已授权飞书账号",
+      "defaultFeishuUser": "飞书用户",
+      "mobileTag": "手机号 {{mobile}}",
+      "noMobileTag": "飞书未返回手机号",
+      "step1": "1. 飞书已授权",
+      "step2": "2. 验证 ERP 账号",
+      "step3": "3. 绑定并进入",
+      "mobileLabel": "第 1 步：输入你的 ERP 登录手机号",
+      "mobilePlaceholder": "请输入会火 ERP 注册手机号",
+      "passwordLabel": "第 2 步：输入你的 ERP 登录密码",
+      "passwordPlaceholder": "请输入会火 ERP 登录密码",
+      "submitButton": "验证 ERP 账号并绑定飞书登录",
+      "submittingButton": "正在验证并绑定…",
+      "bindSuccessBanner": "ERP 账号验证并绑定成功，正在进入系统…",
+      "bindSuccessToast": "飞书与 ERP 账号绑定成功",
+      "retryFeishuButton": "重新飞书授权",
+      "cancelButton": "暂不绑定，返回登录页",
+      "helpTitle": "还没有会火 ERP 账号？",
+      "helpDesc": "如果您不是会火内部成员或尚未开通 ERP 账号，暂不支持直接进入系统；请联系部门管理员开通会火 ERP 账号后再试。",
+      "bindFailedFallback": "ERP 账号验证或绑定失败，请核对手机号和密码后重试。",
+      "reason": {
+        "erp_not_found": "未用当前飞书手机号匹配到会火 ERP 账号（可能是手机号不同）。请输入你的会火 ERP 手机号和密码完成一次绑定即可登录。",
+        "erp_ambiguous_phone": "当前手机号在会火 ERP 中对应多个账号，为确保绑定准确，请输入你的会火 ERP 登录账号和密码完成一次验证绑定。",
+        "feishu_no_mobile": "飞书暂未返回您的手机号，无法自动匹配 ERP 账号。请输入你的会火 ERP 手机号和密码完成一次绑定即可登录。",
+        "erp_must_change_password": "你的会火 ERP 账号需要先完成初始密码修改，暂无法直接通过飞书进入，请验证当前有效 ERP 账号或联系管理员处理。",
+        "erp_disabled": "该手机号关联的 ERP 账号当前已停用或状态不可用。如需使用，请验证可用 ERP 账号绑定，或联系管理员启用账号。",
+        "erp_no_company": "该 ERP 账号尚未关联可用机构，暂无法登录。请验证已绑定机构的 ERP 账号或联系管理员处理。",
+        "erp_login_forbidden": "该 ERP 账号尚未开启登录许可，暂无法登录。请联系管理员开通登录权限，或验证其他可用 ERP 账号。",
+        "erp_company_expired": "该 ERP 账号所属机构服务已到期或未开通，请联系管理员续费开通后再登录。"
+      }
     },
     "mfaTitle": "两步验证",
     "mfaHint": "请输入身份验证器中的验证码、恢复码，或使用通行密钥。",

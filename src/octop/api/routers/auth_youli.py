@@ -27,6 +27,7 @@ class YouliExchangeBody(BaseModel):
 class YouliStaffLoginBody(BaseModel):
     mobile: str = Field(min_length=5, max_length=32)
     password: str = Field(min_length=1, max_length=128)
+    bind_ticket: str | None = Field(default=None, max_length=256)
 
 
 def _service(server: Any) -> YouliAuthService:
@@ -84,19 +85,36 @@ async def staff_login(
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Validate the employee password upstream, then mint an Octop session."""
+    bind_ticket = body.bind_ticket.strip() if body.bind_ticket else ""
+    if bind_ticket and server.sso_service.get_pending_bind(bind_ticket) is None:
+        raise OctopError(ErrorCode.OIDC_BAD_REQUEST, "飞书绑定已过期，请重新点击飞书登录")
     service = _service(server)
     result = await service.staff_login(
         mobile=body.mobile.strip(),
         password=body.password,
         public_base=str(request.base_url).rstrip("/"),
     )
+    bound_provider: str | None = None
+    if bind_ticket:
+        try:
+            bound = await server.sso_service.complete_pending_bind(
+                ticket=bind_ticket,
+                erp_user_id=result.user.id,
+            )
+            bound_provider = bound.provider_kind
+        except Exception:
+            await service.logout(session=result.session)
+            raise
     response.headers["Cache-Control"] = "no-store"
-    return {
+    payload: dict[str, Any] = {
         "access_token": result.access_token,
         "token_type": "Bearer",
         "expires_in": result.expires_in,
         "user": me_payload(result.user, server),
     }
+    if bound_provider is not None:
+        payload["bound_provider"] = bound_provider
+    return payload
 
 
 @router.post("/exchange", summary="Exchange Youli handoff code")

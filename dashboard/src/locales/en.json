@@ -6424,6 +6424,7 @@
       "invalid_token": "The identity provider returned an invalid token.",
       "exchange": "Could not verify your identity-provider login.",
       "identity_taken": "This login is already linked to another Octop account.",
+      "erp_unavailable": "Could not reach Huihuo ERP to verify your account. Try again later or sign in with your ERP credentials.",
       "generic": "Single sign-on failed. Please try again."
     },
     "providerKind": {
@@ -6438,6 +6439,40 @@
       "missingCode": "The single sign-on response is missing a login code.",
       "failed": "Could not complete single sign-on",
       "backToLogin": "Back to sign in"
+    },
+    "feishuErpBind": {
+      "title": "Bind Your Huihuo ERP Account to Continue",
+      "subtitle": "Feishu sign-in requires a linked Huihuo ERP account. Bind once and you can sign in with one click next time.",
+      "feishuVerifiedBadge": "Feishu Verified",
+      "defaultFeishuUser": "Feishu user",
+      "mobileTag": "Phone {{mobile}}",
+      "noMobileTag": "No phone from Feishu",
+      "step1": "1. Feishu authorized",
+      "step2": "2. Verify ERP",
+      "step3": "3. Bind & enter",
+      "mobileLabel": "Step 1: Enter your ERP login mobile number",
+      "mobilePlaceholder": "Enter your Huihuo ERP mobile number",
+      "passwordLabel": "Step 2: Enter your ERP login password",
+      "passwordPlaceholder": "Enter your Huihuo ERP password",
+      "submitButton": "Verify ERP & Bind Feishu Login",
+      "submittingButton": "Verifying and binding…",
+      "bindSuccessBanner": "ERP account verified and bound. Entering system…",
+      "bindSuccessToast": "Feishu account bound to ERP",
+      "retryFeishuButton": "Re-authorize Feishu",
+      "cancelButton": "Skip binding and return to login",
+      "helpTitle": "Don't have a Huihuo ERP account?",
+      "helpDesc": "Access is restricted to members with an active Huihuo ERP account. Contact your department administrator to create an ERP account first.",
+      "bindFailedFallback": "Failed to verify or bind your ERP account. Check your mobile number and password.",
+      "reason": {
+        "erp_not_found": "No Huihuo ERP account matched your Feishu phone number (numbers may differ). Sign in once with your ERP mobile number and password below to bind.",
+        "erp_ambiguous_phone": "Multiple Huihuo ERP accounts matched this phone number. Sign in once with your ERP credentials below to confirm and bind the right account.",
+        "feishu_no_mobile": "Feishu did not provide a phone number for automatic matching. Sign in once with your ERP mobile number and password below to bind.",
+        "erp_must_change_password": "Your Huihuo ERP account must change its initial password before direct Feishu login. Sign in with an active ERP account or contact an administrator.",
+        "erp_disabled": "The matched ERP account is disabled or unavailable. Verify an active ERP account below or contact an administrator.",
+        "erp_no_company": "This ERP account is not linked to an active company. Verify another ERP account or contact an administrator.",
+        "erp_login_forbidden": "Login permission is not enabled for this ERP account. Contact an administrator or verify another ERP account.",
+        "erp_company_expired": "Your company subscription in ERP has expired or is inactive. Contact an administrator before signing in."
+      }
     },
     "mfaTitle": "Two-factor authentication",
     "mfaHint": "Enter a code from your authenticator app, a recovery code, or use a passkey.",

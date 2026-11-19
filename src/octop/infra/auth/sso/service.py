@@ -24,8 +24,9 @@ from octop.infra.auth.sso.providers import build_adapters
 from octop.infra.auth.sso.providers.base import SSO_KINDS, IdentityProvider
 from octop.infra.auth.sso.public_base import build_redirect_uri, parse_strict_origin
 from octop.infra.auth.sso.redirect_after import sanitize_redirect_after
+from octop.infra.auth.youli.feishu_gate import FeishuErpGate
 from octop.infra.db.repos.secrets import SecretRepo
-from octop.infra.db.repos.sso import SsoProviderRow
+from octop.infra.db.repos.sso import SsoPendingBindRow, SsoProviderRow
 from octop.infra.db.services import SharedServices
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
@@ -48,9 +49,16 @@ class RedirectResult:
 class SsoService:
     """Coordinates SSO configuration and browser login / bind flows."""
 
-    def __init__(self, services: SharedServices, user_manager: UserManager) -> None:
+    def __init__(
+        self,
+        services: SharedServices,
+        user_manager: UserManager,
+        *,
+        ws_hub: Any = None,
+    ) -> None:
         self._services = services
         self._user_manager = user_manager
+        self._ws_hub = ws_hub
         self._discovery = DiscoveryCache()
         self._adapters: dict[str, IdentityProvider] = build_adapters(self)
 
@@ -351,6 +359,22 @@ class SsoService:
 
         if not subject:
             return self._error_redirect(frontend, "invalid_token")
+        if (
+            login_state.user_id is None
+            and provider.kind == "feishu"
+            and bool(getattr(self._services.config.youli, "enabled", False))
+        ):
+            return await self._feishu_gate().handle_callback(
+                provider=provider,
+                subject=subject,
+                claims=claims,
+                state=state,
+                login_state=login_state,
+                frontend=frontend,
+                issue_login_redirect=self._issue_login_redirect,
+                error_redirect=self._error_redirect,
+                make_redirect=RedirectResult,
+            )
         try:
             if login_state.user_id is not None:
                 user = await self._user_manager.bind_sso_identity(
@@ -372,17 +396,54 @@ class SsoService:
         except Exception:
             return self._error_redirect(frontend, "generic")
 
+        return self._issue_login_redirect(
+            state=state,
+            user_id=user.id,
+            redirect_after=login_state.redirect_after,
+            frontend=frontend,
+            bind=login_state.user_id is not None,
+        )
+
+    def _feishu_gate(self) -> FeishuErpGate:
+        return FeishuErpGate(
+            services=self._services,
+            user_manager=self._user_manager,
+            ws_hub=self._ws_hub,
+        )
+
+    def _issue_login_redirect(
+        self,
+        *,
+        state: str,
+        user_id: int,
+        redirect_after: str,
+        frontend: str,
+        youli_sid: str | None = None,
+        bind: bool = False,
+    ) -> RedirectResult:
         login_code = secrets.token_urlsafe(32)
         self._services.sso_repo.attach_login_code(
             state,
             login_code=login_code,
-            user_id=user.id,
+            user_id=user_id,
             expires_at=int(time.time()) + _LOGIN_CODE_TTL_SECONDS,
+            youli_sid=youli_sid,
         )
-        params = {"code": login_code, "redirect": login_state.redirect_after}
-        if login_state.user_id is not None:
+        params = {"code": login_code, "redirect": redirect_after}
+        if bind:
             params["bind"] = "1"
         return RedirectResult(f"{frontend}/login/oidc/complete#{urlencode(params)}")
+
+    def take_pending_bind_by_login_code(self, login_code: str) -> dict[str, Any] | None:
+        return self._feishu_gate().take_pending_bind_by_login_code(login_code)
+
+    def get_pending_bind(self, ticket: str) -> SsoPendingBindRow | None:
+        return self._feishu_gate().get_pending_bind(ticket)
+
+    async def complete_pending_bind(self, *, ticket: str, erp_user_id: int) -> SsoPendingBindRow:
+        return await self._feishu_gate().complete_pending_bind(
+            ticket=ticket, erp_user_id=erp_user_id
+        )
 
     async def exchange_login_code(self, code: str) -> User:
         consumed = self._services.sso_repo.consume_login_code(code)

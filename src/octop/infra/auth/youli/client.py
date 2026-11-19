@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -33,6 +33,20 @@ class YouliIssuedToken:
     employee_id: int
     industry: int | None
     terminal: int
+
+
+@dataclass(frozen=True)
+class YouliInnerLookupResult:
+    status: Literal["ok", "ok_no_token", "not_found", "blocked"]
+    reason: str = ""
+    message: str = ""
+    issued: YouliIssuedToken | None = None
+    user_id: int = 0
+    company_id: int = 0
+    employee_id: int = 0
+    username: str = ""
+    nick_name: str = ""
+    mobile: str = ""
 
 
 class YouliClient:
@@ -260,3 +274,256 @@ class YouliClient:
         if not body.get("userId") or not body.get("companyId"):
             raise YouliClientError("youli MDM returned an incomplete identity")
         return body
+
+    def _mdm_inner_headers(self) -> dict[str, str]:
+        key = str(getattr(self._cfg, "inner_api_key", "") or "").strip()
+        return {"X-Inner-Api-Key": key} if key else {}
+
+    def _parse_inner_login_payload(
+        self,
+        body: Any,
+        *,
+        fallback_phone: str = "",
+        default_terminal: int = 10,
+    ) -> YouliInnerLookupResult:
+        if not isinstance(body, dict) or body.get("code") != 200:
+            msg = body.get("msg") if isinstance(body, dict) else None
+            raise YouliClientError(str(msg or "youli MDM inner auth error"))
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise YouliClientError("youli MDM inner auth returned invalid data")
+        status = str(data.get("status") or "").strip()
+        reason = str(data.get("reason") or "").strip()
+        message = str(data.get("message") or "").strip()
+        if status == "not_found":
+            return YouliInnerLookupResult(
+                status="not_found",
+                reason=reason or "erp_not_found",
+                message=message,
+            )
+        if status == "blocked":
+            return YouliInnerLookupResult(
+                status="blocked",
+                reason=reason or "erp_disabled",
+                message=message,
+            )
+        if status != "ok":
+            raise YouliClientError(f"youli MDM inner auth returned unexpected status: {status!r}")
+        token = data.get("token")
+        user_id = int(data.get("userId") or 0)
+        company_id = int(data.get("companyId") or 0)
+        employee_id = int(data.get("employeeId") or 0)
+        if not isinstance(token, str) or not token or not user_id or not company_id or not employee_id:
+            raise YouliClientError("youli MDM inner auth returned incomplete credentials")
+        username = str(data.get("username") or data.get("mobile") or fallback_phone or "")
+        nick_name = str(data.get("nickName") or "")
+        mobile = str(data.get("mobile") or fallback_phone or "")
+        industry = int(data["industry"]) if data.get("industry") is not None else None
+        terminal = int(data.get("terminal") or default_terminal)
+        issued = YouliIssuedToken(
+            token=token,
+            username=username,
+            user_id=user_id,
+            company_id=company_id,
+            employee_id=employee_id,
+            industry=industry,
+            terminal=terminal,
+        )
+        return YouliInnerLookupResult(
+            status="ok",
+            issued=issued,
+            user_id=user_id,
+            company_id=company_id,
+            employee_id=employee_id,
+            username=username,
+            nick_name=nick_name,
+            mobile=mobile,
+        )
+
+    def _mdm_request_nullable(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        from octop.infra.auth.youli.http_pool import perform_request
+
+        url = f"{self._cfg.mdm_base_url.rstrip('/')}{path}"
+        try:
+            response = perform_request(
+                httpx.Client,
+                method,
+                url,
+                timeout=_TIMEOUT,
+                verify=self._tls,
+                params=params,
+                target_label=f"mdm:{path}",
+            )
+        except httpx.HTTPError as exc:
+            raise YouliClientUnavailable(f"youli MDM unreachable ({type(exc).__name__})") from exc
+        if response.status_code >= 400:
+            raise YouliClientError(f"youli MDM error {response.status_code} on {path}")
+        raw_content = getattr(response, "content", None)
+        if raw_content is not None and not raw_content:
+            return None
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raw_text = getattr(response, "text", None)
+            if isinstance(raw_text, str) and not raw_text.strip():
+                return None
+            raise YouliClientUnavailable("youli MDM returned a non-JSON body") from exc
+        if body is None:
+            return None
+        if not isinstance(body, dict):
+            raise YouliClientUnavailable("youli MDM returned an unexpected body")
+        if "code" in body and body.get("code") != 200:
+            raise YouliClientError(
+                f"youli MDM rejected {path}: {body.get('code')} {body.get('msg')}"
+            )
+        return body
+
+    def _fallback_lookup_by_phone(self, phone: str) -> YouliInnerLookupResult:
+        account = self._mdm_request_nullable(
+            "POST", "/api/account/findByPhone", params={"phone": phone}
+        )
+        if not account or not account.get("id"):
+            return YouliInnerLookupResult(
+                status="not_found",
+                reason="erp_not_found",
+                message="未找到该手机号对应的 ERP 账号",
+            )
+        if int(account.get("status") or 0) != 1:
+            return YouliInnerLookupResult(
+                status="blocked",
+                reason="erp_disabled",
+                message="该 ERP 账号已停用",
+            )
+        user = self._mdm_request_nullable(
+            "POST", "/api/user/findDefaultUserByPhone", params={"phone": phone}
+        )
+        if not user or not user.get("companyId") or not user.get("id"):
+            return YouliInnerLookupResult(
+                status="blocked",
+                reason="erp_no_company",
+                message="该 ERP 账号尚未绑定可用机构",
+            )
+        if user.get("status") is not None and int(user["status"]) != 1:
+            return YouliInnerLookupResult(
+                status="blocked",
+                reason="erp_disabled",
+                message="该 ERP 员工已离职或状态无效",
+            )
+        company_id = int(user["companyId"])
+        employee_id = int(user["id"])
+        login_user = self._mdm_request_nullable(
+            "GET",
+            "/api/user/getLoginUser",
+            params={"companyId": company_id, "employeeId": employee_id},
+        )
+        if not login_user or int(login_user.get("deleted") or 0) != 0:
+            return YouliInnerLookupResult(
+                status="blocked",
+                reason="erp_login_forbidden",
+                message="当前 ERP 账号未开启登录许可，请联系管理员",
+            )
+        return YouliInnerLookupResult(
+            status="ok_no_token",
+            user_id=int(account["id"]),
+            company_id=company_id,
+            employee_id=employee_id,
+            username=str(account.get("userName") or account.get("phone") or phone),
+            nick_name=str(user.get("nickName") or ""),
+            mobile=str(account.get("phone") or phone),
+        )
+
+    def _fallback_lookup_by_employee(
+        self, *, company_id: int, employee_id: int
+    ) -> YouliInnerLookupResult:
+        login_user = self._mdm_request_nullable(
+            "GET",
+            "/api/user/getLoginUser",
+            params={"companyId": company_id, "employeeId": employee_id},
+        )
+        if not login_user or int(login_user.get("deleted") or 0) != 0:
+            return YouliInnerLookupResult(
+                status="blocked",
+                reason="erp_login_forbidden",
+                message="当前 ERP 账号未开启登录许可，请联系管理员",
+            )
+        return YouliInnerLookupResult(
+            status="ok_no_token",
+            company_id=company_id,
+            employee_id=employee_id,
+        )
+
+    def _post_inner_login(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        fallback_phone: str = "",
+        default_terminal: int = 10,
+    ) -> YouliInnerLookupResult | None:
+        if not self._cfg.mdm_base_url:
+            raise YouliClientError("youli MDM url is not configured")
+        from octop.infra.auth.youli.http_pool import perform_request
+
+        url = f"{self._cfg.mdm_base_url.rstrip('/')}{path}"
+        try:
+            response = perform_request(
+                httpx.Client,
+                "POST",
+                url,
+                timeout=_TIMEOUT,
+                verify=self._tls,
+                json=payload,
+                headers=self._mdm_inner_headers() or None,
+                target_label=f"mdm:{path}",
+            )
+        except httpx.HTTPError as exc:
+            raise YouliClientUnavailable(f"youli MDM unreachable ({type(exc).__name__})") from exc
+        if response.status_code == 404:
+            logger.info("mdm %s returned 404; falling back to legacy lookup", path)
+            return None
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise YouliClientUnavailable("youli MDM returned a non-JSON body") from exc
+        if response.status_code >= 400:
+            msg = body.get("msg") if isinstance(body, dict) else None
+            raise YouliClientError(str(msg or f"youli MDM error {response.status_code}"))
+        return self._parse_inner_login_payload(
+            body, fallback_phone=fallback_phone, default_terminal=default_terminal
+        )
+
+    def inner_login_by_phone(
+        self, *, phone: str, terminal: int = 10
+    ) -> YouliInnerLookupResult:
+        """Look up an ERP account by phone on MDM and issue a terminal-10 business token."""
+        clean_phone = phone.strip()
+        if not clean_phone:
+            return YouliInnerLookupResult(status="not_found", reason="erp_not_found")
+        res = self._post_inner_login(
+            "/api/auth/inner/loginByPhone",
+            {"phone": clean_phone, "terminal": terminal},
+            fallback_phone=clean_phone,
+            default_terminal=terminal,
+        )
+        if res is None:
+            return self._fallback_lookup_by_phone(clean_phone)
+        return res
+
+    def inner_login_by_employee(
+        self, *, company_id: int, employee_id: int, terminal: int = 10
+    ) -> YouliInnerLookupResult:
+        """Re-check an existing ERP employee on MDM and issue a fresh terminal-10 token."""
+        res = self._post_inner_login(
+            "/api/auth/inner/loginByEmployee",
+            {"companyId": company_id, "employeeId": employee_id, "terminal": terminal},
+            default_terminal=terminal,
+        )
+        if res is None:
+            return self._fallback_lookup_by_employee(company_id=company_id, employee_id=employee_id)
+        return res

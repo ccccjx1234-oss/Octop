@@ -136,6 +136,7 @@ class YouliConfig:
     business_entry_url: str = ""
     mdm_base_url: str = ""
     mcn_base_url: str = ""
+    inner_api_key: str = ""
     ca_file: str = ""
     token_ttl_seconds: int = 172800
     request_ttl_seconds: int = 300
@@ -281,6 +282,8 @@ def _parse_youli_section(raw: object) -> YouliConfig:
             raw.get("business_entry_url", defaults.business_entry_url) or ""
         ).strip(),
         mdm_base_url=str(raw.get("mdm_base_url", defaults.mdm_base_url) or "").strip().rstrip("/"),
+        mcn_base_url=str(raw.get("mcn_base_url", defaults.mcn_base_url) or "").strip().rstrip("/"),
+        inner_api_key=str(raw.get("inner_api_key", defaults.inner_api_key) or "").strip(),
         token_ttl_seconds=max(
             300, int(raw.get("token_ttl_seconds", defaults.token_ttl_seconds) or 172800)
         ),
@@ -704,6 +707,8 @@ def load_config(path: Path) -> OctopConfig:
         youli_updates["mdm_base_url"] = v.strip().rstrip("/")
     if v := os.environ.get("OCTOP_YOULI_MCN_URL"):
         youli_updates["mcn_base_url"] = v.strip().rstrip("/")
+    if v := os.environ.get("OCTOP_YOULI_INNER_API_KEY"):
+        youli_updates["inner_api_key"] = v.strip()
     if v := os.environ.get("OCTOP_YOULI_CA_FILE"):
         youli_updates["ca_file"] = v.strip()
     if v := os.environ.get("OCTOP_YOULI_TOKEN_TTL"):

@@ -5,7 +5,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Alert, Input, Button, Checkbox, Modal } from "antd";
 import { message } from "@/utils/antdMessage";
 
@@ -34,7 +34,9 @@ import {
 import {
   authApi,
   isMfaChallenge,
+  type ErpBindChallengeResponse,
   type LdapStatus,
+  type LoginResponse,
   type MfaChallengeResponse,
   type MfaMethod,
   type OauthProviderStatus,
@@ -65,8 +67,14 @@ import dingtalkIcon from "../../assets/channels/dingtalk.svg";
 import wecomIcon from "../../assets/channels/wecom.svg";
 import googleIcon from "../../assets/providers/google.svg";
 import CaptchaField, { type CaptchaFieldHandle } from "./CaptchaField";
+import FeishuErpBindModal from "./FeishuErpBindModal";
 import ForgotPasswordModal from "./ForgotPasswordModal";
 import { type PublicCaptchaConfig } from "./captchaAdapters";
+import {
+  clearPendingErpBind,
+  loadPendingErpBind,
+  savePendingErpBind,
+} from "./pendingErpBindStorage";
 import styles from "./index.module.less";
 import {
   desktopLocalAutoLoginHeld,
@@ -146,8 +154,16 @@ export default function LoginPage({
   const isStaff = mode === "staff";
   const { t } = useTranslation();
   const { isDark } = useTheme();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const stateErpBind = (
+    location.state as { erpBind?: ErpBindChallengeResponse } | null
+  )?.erpBind;
+  const [erpBindChallenge, setErpBindChallenge] =
+    useState<ErpBindChallengeResponse | null>(
+      () => stateErpBind ?? loadPendingErpBind(),
+    );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -184,6 +200,16 @@ export default function LoginPage({
   useEffect(() => {
     void applyGuestLocale();
   }, []);
+
+  useEffect(() => {
+    if (!stateErpBind) return;
+    savePendingErpBind(stateErpBind);
+    setErpBindChallenge(stateErpBind);
+    navigate(location.pathname + location.search, {
+      replace: true,
+      state: null,
+    });
+  }, [location.pathname, location.search, navigate, stateErpBind]);
 
   useEffect(() => {
     const onUnauthorized = (event: Event) => {
@@ -337,6 +363,11 @@ export default function LoginPage({
           !event.data.ok
         ) {
           setSsoLoadingKind(null);
+          if (event.data.erp_bind) {
+            savePendingErpBind(event.data.erp_bind);
+            setErpBindChallenge(event.data.erp_bind);
+            return;
+          }
           const code = event.data.error || "generic";
           message.error(
             t(`login.oidcError.${code}`, {
@@ -1130,6 +1161,24 @@ export default function LoginPage({
           </div>
         </section>
       </div>
+      <FeishuErpBindModal
+        challenge={erpBindChallenge}
+        onSuccess={async (res: LoginResponse) => {
+          clearPendingErpBind();
+          setErpBindChallenge(null);
+          message.success(t("login.feishuErpBind.bindSuccessToast"));
+          await finishLogin(res.access_token, res.user.locale);
+        }}
+        onCancel={() => {
+          clearPendingErpBind();
+          setErpBindChallenge(null);
+        }}
+        onRetryFeishu={() => {
+          clearPendingErpBind();
+          setErpBindChallenge(null);
+          void onSso("feishu");
+        }}
+      />
     </div>
   );
 }

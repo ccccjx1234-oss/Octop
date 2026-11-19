@@ -86,9 +86,11 @@ class SsoLoginStateRow:
     expires_at: int
     consumed_at: int | None
     created_at: int
+    youli_sid: str | None = None
 
     @classmethod
     def from_row(cls, row: DbRow) -> SsoLoginStateRow:
+        keys = set(row.keys())
         return cls(
             state=str(row["state"]),
             provider_id=int(row["provider_id"]),
@@ -99,6 +101,40 @@ class SsoLoginStateRow:
             user_id=int(row["user_id"]) if row["user_id"] is not None else None,
             expires_at=int(row["expires_at"]),
             consumed_at=int(row["consumed_at"]) if row["consumed_at"] is not None else None,
+            created_at=int(row["created_at"]),
+            youli_sid=(str(row["youli_sid"]) if "youli_sid" in keys and row["youli_sid"] else None),
+        )
+
+
+@dataclass(frozen=True)
+class SsoPendingBindRow:
+    ticket: str
+    login_code: str | None
+    provider_id: int
+    provider_kind: str
+    subject: str
+    display_name: str
+    email: str | None
+    mobile_masked: str
+    reason: str
+    expires_at: int
+    consumed_at: int | None
+    created_at: int
+
+    @classmethod
+    def from_row(cls, row: DbRow) -> SsoPendingBindRow:
+        return cls(
+            ticket=str(row["ticket"]),
+            login_code=(str(row["login_code"]) if row["login_code"] is not None else None),
+            provider_id=int(row["provider_id"]),
+            provider_kind=str(row["provider_kind"]),
+            subject=str(row["subject"]),
+            display_name=str(row["display_name"] or ""),
+            email=(str(row["email"]) if row["email"] is not None else None),
+            mobile_masked=str(row["mobile_masked"] or ""),
+            reason=str(row["reason"]),
+            expires_at=int(row["expires_at"]),
+            consumed_at=(int(row["consumed_at"]) if row["consumed_at"] is not None else None),
             created_at=int(row["created_at"]),
         )
 
@@ -317,17 +353,38 @@ class SsoRepo:
             ).fetchone()
         return SsoLoginStateRow.from_row(row) if row else None
 
-    def attach_login_code(self, state: str, login_code: str, user_id: int, expires_at: int) -> None:
+    def attach_login_code(
+        self,
+        state: str,
+        login_code: str,
+        user_id: int,
+        expires_at: int,
+        *,
+        youli_sid: str | None = None,
+    ) -> None:
         """Attach a one-time login code after a claimed callback succeeds.
 
         Clears ``consumed_at`` so ``consume_login_code`` can finalize the session.
         """
         with self._db.transaction() as conn:
             conn.execute(
-                "UPDATE sso_login_states SET login_code = ?, user_id = ?, expires_at = ?, "
-                "consumed_at = NULL WHERE state = ? AND login_code IS NULL",
-                (login_code, user_id, expires_at, state),
+                "UPDATE sso_login_states SET login_code = ?, user_id = ?, youli_sid = ?, "
+                "expires_at = ?, consumed_at = NULL WHERE state = ? AND login_code IS NULL",
+                (login_code, user_id, youli_sid, expires_at, state),
             )
+
+    def peek_login_code_sid(self, login_code: str) -> str | None:
+        """Return the Youli sid attached to an unconsumed login code without consuming it."""
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT youli_sid FROM sso_login_states "
+                "WHERE login_code = ? AND consumed_at IS NULL AND expires_at > ? "
+                "AND user_id IS NOT NULL",
+                (login_code, now_ts()),
+            ).fetchone()
+        if row is None or not row["youli_sid"]:
+            return None
+        return str(row["youli_sid"])
 
     def consume_login_code(self, login_code: str) -> dict[str, int] | None:
         with self._db.transaction() as conn:
@@ -339,7 +396,79 @@ class SsoRepo:
             ).fetchone()
         return {"user_id": int(row["user_id"])} if row else None
 
+    def create_pending_bind(
+        self,
+        *,
+        ticket: str,
+        login_code: str,
+        provider_id: int,
+        provider_kind: str,
+        subject: str,
+        display_name: str,
+        email: str | None,
+        mobile_masked: str,
+        reason: str,
+        expires_at: int,
+    ) -> SsoPendingBindRow:
+        ts = now_ts()
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO sso_pending_binds("
+                "ticket, login_code, provider_id, provider_kind, subject, display_name, "
+                "email, mobile_masked, reason, expires_at, created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticket,
+                    login_code,
+                    provider_id,
+                    provider_kind,
+                    subject,
+                    display_name,
+                    email,
+                    mobile_masked,
+                    reason,
+                    expires_at,
+                    ts,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM sso_pending_binds WHERE ticket = ?", (ticket,)
+            ).fetchone()
+        assert row is not None
+        return SsoPendingBindRow.from_row(row)
+
+    def take_pending_bind_by_login_code(self, login_code: str) -> SsoPendingBindRow | None:
+        """Consume the one-time callback login_code while keeping the bind ticket active."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "UPDATE sso_pending_binds SET login_code = NULL "
+                "WHERE login_code = ? AND consumed_at IS NULL AND expires_at > ? RETURNING *",
+                (login_code, now_ts()),
+            ).fetchone()
+        return SsoPendingBindRow.from_row(row) if row else None
+
+    def get_active_pending_bind(self, ticket: str) -> SsoPendingBindRow | None:
+        if not ticket:
+            return None
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM sso_pending_binds "
+                "WHERE ticket = ? AND consumed_at IS NULL AND expires_at > ?",
+                (ticket, now_ts()),
+            ).fetchone()
+        return SsoPendingBindRow.from_row(row) if row else None
+
+    def consume_pending_bind(self, ticket: str) -> bool:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE sso_pending_binds SET consumed_at = ?, login_code = NULL "
+                "WHERE ticket = ? AND consumed_at IS NULL AND expires_at > ?",
+                (now_ts(), ticket, now_ts()),
+            )
+        return int(getattr(cur, "rowcount", 0) or 0) > 0
+
     def delete_expired(self, now: int | None = None) -> None:
         ts = now if now is not None else now_ts()
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM sso_login_states WHERE expires_at <= ?", (ts,))
+            conn.execute("DELETE FROM sso_pending_binds WHERE expires_at <= ?", (ts,))

@@ -12,11 +12,7 @@ CRM 库执行：
 mysql -h <host> -u <user> -p xgj_youli_crm_sit < huihuo-mcn/DB/v3.8.0/02_xgj_youli_crm_youli_sso.sql
 ```
 
-Octop 控制面执行迁移（SQLite 或 PostgreSQL 自动选择）：
-
-```bash
-octop db migrate
-```
+Octop 控制面在启动时自动执行迁移（SQLite 或 PostgreSQL 自动选择）。升级后重启 Octop 服务即可；当前版本没有 `octop db migrate` 命令。
 
 新增表：`youli_login_request`、`youli_session`、`youli_agent_binding`、`youli_business_template`。
 
@@ -50,6 +46,7 @@ VALUES
 | OCTOP_YOULI_ENABLED | true | 开启 handoff |
 | OCTOP_YOULI_BASE_URL | http://youli-crm:9903 | Octop 容器到 CRM 的内网地址 |
 | OCTOP_YOULI_MDM_URL | http://youli-mdm:9902 | Octop 容器到 MDM 的内网地址 |
+| OCTOP_YOULI_INNER_API_KEY | <shared-key> | 与 MDM `xiaogj.youli.basic.innerApiKey` 对应的内网鉴权密钥（请求头 `X-Inner-Api-Key`） |
 | OCTOP_YOULI_CLIENT_ID | octop | 与 CRM 应用登记一致 |
 | OCTOP_YOULI_CLIENT_SECRET | <secret> | 与 secret_hash 对应 |
 | OCTOP_YOULI_AUDIENCE | octop | 固定受众 |
@@ -60,7 +57,15 @@ VALUES
 
 Octop 必须与 `youli-crm`、`youli-mdm` 处于同一 Compose 网络，或使用可访问的内网地址。
 
+### 飞书登录 ERP 手机号校验与绑定配置
+
+1. 飞书开放平台应用需开通 `contact:user.phone:readonly` 权限；启用 `OCTOP_YOULI_ENABLED=true` 后，Octop 发起飞书授权会自动请求该 scope，以从 `/open-apis/authen/v1/user_info` 获取员工手机号做 ERP 匹配。
+2. `youli-mdm` 配置中心（`config/xiaogj-youli-mdm-service.yml` / Nacos）设置 `xiaogj.youli.basic.innerApiKey`，与 Octop 的 `OCTOP_YOULI_INNER_API_KEY` 保持一致（两者同时留空时仅放行内网直连，不校验密钥）。
+3. MDM 新增的 `POST /api/auth/inner/loginByPhone` 与 `POST /api/auth/inner/loginByEmployee` 仅供 Octop 内网直连 `youli-mdm:9902` 调用，**不要加入** `config/xiaogj-youli-platform-gateway.yml` 的 `whiteUrls`。
+
 ## 5. 上线前检查
+
+完整的首次上线密钥、应用和验收项见 [youli-feishu-erp-first-launch.md](youli-feishu-erp-first-launch.md)。
 
 | 检查 | 命令 / 位置 |
 | --- | --- |
