@@ -80,7 +80,7 @@ async def test_tools_refuse_without_sid() -> None:
     result = await _tools(SimpleNamespace(token_blob=b"blob"))["youli_list_quotes"].ainvoke({})
 
     assert result.startswith("查询报价单失败")
-    assert "没有经贝员工授权" in result
+    assert "没有会火员工授权" in result
 
 
 @pytest.mark.asyncio

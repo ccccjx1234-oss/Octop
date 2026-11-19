@@ -92,10 +92,10 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
     async def _client() -> McnClient:
         sid = _current_sid()
         if not sid:
-            raise McnClientError("当前会话没有经贝员工授权，不能访问业务数据")
+            raise McnClientError("当前会话没有会火员工授权，不能访问业务数据")
         session = repos.youli_session_repo.get_active(sid)
         if session is None:
-            raise McnClientError("登录已失效，请重新从经贝进入")
+            raise McnClientError("登录已失效，请重新从会火进入")
         binding = repos.youli_identity_binding_repo.get(session.user_id)
         if binding is not None and binding["sid"] == sid:
             try:
@@ -104,7 +104,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
             except (ValueError, TypeError, RuntimeError):
                 turn_user = 0
             if turn_user != session.user_id:
-                raise McnClientError("当前会话没有经贝员工授权")
+                raise McnClientError("当前会话没有会火员工授权")
             from octop.infra.auth.youli.service import revalidate_business_session
             from octop.infra.errors import OctopError
 
@@ -117,14 +117,14 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
                     strict=True,
                 )
             except OctopError as exc:
-                raise McnClientError("当前会话没有经贝员工授权，不能访问业务数据") from exc
+                raise McnClientError("当前会话没有会火员工授权，不能访问业务数据") from exc
             binding = repos.youli_identity_binding_repo.get(session.user_id)
             if (
                 binding is None
                 or binding["sid"] != sid
                 or repos.youli_session_repo.get_active(sid) is None
             ):
-                raise McnClientError("登录已失效，请重新从经贝进入")
+                raise McnClientError("登录已失效，请重新从会火进入")
         if session.token_blob is None:
             raise McnClientError("当前会话缺少业务凭证")
         token = decrypt_secret(repos.secret_repo, session.token_blob)
@@ -629,7 +629,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         StructuredTool.from_function(
             coroutine=list_accounts,
             name="youli_list_accounts",
-            description="查询经贝 MCN 账号库，拉包报价先选账号时使用。",
+            description="查询会火 MCN 账号库，拉包报价先选账号时使用。",
         ),
         StructuredTool.from_function(
             coroutine=query_account_specs,
@@ -639,37 +639,37 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         StructuredTool.from_function(
             coroutine=list_quotes,
             name="youli_list_quotes",
-            description="查询经贝 MCN 报价单列表。",
+            description="查询会火 MCN 报价单列表。",
         ),
         StructuredTool.from_function(
             coroutine=get_quote,
             name="youli_get_quote",
-            description="读取经贝 MCN 报价单详情。",
+            description="读取会火 MCN 报价单详情。",
         ),
         StructuredTool.from_function(
             coroutine=list_products,
             name="youli_list_products",
-            description="查询经贝 MCN 产品列表。",
+            description="查询会火 MCN 产品列表。",
         ),
         StructuredTool.from_function(
             coroutine=list_customers,
             name="youli_list_customers",
-            description="查询经贝 MCN 客户列表。",
+            description="查询会火 MCN 客户列表。",
         ),
         StructuredTool.from_function(
             coroutine=list_contracts,
             name="youli_list_contracts",
-            description="查询经贝 MCN 销售合同。",
+            description="查询会火 MCN 销售合同。",
         ),
         StructuredTool.from_function(
             coroutine=list_price_versions,
             name="youli_list_price_versions",
-            description="查询经贝 MCN 账号价格版本。",
+            description="查询会火 MCN 账号价格版本。",
         ),
         StructuredTool.from_function(
             coroutine=list_coupon_versions,
             name="youli_list_coupon_versions",
-            description="查询经贝 MCN 优惠政策版本。",
+            description="查询会火 MCN 优惠政策版本。",
         ),
         StructuredTool.from_function(
             coroutine=parse_quote,
@@ -679,7 +679,7 @@ def build_youli_tools(*, repos: Any, cfg: YouliConfig) -> list[StructuredTool]:
         StructuredTool.from_function(
             coroutine=save_quote,
             name="youli_save_quote",
-            description="保存经贝 MCN 报价单（写操作，需用户确认）。",
+            description="保存会火 MCN 报价单（写操作，需用户确认）。",
         ),
         StructuredTool.from_function(
             coroutine=create_package_quote,
