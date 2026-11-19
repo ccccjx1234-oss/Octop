@@ -2,6 +2,7 @@ import { getApiUrl } from "../config";
 import { request } from "../request";
 
 export type ScopeKind = "wiki_space" | "wiki_node" | "drive_folder";
+export type SyncSchedule = "manual" | "daily" | "interval";
 export interface SharedFeishuScope {
   connection_id: string;
   kind: ScopeKind;
@@ -19,7 +20,8 @@ export interface SharedFeishuSource {
   space_id: string;
   root_token: string;
   include_children: number;
-  schedule: "manual" | "daily";
+  schedule: SyncSchedule;
+  interval_minutes?: number | null;
   auto_add: number;
   active: number;
   status: "queued" | "syncing" | "synced" | "paused" | "error" | "disconnected";
@@ -37,8 +39,10 @@ export interface SharedFeishuConnection {
   connected: boolean;
 }
 export interface SharedFeishuReview {
-  documents: { id: string; title: string; path: string[] }[];
+  documents: { id: string; title: string; path: string[]; is_new?: boolean }[];
   skipped: number;
+  existing_source?: boolean;
+  new_count?: number;
   visibility: {
     visibility: "owner" | "groups" | "all";
     group_ids: string[];
@@ -98,12 +102,22 @@ export const sharedFeishuApi = {
     kbId: string,
     scope: SharedFeishuScope,
     fingerprint: string,
-    schedule: "manual" | "daily",
+    schedule: SyncSchedule,
     auto_add: boolean,
+    interval_minutes?: number | null,
   ) =>
     request<{ id: string }>(
       `${basePath(kbId)}/sources`,
-      post({ ...scope, fingerprint, schedule, auto_add, confirmed: true }),
+      post({
+        ...scope,
+        fingerprint,
+        schedule,
+        ...(schedule === "interval" && interval_minutes !== undefined
+          ? { interval_minutes }
+          : {}),
+        auto_add,
+        confirmed: true,
+      }),
     ),
   setActive: (kbId: string, id: string, active: boolean) =>
     request(`${basePath(kbId)}/sources/${encodeURIComponent(id)}`, {

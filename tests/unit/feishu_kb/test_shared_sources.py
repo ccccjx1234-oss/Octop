@@ -9,7 +9,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
+from octop.api.routers.shared_feishu import ApproveRequest
 from octop.config import OctopConfig
 from octop.infra.auth.sso.crypto import encrypt_secret
 from octop.infra.db.migrate import run_migrations
@@ -17,7 +19,7 @@ from octop.infra.db.pool import SqlitePool
 from octop.infra.db.services import RepoBundle, SharedServices
 from octop.infra.feishu_kb import shared_sources
 from octop.infra.feishu_kb.client import FeishuError
-from octop.infra.feishu_kb.directories import DIRECTORY_SCOPES, FeishuDirectoryClient
+from octop.infra.feishu_kb.directories import FeishuDirectoryClient
 from octop.infra.feishu_kb.shared_sources import Scope, SharedFeishuService
 from octop.infra.knowledge import jobs, retrieve
 from octop.infra.utils.paths import PathLayout
@@ -132,7 +134,12 @@ def environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def authorize(env, account: str) -> str:
     url = env.svc.authorize(env.owner, env.provider_id, "session", account)
     query = parse_qs(urlsplit(url).query)
-    assert set(query["scope"][0].split()) == set(DIRECTORY_SCOPES)
+    assert set(query["scope"][0].split()) == {
+        "docx:document:readonly",
+        "wiki:wiki:readonly",
+        "drive:drive:readonly",
+        "offline_access",
+    }
     state = query["state"][0]
     with pytest.raises(FeishuError, match="invalid_state"):
         env.svc.callback(env.owner, "another-session", state, account)
@@ -245,6 +252,34 @@ def test_directory_import_approval_incremental_sync_and_disconnect(environment, 
     assert not search()
 
 
+def test_drive_root_finds_folders_in_the_complete_unpaginated_list():
+    rows = [
+        {"token": f"doc-{index}", "name": f"Document {index}", "type": "docx"}
+        for index in range(168)
+    ]
+    rows[0]["name"] = ""
+    rows.append({"token": "folder", "name": "山河日记", "type": "folder"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/open-apis/drive/v1/files"
+        assert request.url.params["page_size"] == "50"
+        return httpx.Response(200, json={"data": {"files": rows, "has_more": False}})
+
+    client = FeishuDirectoryClient(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        client_id="app",
+        client_secret="test-secret",
+    )
+    try:
+        root = client.drive_files("test-token", folders_only=True)
+        assert root.next_page is None
+        assert [item.title for item in root.items] == ["山河日记"]
+        with pytest.raises(FeishuError, match="invalid_response"):
+            client.drive_files("test-token", folder="folder")
+    finally:
+        client.close()
+
+
 def test_wiki_discovery_follows_pages_and_children_without_following_shortcuts():
     def handler(request: httpx.Request) -> httpx.Response:
         params = request.url.params
@@ -298,3 +333,155 @@ def test_wiki_discovery_follows_pages_and_children_without_following_shortcuts()
         assert skipped == 0
     finally:
         client.close()
+
+
+def test_interval_schedule_pending_review_flags_and_validation(environment):
+    env = environment
+    account = authorize(env, "ops")
+    scope = Scope("drive_folder", "department", "Department")
+
+    initial = env.svc.preview(env.owner, env.base.id, account, scope)
+    assert initial["existing_source"] is False
+    assert initial["new_count"] == 0
+    assert [doc["is_new"] for doc in initial["documents"]] == [False]
+
+    for bad_interval in (None, 0, 43201, True):
+        with pytest.raises(FeishuError, match="invalid_schedule"):
+            env.svc.approve(
+                env.owner,
+                env.base.id,
+                account,
+                scope,
+                initial["fingerprint"],
+                schedule="interval",
+                auto_add=False,
+                interval_minutes=bad_interval,  # type: ignore[arg-type]
+            )
+
+    source_id = env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        initial["fingerprint"],
+        schedule="interval",
+        auto_add=False,
+        interval_minutes=15,
+    )
+    row = env.svc.repo.sources(env.base.id)[0]
+    assert row["schedule"] == "interval"
+    assert row["interval_minutes"] == 15
+
+    assert len(env.svc.scan()) == 1
+    with env.services.db.connect() as conn:
+        db_row = conn.execute(
+            "SELECT schedule, interval_minutes, next_sync, pending_count FROM kb_feishu_sources WHERE id=?",
+            (source_id,),
+        ).fetchone()
+    assert db_row["schedule"] == "daily"
+    assert db_row["interval_minutes"] == 15
+    assert db_row["next_sync"] == env.clock[0] + 15 * 60
+    assert db_row["pending_count"] == 0
+
+    # New document shows up as pending until approved, and preview marks it as is_new and puts it first.
+    env.upstream["documents"].append("doc-b")
+    env.clock[0] += 15 * 60
+    assert env.svc.scan() == []
+    assert env.svc.repo.sources(env.base.id)[0]["pending_count"] == 1
+
+    review = env.svc.preview(env.owner, env.base.id, account, scope)
+    assert review["existing_source"] is True
+    assert review["new_count"] == 1
+    assert [(doc["id"], doc["is_new"]) for doc in review["documents"]] == [
+        ("doc-b", True),
+        ("doc-a", False),
+    ]
+
+    # Re-approving immediately clears pending_count and accepts a 1-minute interval.
+    env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        review["fingerprint"],
+        schedule="interval",
+        auto_add=True,
+        interval_minutes=1,
+    )
+    assert env.svc.repo.sources(env.base.id)[0]["pending_count"] == 0
+    assert env.svc.repo.sources(env.base.id)[0]["interval_minutes"] == 1
+
+    # Short 1-minute interval backs off to at least 300s on sync error.
+    env.upstream["unavailable"] = True
+    assert env.svc.scan() == []
+    with env.services.db.connect() as conn:
+        err_row = conn.execute(
+            "SELECT status, next_sync FROM kb_feishu_sources WHERE id=?",
+            (source_id,),
+        ).fetchone()
+    assert err_row["status"] == "error"
+    assert err_row["next_sync"] == env.clock[0] + 300
+
+    # Switching from interval to daily and manual clears interval_minutes and updates next_sync.
+    env.upstream["unavailable"] = False
+    daily_preview = env.svc.preview(env.owner, env.base.id, account, scope)
+    env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        daily_preview["fingerprint"],
+        schedule="daily",
+        auto_add=False,
+    )
+    daily_source = env.svc.repo.sources(env.base.id)[0]
+    assert daily_source["schedule"] == "daily"
+    assert daily_source["interval_minutes"] is None
+    assert len(env.svc.scan()) == 1
+    with env.services.db.connect() as conn:
+        daily_next = conn.execute(
+            "SELECT next_sync FROM kb_feishu_sources WHERE id=?", (source_id,)
+        ).fetchone()["next_sync"]
+    assert daily_next == env.clock[0] + 86400
+
+    manual_preview = env.svc.preview(env.owner, env.base.id, account, scope)
+    env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        manual_preview["fingerprint"],
+        schedule="manual",
+        auto_add=False,
+    )
+    manual_source = env.svc.repo.sources(env.base.id)[0]
+    assert manual_source["schedule"] == "manual"
+    assert manual_source["interval_minutes"] is None
+    assert env.svc.scan() == []
+    with env.services.db.connect() as conn:
+        manual_next = conn.execute(
+            "SELECT next_sync FROM kb_feishu_sources WHERE id=?", (source_id,)
+        ).fetchone()["next_sync"]
+    assert manual_next == 0
+
+
+def test_approve_request_interval_validation():
+    base_kwargs = {
+        "connection_id": "conn1",
+        "kind": "drive_folder",
+        "root": "folder1",
+        "title": "Folder",
+        "fingerprint": "a" * 64,
+        "confirmed": True,
+    }
+    valid = ApproveRequest(**base_kwargs, schedule="interval", interval_minutes=15)
+    assert valid.interval_minutes == 15
+
+    with pytest.raises(ValidationError):
+        ApproveRequest(**base_kwargs, schedule="interval")
+
+    with pytest.raises(ValidationError):
+        ApproveRequest(**base_kwargs, schedule="interval", interval_minutes=0)
+
+    with pytest.raises(ValidationError):
+        ApproveRequest(**base_kwargs, schedule="interval", interval_minutes=43201)

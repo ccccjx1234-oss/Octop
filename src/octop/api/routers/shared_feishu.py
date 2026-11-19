@@ -7,12 +7,17 @@ from contextlib import contextmanager
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from octop.api.deps import get_server, require_permission
 from octop.infra.feishu_kb.client import FeishuError
 from octop.infra.feishu_kb.directories import DirectoryKind
-from octop.infra.feishu_kb.shared_sources import Scope, SharedFeishuService
+from octop.infra.feishu_kb.shared_sources import (
+    MAX_INTERVAL_MINUTES,
+    MIN_INTERVAL_MINUTES,
+    Scope,
+    SharedFeishuService,
+)
 from octop.infra.users.identity import User
 
 router = APIRouter(prefix="/shared")
@@ -69,8 +74,20 @@ class DirectoryRequest(BaseModel):
 class ApproveRequest(DirectoryRequest):
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     confirmed: Literal[True]
-    schedule: Literal["manual", "daily"]
+    schedule: Literal["manual", "daily", "interval"]
+    interval_minutes: int | None = Field(
+        default=None,
+        ge=MIN_INTERVAL_MINUTES,
+        le=MAX_INTERVAL_MINUTES,
+        description="Sync interval in minutes when schedule is 'interval' (1-43200).",
+    )
     auto_add: bool = False
+
+    @model_validator(mode="after")
+    def _validate_interval(self) -> ApproveRequest:
+        if self.schedule == "interval" and self.interval_minutes is None:
+            raise ValueError("interval_minutes is required when schedule is 'interval'")
+        return self
 
 
 class SourceUpdate(BaseModel):
@@ -184,6 +201,7 @@ def approve(
                 body.fingerprint,
                 schedule=body.schedule,
                 auto_add=body.auto_add,
+                interval_minutes=body.interval_minutes,
             )
         }
 

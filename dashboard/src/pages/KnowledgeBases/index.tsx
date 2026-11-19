@@ -18,6 +18,7 @@ import {
   Input,
   InputNumber,
   List,
+  Space,
   Modal,
   Popconfirm,
   Progress,
@@ -50,6 +51,7 @@ import {
   FolderInput,
   FolderPlus,
   LayoutGrid,
+  Link2,
   List as ListIcon,
   ListTree,
   Maximize2,
@@ -165,7 +167,9 @@ import TextDocumentEditorModal, {
 } from "./TextDocumentEditorModal";
 import KnowledgeGraphModal from "./KnowledgeGraphModal";
 import FeishuKbPanel from "./FeishuKbPanel";
-import SharedFeishuSources from "./SharedFeishuSources";
+import SharedFeishuSources, {
+  type FeishuSourceView,
+} from "./SharedFeishuSources";
 import styles from "./index.module.less";
 
 type BaseFormValues = {
@@ -311,7 +315,10 @@ export default function KnowledgeBasesPage() {
   const user = useCurrentUser();
   const canConfigureKb = userCan(user, "knowledge_settings");
   const canCreateBase = userCan(user, "knowledge_bases");
-  const [section, setSection] = useState<"library" | "feishu" | null>(null);
+  const [legacyFeishuOpen, setLegacyFeishuOpen] = useState(false);
+  const [sourceView, setSourceView] = useState<FeishuSourceView>("content");
+  const [feishuSourceCount, setFeishuSourceCount] = useState<number>();
+  const [feishuPendingCount, setFeishuPendingCount] = useState(0);
   const { viewMode, setViewMode, showCardView } = useCardTableView(
     loadDocsViewMode(),
   );
@@ -1164,6 +1171,9 @@ export default function KnowledgeBasesPage() {
   useEffect(() => {
     setCurrentFolder("");
     setSourceFilter(undefined);
+    setSourceView("content");
+    setFeishuSourceCount(undefined);
+    setFeishuPendingCount(0);
     setDocTreeExpanded([KNOWLEDGE_DOC_TREE_ROOT]);
   }, [selected?.id]);
 
@@ -2061,7 +2071,7 @@ export default function KnowledgeBasesPage() {
       return;
     }
 
-    setSection("library");
+    setSourceView("content");
     if (selected?.id !== kb) {
       selectBase(base);
       return;
@@ -2371,9 +2381,10 @@ export default function KnowledgeBasesPage() {
   const loadFailed = basesLoadFailed || capability === null;
   const showEnableGuide = !loadFailed && !usable && bases.length === 0;
   const showEmptyGuide = !loadFailed && usable && bases.length === 0;
-  const activeSection =
-    section ?? (!loading && showEnableGuide ? "feishu" : "library");
-  const showFeishu = activeSection === "feishu";
+  const canConnectFeishu = Boolean(
+    canWriteSelected && selected && isKnowledgeOwner(selected, user),
+  );
+  const showDocuments = !canConnectFeishu || sourceView === "content";
   const unavailableDescription = t(
     canConfigureKb
       ? "knowledgeBases.unavailableDescription"
@@ -2394,41 +2405,32 @@ export default function KnowledgeBasesPage() {
       subtitle={t("knowledgeBases.subtitle")}
       fill
       actions={
-        <Button
-          icon={<Settings size={15} />}
-          onClick={
-            canConfigureKb ? openSettings : () => setSettingsStatusOpen(true)
-          }
-        >
-          {t("knowledgeBases.settingsTitle")}
-        </Button>
+        <Space wrap>
+          <Button type="text" onClick={() => setLegacyFeishuOpen(true)}>
+            {t("feishuKb.legacyTitle")}
+          </Button>
+          <Button
+            icon={<Settings size={15} />}
+            onClick={
+              canConfigureKb ? openSettings : () => setSettingsStatusOpen(true)
+            }
+          >
+            {t("knowledgeBases.settingsTitle")}
+          </Button>
+        </Space>
       }
     >
-      <Segmented
-        className={styles.sectionSwitcher}
-        value={activeSection}
-        onChange={(value) =>
-          setSection(value === "feishu" ? "feishu" : "library")
-        }
-        options={[
-          {
-            value: "library",
-            label:
-              loading || basesLoadFailed
-                ? t("knowledgeBases.librarySection")
-                : t("knowledgeBases.librarySectionCount", {
-                    total: bases.length,
-                  }),
-          },
-          { value: "feishu", label: t("feishuKb.title") },
-        ]}
-      />
-      <div className={styles.feishuSection} hidden={!showFeishu}>
-        <FeishuKbPanel active={showFeishu} />
-      </div>
-      {!showFeishu &&
-      !loading &&
-      (loadFailed || (!usable && bases.length > 0)) ? (
+      <Drawer
+        title={t("feishuKb.legacyTitle")}
+        width="min(720px, 100vw)"
+        open={legacyFeishuOpen}
+        onClose={() => setLegacyFeishuOpen(false)}
+        destroyOnHidden
+      >
+        <Alert type="info" showIcon message={t("feishuKb.legacyHint")} />
+        <FeishuKbPanel active={legacyFeishuOpen} />
+      </Drawer>
+      {!loading && (loadFailed || (!usable && bases.length > 0)) ? (
         <Alert
           style={{ marginBottom: 12, flexShrink: 0 }}
           type={loadFailed ? "error" : "warning"}
@@ -2449,7 +2451,7 @@ export default function KnowledgeBasesPage() {
           }
         />
       ) : null}
-      {showFeishu ? null : loading ? (
+      {loading ? (
         <div className={emptyLayoutClassName}>
           <div className={styles.centered}>
             <Spin />
@@ -2799,19 +2801,128 @@ export default function KnowledgeBasesPage() {
                     styles.detailBody,
                     dragActive && styles.detailBodyDropActive,
                   )}
-                  onDragEnter={handleDocsDragEnter}
-                  onDragLeave={handleDocsDragLeave}
-                  onDragOver={handleDocsDragOver}
-                  onDrop={handleDocsDrop}
+                  onDragEnter={showDocuments ? handleDocsDragEnter : undefined}
+                  onDragLeave={showDocuments ? handleDocsDragLeave : undefined}
+                  onDragOver={showDocuments ? handleDocsDragOver : undefined}
+                  onDrop={showDocuments ? handleDocsDrop : undefined}
                 >
-                  {dragActive && canDropUpload ? (
+                  {showDocuments && dragActive && canDropUpload ? (
                     <div className={styles.dropOverlay} aria-hidden>
                       <FileUp size={36} strokeWidth={1.75} />
                       <span>{t("knowledgeBases.dropToUpload")}</span>
                     </div>
                   ) : null}
+                  <div className={styles.libraryHeader}>
+                    <div className={styles.libraryHeading}>
+                      {isMobile && !showDocuments ? (
+                        <Button
+                          type="text"
+                          icon={<ChevronLeft size={17} />}
+                          aria-label={t("knowledgeBases.backToList")}
+                          onClick={() => setMobilePane("list")}
+                        />
+                      ) : null}
+                      <Typography.Title level={5}>
+                        {selected.name}
+                      </Typography.Title>
+                    </div>
+                    {canWriteSelected ? (
+                      <Space wrap>
+                        <Button
+                          icon={<FileUp size={14} />}
+                          loading={uploadingThisBase}
+                          disabled={!usable || isAtDocumentLimit || uploadBusy}
+                          onClick={() => {
+                            setSourceView("content");
+                            uploadRef.current?.click();
+                          }}
+                        >
+                          {t("sharedFeishu.localFiles")}
+                        </Button>
+                        {canConnectFeishu ? (
+                          <Button
+                            type="primary"
+                            icon={<Link2 size={14} />}
+                            onClick={() => setSourceView("connect")}
+                          >
+                            {t("sharedFeishu.connect")}
+                          </Button>
+                        ) : null}
+                      </Space>
+                    ) : null}
+                  </div>
+                  {canConnectFeishu ? (
+                    <>
+                      <Segmented
+                        className={styles.libraryTabs}
+                        value={
+                          sourceView === "connect" ? "sources" : sourceView
+                        }
+                        onChange={(value) =>
+                          setSourceView(
+                            value === "sources" ? "sources" : "content",
+                          )
+                        }
+                        options={[
+                          {
+                            value: "content",
+                            label: t("sharedFeishu.contents", {
+                              total: fileCount,
+                            }),
+                          },
+                          {
+                            value: "sources",
+                            label:
+                              feishuPendingCount > 0 ? (
+                                <span className={styles.feishuSourcesTabLabel}>
+                                  <span>
+                                    {feishuSourceCount === undefined
+                                      ? t("sharedFeishu.manage")
+                                      : t("sharedFeishu.sourcesTab", {
+                                          total: feishuSourceCount,
+                                        })}
+                                  </span>
+                                  <span
+                                    className={styles.feishuPendingTabBadge}
+                                  >
+                                    {t("sharedFeishu.pendingShort", {
+                                      count: feishuPendingCount,
+                                    })}
+                                  </span>
+                                </span>
+                              ) : feishuSourceCount === undefined ? (
+                                t("sharedFeishu.manage")
+                              ) : (
+                                t("sharedFeishu.sourcesTab", {
+                                  total: feishuSourceCount,
+                                })
+                              ),
+                          },
+                        ]}
+                      />
+                      <div
+                        className={styles.sharedFeishuWorkspace}
+                        hidden={showDocuments}
+                      >
+                        <SharedFeishuSources
+                          key={selected.id}
+                          kbId={selected.id}
+                          usable={usable}
+                          view={sourceView}
+                          onNavigate={setSourceView}
+                          onSourceCount={setFeishuSourceCount}
+                          onPendingCount={setFeishuPendingCount}
+                          onDocumentsChanged={() => {
+                            void loadDetail(selected.id, { silent: true });
+                            void loadBases();
+                          }}
+                        />
+                      </div>
+                    </>
+                  ) : null}
                   <div
                     className={cx(skillStyles.gridToolbar, styles.docsToolbar)}
+                    hidden={!showDocuments}
                   >
                     <div className={styles.toolbarStart}>
                       {isMobile ? (
@@ -2897,17 +3008,6 @@ export default function KnowledgeBasesPage() {
                           ]}
                         />
                       ) : null}
-                      {canWriteSelected && isKnowledgeOwner(selected, user) ? (
-                        <SharedFeishuSources
-                          key={selected.id}
-                          kbId={selected.id}
-                          usable={usable}
-                          onDocumentsChanged={() => {
-                            void loadDetail(selected.id, { silent: true });
-                            void loadBases();
-                          }}
-                        />
-                      ) : null}
                       <Segmented
                         size="small"
                         value={viewMode}
@@ -2976,20 +3076,9 @@ export default function KnowledgeBasesPage() {
                           {t("knowledgeBases.createFile")}
                         </Button>
                       ) : null}
-                      {canWriteSelected ? (
-                        <Button
-                          type="primary"
-                          icon={<FileUp size={14} />}
-                          loading={uploadingThisBase}
-                          disabled={!usable || isAtDocumentLimit || uploadBusy}
-                          onClick={() => uploadRef.current?.click()}
-                        >
-                          {t("knowledgeBases.upload")}
-                        </Button>
-                      ) : null}
                     </div>
                   </div>
-                  <div className={styles.docsPathRow}>
+                  <div className={styles.docsPathRow} hidden={!showDocuments}>
                     <span
                       className={cx(skillStyles.gridCount, styles.docsCount)}
                     >
@@ -3026,6 +3115,7 @@ export default function KnowledgeBasesPage() {
                       styles.docsSplit,
                       !isMobile && styles.docsSplitFramed,
                     )}
+                    hidden={!showDocuments}
                   >
                     {!isMobile && !docTreeCollapsed ? (
                       <aside

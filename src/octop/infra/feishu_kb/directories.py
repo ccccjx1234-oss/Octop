@@ -15,7 +15,7 @@ DirectoryKind = Literal["wiki_space", "wiki_node", "drive_folder"]
 DIRECTORY_SCOPES = (
     "docx:document:readonly",
     "wiki:wiki:readonly",
-    "drive:drive.metadata:readonly",
+    "drive:drive:readonly",
     "offline_access",
 )
 MAX_SCAN_ENTRIES = 200
@@ -53,7 +53,13 @@ class DirectoryDocument:
 
 class FeishuDirectoryClient(FeishuClient):
     def _page(
-        self, path: str, access_token: str, page: str | None, **params: str
+        self,
+        path: str,
+        access_token: str,
+        page: str | None,
+        *,
+        unpaginated: bool = False,
+        **params: str,
     ) -> tuple[list[dict[str, object]], str | None]:
         query = {"page_size": "50", **params}
         if page is not None:
@@ -76,7 +82,7 @@ class FeishuDirectoryClient(FeishuClient):
         items = data.get("items", data.get("files"))
         if (
             not isinstance(items, list)
-            or len(items) > 50
+            or (not unpaginated and len(items) > 50)
             or any(not isinstance(item, dict) for item in items)
         ):
             raise FeishuError("invalid_response")
@@ -126,10 +132,18 @@ class FeishuDirectoryClient(FeishuClient):
         )
 
     def drive_files(
-        self, access_token: str, folder: str | None = None, page: str | None = None
+        self,
+        access_token: str,
+        folder: str | None = None,
+        page: str | None = None,
+        *,
+        folders_only: bool = False,
     ) -> DirectoryPage:
         params = {"folder_token": identifier(folder)} if folder else {}
-        items, next_page = self._page("/open-apis/drive/v1/files", access_token, page, **params)
+        # Feishu returns all Drive root entries in one response, regardless of page_size.
+        items, next_page = self._page(
+            "/open-apis/drive/v1/files", access_token, page, unpaginated=not folder, **params
+        )
         return DirectoryPage(
             [
                 DirectoryEntry(
@@ -140,6 +154,7 @@ class FeishuDirectoryClient(FeishuClient):
                     row.get("type") == "folder",
                 )
                 for row in items
+                if not folders_only or row.get("type") == "folder"
             ],
             next_page,
         )

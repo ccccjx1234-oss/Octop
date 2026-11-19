@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 MAX_DOCUMENT_BYTES = 2_000_000
 MAX_BATCH_BYTES = 16_000_000
 LEASE_SECONDS = 420
+MIN_INTERVAL_MINUTES = 1
+MAX_INTERVAL_MINUTES = 43_200
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,7 @@ class SharedFeishuService:
         services: Any,
         *,
         clock: Callable[[], float] = time.time,
-        client_factory: Callable[[Any], Any] | None = None,
+        client_factory: Callable[[Any], FeishuDirectoryClient] | None = None,
     ) -> None:
         self.services = services
         self.repo = SharedFeishuRepo(services.db)
@@ -203,7 +205,7 @@ class SharedFeishuService:
             elif kind == "wiki_nodes" and space:
                 result = client.wiki_nodes(access, space, parent, page)
             elif kind == "drive_folders":
-                result = client.drive_files(access, parent, page)
+                result = client.drive_files(access, parent, page, folders_only=True)
             else:
                 raise FeishuError("invalid_directory_id")
         return {
@@ -233,7 +235,21 @@ class SharedFeishuService:
             if visibility["group_ids"]
             else {}
         )
-        approved = [asdict(doc) for doc in docs]
+        existing_raw = self.repo.approved_document_ids(
+            kb_id, connection_id, scope.kind, scope.space or "", scope.root
+        )
+        existing_ids: set[str] | None = (
+            set(json.loads(existing_raw)) if existing_raw is not None else None
+        )
+        approved: list[dict[str, Any]] = [
+            {
+                **asdict(doc),
+                "is_new": existing_ids is not None and doc.id not in existing_ids,
+            }
+            for doc in docs
+        ]
+        if existing_ids is not None:
+            approved.sort(key=lambda item: not bool(item["is_new"]))
         fingerprint = _hash(
             json.dumps(
                 [
@@ -249,6 +265,8 @@ class SharedFeishuService:
         return {
             "documents": approved,
             "skipped": skipped,
+            "existing_source": existing_ids is not None,
+            "new_count": sum(1 for item in approved if item["is_new"]),
             "visibility": {
                 **visibility,
                 "group_names": [
@@ -271,7 +289,23 @@ class SharedFeishuService:
         *,
         schedule: str,
         auto_add: bool,
+        interval_minutes: int | None = None,
     ) -> str:
+        if schedule == "interval":
+            if (
+                isinstance(interval_minutes, bool)
+                or not isinstance(interval_minutes, int)
+                or interval_minutes < MIN_INTERVAL_MINUTES
+                or interval_minutes > MAX_INTERVAL_MINUTES
+            ):
+                raise FeishuError("invalid_schedule")
+            db_schedule = "daily"
+            db_interval = interval_minutes
+        elif schedule in {"manual", "daily"}:
+            db_schedule = schedule
+            db_interval = 0
+        else:
+            raise FeishuError("invalid_schedule")
         approval = self._approval(owner, kb_id, connection_id, scope)
         if not secrets.compare_digest(approval["fingerprint"], fingerprint):
             raise FeishuError("review_changed")
@@ -288,7 +322,8 @@ class SharedFeishuService:
                 scope.title,
                 int(scope.include_children),
                 int(auto_add),
-                schedule,
+                db_schedule,
+                db_interval,
                 now,
                 json.dumps([doc["id"] for doc in approval["documents"]]),
                 json.dumps(approval["visibility"]),

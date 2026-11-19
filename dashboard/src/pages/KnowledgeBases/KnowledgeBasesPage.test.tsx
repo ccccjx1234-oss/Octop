@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { App } from "antd";
 import { MemoryRouter } from "react-router-dom";
@@ -11,6 +12,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CurrentUserProvider } from "../../hooks/useCurrentUser";
 import { knowledgeBasesApi } from "../../api/modules/knowledgeBases";
 import { feishuKbApi } from "../../api/modules/feishuKb";
+import { sharedFeishuApi } from "../../api/modules/sharedFeishu";
 import type { KnowledgeCapability } from "../../api/modules/knowledgeBases";
 import KnowledgeBasesPage from "./index";
 
@@ -89,6 +91,11 @@ afterEach(() => {
 });
 
 it("keeps existing files visible when embedding is unavailable", async () => {
+  vi.spyOn(sharedFeishuApi, "list").mockResolvedValue([]);
+  vi.spyOn(sharedFeishuApi, "connections").mockResolvedValue({
+    connections: [],
+    providers: [{ id: 1, name: "Feishu" }],
+  });
   const base = {
     id: "kb1",
     owner_user_id: 2,
@@ -128,17 +135,28 @@ it("keeps existing files visible when embedding is unavailable", async () => {
 
   renderPage();
 
-  expect(await screen.findByText("Existing knowledge base")).toBeVisible();
+  expect(
+    await screen.findByRole("heading", { name: "Existing knowledge base" }),
+  ).toBeVisible();
   expect(await screen.findByText("existing-file.pdf")).toBeVisible();
   expect(
     screen.getByRole("button", { name: "knowledgeBases.downloadOriginal" }),
   ).toBeEnabled();
   expect(
-    screen.getByRole("button", { name: "knowledgeBases.upload" }),
+    screen.getByRole("button", { name: "sharedFeishu.localFiles" }),
   ).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "sharedFeishu.connect" }));
+  expect(await screen.findByText("sharedFeishu.newGrantHint")).toBeVisible();
+  expect(
+    await screen.findByRole("button", { name: "sharedFeishu.authorize" }),
+  ).toBeEnabled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "knowledgeBases.downloadOriginal" }),
+  ).toBeNull();
 });
 
-it("shows collected files on the main page and keeps library maintenance discoverable", async () => {
+it("keeps old private collection accessible separately from the main library", async () => {
   vi.spyOn(knowledgeBasesApi, "list").mockResolvedValue([]);
   vi.spyOn(knowledgeBasesApi, "getCapability").mockResolvedValue(
     unavailableCapability,
@@ -163,21 +181,22 @@ it("shows collected files on the main page and keeps library maintenance discove
   ]);
 
   renderPage();
+  expect(
+    await screen.findByRole("button", { name: "knowledgeBases.create" }),
+  ).toBeDisabled();
+  expect(screen.queryByText("collected-file")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "feishuKb.legacyTitle" }));
   expect(await screen.findByText("collected-file")).toBeVisible();
   expect(
     screen.getByRole("button", { name: "feishuKb.viewContent" }),
   ).toBeEnabled();
-  expect(screen.queryByRole("dialog")).toBeNull();
-
-  fireEvent.click(
-    screen.getByRole("radio", { name: "knowledgeBases.librarySectionCount" }),
+  const legacy = screen.getByRole("dialog", { name: "feishuKb.legacyTitle" });
+  fireEvent.click(within(legacy).getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: "feishuKb.legacyTitle" }),
+    ).toBeNull(),
   );
-  expect(
-    screen.queryByRole("button", { name: "feishuKb.viewContent" }),
-  ).toBeNull();
-  expect(
-    screen.getByRole("button", { name: "knowledgeBases.create" }),
-  ).toBeDisabled();
   fireEvent.click(
     screen.getByRole("button", { name: "knowledgeBases.settingsTitle" }),
   );
@@ -219,9 +238,9 @@ it("opens the original instance settings for an account with settings permission
   });
 
   renderPage(["knowledge_bases", "knowledge_settings"]);
-  await screen.findByText("feishuKb.noSources");
+  await screen.findByText("knowledgeBases.enableGuideDesc");
   fireEvent.click(
-    screen.getByRole("button", { name: "knowledgeBases.settingsTitle" }),
+    screen.getAllByRole("button", { name: "knowledgeBases.settingsTitle" })[0],
   );
   expect(await screen.findByText("knowledgeBases.settingsOpen")).toBeVisible();
   expect(embeddingOptions).toHaveBeenCalled();

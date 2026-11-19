@@ -7,6 +7,16 @@ from typing import Any
 from octop.infra.db.pool import DatabasePool
 
 
+def _next_sync(source: Any, now: int, *, is_error: bool = False) -> int:
+    if source["schedule"] == "manual":
+        return 0
+    interval_minutes = int(source["interval_minutes"] or 0)
+    if interval_minutes > 0:
+        seconds = interval_minutes * 60
+        return now + (max(seconds, 300) if is_error else seconds)
+    return now + 86400
+
+
 class SharedFeishuRepo:
     def __init__(self, db: DatabasePool) -> None:
         self.db = db
@@ -56,7 +66,7 @@ class SharedFeishuRepo:
 
     def claim_refresh(self, connection_id: str, old: bytes) -> bool:
         with self.db.transaction() as conn:
-            return (
+            return bool(
                 conn.execute(
                     "UPDATE kb_feishu_connections SET refreshing=1 WHERE id=? AND refreshing=0 AND token_blob=?",
                     (connection_id, old),
@@ -66,7 +76,7 @@ class SharedFeishuRepo:
 
     def finish_refresh(self, connection_id: str, old: bytes, blob: bytes, expires_at: int) -> bool:
         with self.db.transaction() as conn:
-            return (
+            return bool(
                 conn.execute(
                     "UPDATE kb_feishu_connections SET refreshing=0,token_blob=?,expires_at=? "
                     "WHERE id=? AND refreshing=1 AND token_blob=?",
@@ -80,7 +90,10 @@ class SharedFeishuRepo:
             return list(
                 conn.execute(
                     "SELECT s.id,s.connection_id,c.label AS connection_label,c.owner_user_id,s.title,s.scope_kind,"
-                    "s.space_id,s.root_token,s.include_children,s.schedule,s.auto_add,s.active,s.status,"
+                    "s.space_id,s.root_token,s.include_children,"
+                    "CASE WHEN s.schedule='daily' AND s.interval_minutes>0 THEN 'interval' ELSE s.schedule END AS schedule,"
+                    "CASE WHEN s.schedule='daily' AND s.interval_minutes>0 THEN s.interval_minutes ELSE NULL END AS interval_minutes,"
+                    "s.auto_add,s.active,s.status,"
                     "s.last_sync,s.last_error,s.pending_count,s.skipped_count,"
                     "COUNT(d.document_id) AS documents FROM kb_feishu_sources s "
                     "JOIN kb_feishu_connections c ON c.id=s.connection_id "
@@ -89,6 +102,17 @@ class SharedFeishuRepo:
                     (kb_id,),
                 ).fetchall()
             )
+
+    def approved_document_ids(
+        self, kb_id: str, connection_id: str, scope_kind: str, space_id: str, root_token: str
+    ) -> str | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT approved_document_ids FROM kb_feishu_sources "
+                "WHERE kb_id=? AND connection_id=? AND scope_kind=? AND space_id=? AND root_token=?",
+                (kb_id, connection_id, scope_kind, space_id, root_token),
+            ).fetchone()
+            return str(row["approved_document_ids"]) if row is not None else None
 
     def save_source(self, params: tuple[Any, ...]) -> Any:
         with self.db.transaction() as conn:
@@ -103,22 +127,22 @@ class SharedFeishuRepo:
                 return None
             return conn.execute(
                 "INSERT INTO kb_feishu_sources (id,kb_id,connection_id,approved_by,scope_kind,root_token,"
-                "space_id,title,include_children,auto_add,schedule,approved_at,approved_document_ids,"
-                "approval_visibility,next_sync) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? "
+                "space_id,title,include_children,auto_add,schedule,interval_minutes,approved_at,approved_document_ids,"
+                "approval_visibility,next_sync) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? "
                 "WHERE EXISTS (SELECT 1 FROM kb_feishu_connections WHERE id=? AND owner_user_id=? "
                 "AND token_blob IS NOT NULL AND refreshing=0) "
                 "ON CONFLICT(kb_id,connection_id,scope_kind,space_id,root_token) DO UPDATE SET "
                 "title=excluded.title,include_children=excluded.include_children,auto_add=excluded.auto_add,"
-                "schedule=excluded.schedule,approved_by=excluded.approved_by,approved_at=excluded.approved_at,"
+                "schedule=excluded.schedule,interval_minutes=excluded.interval_minutes,approved_by=excluded.approved_by,approved_at=excluded.approved_at,"
                 "approved_document_ids=excluded.approved_document_ids,approval_visibility=excluded.approval_visibility,"
-                "active=1,status='queued',next_sync=excluded.next_sync,lease_token=NULL,lease_until=0 "
+                "active=1,status='queued',pending_count=0,last_error=NULL,next_sync=excluded.next_sync,lease_token=NULL,lease_until=0 "
                 "RETURNING id",
                 params,
             ).fetchone()
 
     def set_active(self, kb_id: str, source_id: str, owner: int, active: bool, when: int) -> bool:
         with self.db.transaction() as conn:
-            return (
+            return bool(
                 conn.execute(
                     "UPDATE kb_feishu_sources SET active=?,status=?,next_sync=?,lease_token=NULL,lease_until=0 "
                     "WHERE kb_id=? AND id=? AND (?=0 OR lease_until<=?) AND EXISTS (SELECT 1 FROM kb_feishu_connections c "
@@ -184,7 +208,7 @@ class SharedFeishuRepo:
                 "INSERT INTO kb_feishu_blob_cleanup VALUES (?,?,?,?) ON CONFLICT(document_id) DO NOTHING",
                 (doc_id, kb_id, filename, now),
             )
-        return removed
+        return int(removed)
 
     def publish(
         self,
@@ -209,7 +233,7 @@ class SharedFeishuRepo:
                         pending,
                         skipped,
                         approved_document_ids,
-                        now + 86400 if source["schedule"] == "daily" else 0,
+                        _next_sync(source, now),
                         source["id"],
                         token,
                         now,
@@ -254,7 +278,7 @@ class SharedFeishuRepo:
             conn.execute(
                 "UPDATE kb_feishu_sources SET status='error',last_error=?,next_sync=?,lease_token=NULL,lease_until=0 "
                 "WHERE id=? AND lease_token=?",
-                (reason, now + 86400 if source["schedule"] == "daily" else 0, source["id"], token),
+                (reason, _next_sync(source, now, is_error=True), source["id"], token),
             )
 
     def disconnect(self, owner: int, connection_id: str, now: int) -> bool:
