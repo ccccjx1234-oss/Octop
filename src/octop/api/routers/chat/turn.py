@@ -358,6 +358,7 @@ def build_dashboard_inbound(
     turn: ChatTurnBody,
     ws_connection_id: str,
     user_is_admin: bool = False,
+    delegated_sid: str | None = None,
 ) -> InboundMessage:
     from octop.infra.auth.youli.context import (  # noqa: PLC0415
         bind_thread_sid,
@@ -370,7 +371,7 @@ def build_dashboard_inbound(
         "thread_id": prepared.thread_id,
         "user_is_admin": user_is_admin,
     }
-    youli_sid = current_youli_sid()
+    youli_sid = current_youli_sid() or delegated_sid
     if youli_sid:
         metadata["youli_sid"] = youli_sid
         bind_thread_sid(prepared.thread_id, youli_sid)

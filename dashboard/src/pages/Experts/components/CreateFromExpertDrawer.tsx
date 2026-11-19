@@ -83,7 +83,14 @@ import {
 import AgentBackendFields from "./AgentBackendFields";
 import ExpertAvatarPicker from "./ExpertAvatarPicker";
 import { ResourceVisibilityFormItem } from "../../../components/ResourceVisibilityFields";
-import type { ResourceVisibilityMode } from "../../../api/modules/userGroups";
+import {
+  buildScopeRequestPayload,
+  emptyScopeSelection,
+  hasScopeAllowTarget,
+  type ResourceScopeSelection,
+  type ScopedResourceVisibilityMode,
+} from "../../../api/modules/erpOrg";
+import { useUserRole } from "../../../hooks/useUserRole";
 import ExpertComposerDefaultsFields from "./ExpertComposerDefaultsFields";
 import WelcomeConfig, { type WelcomeConfigRef } from "./WelcomeConfig";
 import {
@@ -231,6 +238,7 @@ export default function CreateFromExpertDrawer({
   onCreated,
 }: CreateFromExpertDrawerProps) {
   const { t } = useTranslation();
+  const isAdmin = useUserRole() === "admin";
   const allowedBackendTypes = useCurrentUser()?.allowed_backend_types;
   const createBackendChoice = defaultCreateBackendChoice(allowedBackendTypes);
   const [form] = Form.useForm<
@@ -277,8 +285,10 @@ export default function CreateFromExpertDrawer({
   const [skillPackagesLoading, setSkillPackagesLoading] = useState(false);
   const [colorPalette, setColorPalette] = useState<string>("rose");
   const [expertVisibility, setExpertVisibility] =
-    useState<ResourceVisibilityMode>("owner");
+    useState<ScopedResourceVisibilityMode>("owner");
   const [expertGroupIds, setExpertGroupIds] = useState<string[]>([]);
+  const [expertScope, setExpertScope] =
+    useState<ResourceScopeSelection>(emptyScopeSelection);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarPresetId, setAvatarPresetId] = useState<string | null>(null);
@@ -325,6 +335,7 @@ export default function CreateFromExpertDrawer({
     setPathMappings([]);
     setExpertVisibility("owner");
     setExpertGroupIds([]);
+    setExpertScope(emptyScopeSelection());
     const defaults = sourceDefaults(source, lang);
     setColorPalette(parseStoredColor(defaults.color) ?? DEFAULT_PALETTE);
     setAvatarFile(null);
@@ -425,6 +436,17 @@ export default function CreateFromExpertDrawer({
   const handleCreate = async () => {
     if (!source) return;
     const values = await form.validateFields();
+    if (expertVisibility === "groups" && expertGroupIds.length === 0) {
+      message.error(t("resourceVisibility.needGroup"));
+      return;
+    }
+    if (
+      expertVisibility === "scoped" &&
+      !hasScopeAllowTarget(expertVisibility, expertGroupIds, expertScope)
+    ) {
+      message.error(t("resourceVisibility.needScopeTarget"));
+      return;
+    }
     const stored = form.getFieldsValue(true) as {
       welcome_message?: string;
     };
@@ -521,8 +543,12 @@ export default function CreateFromExpertDrawer({
         ...buildAgentRuntimeRequest(values),
         enable_trajectory: values.enable_trajectory === true,
         conversation_mode: values.conversation_mode,
-        visibility: expertVisibility,
-        group_ids: expertVisibility === "groups" ? expertGroupIds : [],
+        ...buildScopeRequestPayload({
+          visibility: expertVisibility,
+          groupIds: expertGroupIds,
+          scope: expertScope,
+          isAdmin,
+        }),
         ...(composerPatch.file_overrides.length
           ? { file_overrides: composerPatch.file_overrides }
           : {}),
@@ -832,11 +858,17 @@ export default function CreateFromExpertDrawer({
           allowOwner
           visibility={expertVisibility}
           groupIds={expertGroupIds}
+          enableErpScope
+          isAdmin={isAdmin}
+          scope={expertScope}
+          onScopeChange={setExpertScope}
           extra={t("experts.visibilityHint")}
           onChange={(next) => {
             setExpertVisibility(next.visibility);
             setExpertGroupIds(
-              next.visibility === "groups" ? next.groupIds : [],
+              next.visibility === "groups" || next.visibility === "scoped"
+                ? next.groupIds
+                : [],
             );
           }}
         />

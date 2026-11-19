@@ -22,7 +22,11 @@ from octop.infra.auth.sso.service import SsoService
 from octop.infra.auth.youli.reauth import FeishuErpReauth
 from octop.infra.db import migrate
 from octop.infra.db.pool import PostgresPool
-from octop.infra.db.repos._base import PrivateThreadBindingError, PrivateThreadForkError
+from octop.infra.db.repos._base import (
+    PrivateThreadBindingError,
+    PrivateThreadForkError,
+    insert_returning_id,
+)
 from octop.infra.db.repos.agents import AgentRepo
 from octop.infra.db.repos.sessions import SessionRepo
 from octop.infra.db.repos.threads import ThreadRepo
@@ -85,7 +89,12 @@ def test_upgrade_real_v26_schema_is_idempotent(pg, monkeypatch):
         )
         migrate.run_migrations(db)
     assert migrate._current_version(db) == 26
-    uid = UserRepo(db).create(username="old-owner", password_hash="hash", role="user")
+    with db.transaction() as conn:
+        uid = insert_returning_id(
+            conn,
+            "INSERT INTO users(username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+            ("old-owner", "hash", "user", 0),
+        )
     AgentRepo(db).create(agent_id="old-agent", user_id=uid, name="Old agent")
     # At v26 these objects really do not exist; this is not a lowered watermark.
     assert not migrate._table_exists(db, "feishu_kb_source")
@@ -97,6 +106,7 @@ def test_upgrade_real_v26_schema_is_idempotent(pg, monkeypatch):
     assert AgentRepo(db).get("old-agent") is not None
     assert migrate._table_exists(db, "feishu_kb_private_index_versions")
     assert "had_independent_identity" in migrate._table_columns(db, "youli_identity_binding")
+    assert "unlinked" in migrate._table_columns(db, "youli_identity_binding")
     assert "private_knowledge_protected" in migrate._table_columns(db, "threads")
 
 

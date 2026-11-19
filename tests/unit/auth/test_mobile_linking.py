@@ -63,7 +63,7 @@ def test_should_auto_link_mobile_requires_allowlisted_feishu_tenant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dingtalk_then_feishu_auto_links_by_normalized_mobile(tmp_path) -> None:
+async def test_dingtalk_then_feishu_requires_authenticated_binding_for_mobile_match(tmp_path) -> None:
     paths = PathLayout(tmp_path / ".octop")
     paths.ensure_root()
     db = SqlitePool(paths.db)
@@ -103,7 +103,18 @@ async def test_dingtalk_then_feishu_auto_links_by_normalized_mobile(tmp_path) ->
     )
 
     fs_subject = "feishu-v1:" + json.dumps(["feishu", "fs_app", "tenant_corp", "ou_alice"])
-    second = await users.resolve_or_create_sso_user(
+    with pytest.raises(OctopError) as exc_info:
+        await users.resolve_or_create_sso_user(
+            provider_id=fs.id,
+            subject=fs_subject,
+            claims={"mobile": "+86 138-0013-8000"},
+            allow_mobile_link=True,
+        )
+    assert exc_info.value.code is ErrorCode.SSO_BINDING_REQUIRED
+    assert services.user_repo.get_by_sso(fs.id, fs_subject) is None
+
+    second = await users.bind_sso_identity(
+        user_id=first.id,
         provider_id=fs.id,
         subject=fs_subject,
         claims={"name": "Alice", "mobile": "+86 138-0013-8000"},
@@ -138,12 +149,23 @@ async def test_dingtalk_then_feishu_auto_links_by_normalized_mobile(tmp_path) ->
             claims={"name": "Bob", "mobile": "13800138000"},
             allow_mobile_link=should_auto_link_mobile("feishu", fs.extra, other_same_tenant),
         )
-    assert exc_info.value.code is ErrorCode.SSO_IDENTITY_TAKEN
+    assert exc_info.value.code is ErrorCode.SSO_BINDING_REQUIRED
     assert sso is not None
+
+    await users.unbind_sso_identity(user_id=first.id, kind="feishu")
+    with pytest.raises(OctopError) as exc_info:
+        await users.resolve_or_create_sso_user(
+            provider_id=fs.id,
+            subject=fs_subject,
+            claims={"mobile": "13800138000"},
+            allow_mobile_link=True,
+        )
+    assert exc_info.value.code is ErrorCode.SSO_BINDING_REQUIRED
+    assert services.user_repo.get_by_sso(fs.id, fs_subject) is None
 
 
 @pytest.mark.asyncio
-async def test_bind_sso_identity_backfills_mobile_and_enables_later_auto_link(tmp_path) -> None:
+async def test_bind_sso_identity_backfills_mobile_for_duplicate_detection(tmp_path) -> None:
     paths = PathLayout(tmp_path / ".octop")
     paths.ensure_root()
     db = SqlitePool(paths.db)
@@ -191,17 +213,19 @@ async def test_bind_sso_identity_backfills_mobile_and_enables_later_auto_link(tm
     assert stored is not None and stored.mobile == "13900139000"
 
     fs_subject = "feishu-v1:" + json.dumps(["feishu", "fs_app", "tenant_corp", "ou_bob"])
-    resolved = await users.resolve_or_create_sso_user(
-        provider_id=fs.id,
-        subject=fs_subject,
-        claims={"name": "Bob", "mobile": "+86 139-0013-9000"},
-        allow_mobile_link=should_auto_link_mobile("feishu", fs.extra, fs_subject),
-    )
-    assert resolved.id == local_uid
+    with pytest.raises(OctopError) as exc_info:
+        await users.resolve_or_create_sso_user(
+            provider_id=fs.id,
+            subject=fs_subject,
+            claims={"name": "Bob", "mobile": "+86 139-0013-9000"},
+            allow_mobile_link=should_auto_link_mobile("feishu", fs.extra, fs_subject),
+        )
+    assert exc_info.value.code is ErrorCode.SSO_BINDING_REQUIRED
+    assert services.user_repo.get_by_sso(fs.id, fs_subject) is None
 
 
 @pytest.mark.asyncio
-async def test_concurrent_create_mobile_collision_falls_back_to_auto_link(
+async def test_concurrent_create_mobile_collision_requires_explicit_binding(
     tmp_path, monkeypatch
 ) -> None:
     paths = PathLayout(tmp_path / ".octop")
@@ -257,14 +281,13 @@ async def test_concurrent_create_mobile_collision_falls_back_to_auto_link(
     monkeypatch.setattr(services.user_repo, "get_by_mobile", stale_then_fresh)
 
     fs_subject = "feishu-v1:" + json.dumps(["feishu", "fs_app", "tenant_corp", "ou_carol"])
-    resolved = await users.resolve_or_create_sso_user(
-        provider_id=fs.id,
-        subject=fs_subject,
-        claims={"name": "Carol", "mobile": "13700137000"},
-        allow_mobile_link=True,
-    )
-    assert resolved.id == first_uid
-    assert any(
-        item.provider_id == fs.id and item.subject == fs_subject
-        for item in services.user_repo.list_sso_identities(first_uid)
-    )
+    with pytest.raises(OctopError) as exc_info:
+        await users.resolve_or_create_sso_user(
+            provider_id=fs.id,
+            subject=fs_subject,
+            claims={"name": "Carol", "mobile": "13700137000"},
+            allow_mobile_link=True,
+        )
+    assert exc_info.value.code is ErrorCode.SSO_BINDING_REQUIRED
+    assert services.user_repo.get_by_sso(fs.id, fs_subject) is None
+    assert services.user_repo.count() == 1

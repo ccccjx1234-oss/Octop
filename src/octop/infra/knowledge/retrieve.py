@@ -166,14 +166,28 @@ def _retrieve_context_sync(
         ranked.extend(private)
         ranked.sort(key=lambda item: item[1].score, reverse=True)
     top = _with_graph_passages(services, ranked[:k], related, k=k)
+    # A source can be disconnected while ranking is in flight. Removed imports
+    # are never emitted from an earlier snapshot of the document list.
+    imported_bases = {
+        document.kb_id for _, _, document in top if getattr(document, "feishu_source_id", None)
+    }
+    current_imports = {
+        document.id
+        for kb_id in imported_bases
+        for document in services.knowledge_repo.list_documents(kb_id)
+        if getattr(document, "feishu_source_id", None) and document.status == "ready"
+    }
     private_tokens = {document.id: token for _, _, document, token in private_ranked}
     top = [
         (base, hit, document)
         for base, hit, document in top
-        if not str(base.id).startswith("private-feishu:")
-        or (
-            allows(user_id, base.id)
-            and fence(services, user_id, document.id, private_tokens[document.id])
+        if (not getattr(document, "feishu_source_id", None) or document.id in current_imports)
+        and (
+            not str(base.id).startswith("private-feishu:")
+            or (
+                allows(user_id, base.id)
+                and fence(services, user_id, document.id, private_tokens[document.id])
+            )
         )
     ]
     return _format_context(top, char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS])

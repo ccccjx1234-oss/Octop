@@ -18,6 +18,7 @@ export interface FeishuSource {
   interval_seconds: number;
   next_sync: number;
   status: string;
+  has_staged_content?: boolean;
 }
 const base = "/feishu-kb";
 export const feishuKbApi = {
@@ -59,9 +60,13 @@ export const feishuKbApi = {
       body: JSON.stringify({ enabled, interval_seconds, retrieval_enabled }),
     }),
   sync: (id: string) =>
-    request(`${base}/sources/${encodeURIComponent(id)}/sync`, {
+    request<{ status: string }>(`${base}/sources/${encodeURIComponent(id)}/sync`, {
       method: "POST",
     }),
+  content: (id: string) =>
+    request<{ content: string }>(
+      `${base}/sources/${encodeURIComponent(id)}/content`,
+    ),
   remove: (id: string) =>
     request(`${base}/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
   revoke: (id: number) => request(`${base}/grants/${id}`, { method: "DELETE" }),

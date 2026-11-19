@@ -123,7 +123,7 @@ class WebSocketChannel(BaseChannel):
             await self._hub.push(conn_id, {"type": "done"})
             return
 
-        if not self._hub.thread_allowed(thread_id, conn_id):
+        if not await self._hub.thread_allowed(thread_id, conn_id):
             return
 
         self._track_subject(message)

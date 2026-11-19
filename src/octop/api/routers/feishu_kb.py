@@ -9,11 +9,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from octop.api.deps import current_user, get_server
+from octop.api.routers.shared_feishu import router as shared_router
 from octop.infra.feishu_kb.client import FeishuError
 from octop.infra.feishu_kb.service import FeishuKbService
 from octop.infra.users.identity import User
 
 router = APIRouter()
+router.include_router(shared_router)
 
 
 class AuthorizeRequest(BaseModel):
@@ -127,7 +129,7 @@ def sources(
     result = []
     for row in FeishuKbService(server.services).repo.sources(user.id):
         item = dict(row)
-        item.pop("digest", None)
+        item["has_staged_content"] = bool(item.pop("digest", None))
         if item["status"] not in safe_statuses:
             item["status"] = "error"
         result.append(item)

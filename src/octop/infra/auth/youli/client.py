@@ -12,6 +12,7 @@ from octop.config import YouliConfig
 from octop.infra.auth.youli.tls import build_verify
 
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+_DELEGATION_TERMINAL_BASE = 1_000_000_000
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,37 @@ class YouliIssuedToken:
     employee_id: int
     industry: int | None
     terminal: int
+
+
+@dataclass(frozen=True)
+class YouliOrgDept:
+    org_id: int
+    parent_id: int
+    name: str
+    org_code: str = ""
+    sort: int = 0
+    status: int = 1
+
+
+@dataclass(frozen=True)
+class YouliOrgEmployee:
+    employee_id: int
+    account_user_id: int | None
+    nick_name: str
+    phone: str = ""
+    employee_no: str = ""
+    status: int = 1
+    is_admin: int = 0
+    org_ids: tuple[int, ...] = ()
+    admin_org_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class YouliOrgDirectory:
+    company_id: int
+    synced_at_epoch: int
+    departments: tuple[YouliOrgDept, ...]
+    employees: tuple[YouliOrgEmployee, ...]
 
 
 class YouliClient:
@@ -130,9 +162,29 @@ class YouliClient:
                 "codeVerifier": code_verifier,
             },
         )
+        return self._issued_token(data)
+
+    def issue_delegation(self, *, mobile: str, password: str) -> YouliIssuedToken:
+        data = self._post(
+            "delegation",
+            {
+                "clientId": self._cfg.client_id,
+                "clientSecret": self._cfg.client_secret,
+                "audience": self._cfg.audience,
+                "mobile": mobile,
+                "password": password,
+            },
+        )
+        issued = self._issued_token(data)
+        if issued.terminal <= _DELEGATION_TERMINAL_BASE:
+            raise YouliClientError("ERP returned an invalid delegation terminal")
+        return issued
+
+    @staticmethod
+    def _issued_token(data: dict[str, Any]) -> YouliIssuedToken:
         token = data.get("token")
         if not isinstance(token, str) or not token:
-            raise YouliClientError("youli redeem returned no token")
+            raise YouliClientError("ERP returned no token")
         return YouliIssuedToken(
             token=token,
             username=str(data.get("username") or ""),
@@ -260,3 +312,67 @@ class YouliClient:
         if not body.get("userId") or not body.get("companyId"):
             raise YouliClientError("youli MDM returned an incomplete identity")
         return body
+
+    def fetch_org_directory(
+        self,
+        *,
+        company_id: int,
+        employee_id: int | None = None,
+        include_departments: bool | None = None,
+    ) -> YouliOrgDirectory:
+        """Fetch Huihuo ERP department tree and employee directory (read-only)."""
+        payload: dict[str, Any] = {
+            "clientId": self._cfg.client_id,
+            "clientSecret": self._cfg.client_secret,
+            "audience": self._cfg.audience,
+            "companyId": int(company_id),
+        }
+        if employee_id is not None:
+            payload["employeeId"] = int(employee_id)
+        if include_departments is not None:
+            payload["includeDepartments"] = bool(include_departments)
+        data = self._post("org-directory", payload)
+
+        depts: list[YouliOrgDept] = []
+        for raw in data.get("departments") or []:
+            if not isinstance(raw, dict) or raw.get("orgId") is None:
+                continue
+            org_id = int(raw["orgId"])
+            depts.append(
+                YouliOrgDept(
+                    org_id=org_id,
+                    parent_id=int(raw.get("parentId") if raw.get("parentId") is not None else 1),
+                    name=str(raw.get("name") or org_id),
+                    org_code=str(raw.get("orgCode") or ""),
+                    sort=int(raw.get("sort") if raw.get("sort") is not None else org_id),
+                    status=int(raw.get("status") if raw.get("status") is not None else 1),
+                )
+            )
+
+        emps: list[YouliOrgEmployee] = []
+        for raw in data.get("employees") or []:
+            if not isinstance(raw, dict) or raw.get("employeeId") is None:
+                continue
+            raw_acc = raw.get("accountUserId")
+            emps.append(
+                YouliOrgEmployee(
+                    employee_id=int(raw["employeeId"]),
+                    account_user_id=int(raw_acc) if raw_acc is not None else None,
+                    nick_name=str(raw.get("nickName") or ""),
+                    phone=str(raw.get("phone") or ""),
+                    employee_no=str(raw.get("employeeNo") or ""),
+                    status=int(raw.get("status") if raw.get("status") is not None else 1),
+                    is_admin=int(raw.get("isAdmin") or 0),
+                    org_ids=tuple(int(x) for x in (raw.get("orgIds") or []) if x is not None),
+                    admin_org_ids=tuple(
+                        int(x) for x in (raw.get("adminOrgIds") or []) if x is not None
+                    ),
+                )
+            )
+
+        return YouliOrgDirectory(
+            company_id=int(data.get("companyId") or company_id),
+            synced_at_epoch=int(data.get("syncedAtEpoch") or 0),
+            departments=tuple(depts),
+            employees=tuple(emps),
+        )

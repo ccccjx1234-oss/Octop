@@ -202,12 +202,14 @@ def test_lease_disable_revoke_and_restart(setup):
 
 def test_scheduler_disabled_by_default(monkeypatch):
     monkeypatch.delenv("OCTOP_FEISHU_KB_SCHEDULER_ENABLED", raising=False)
+    installed = []
 
     class Cron:
-        def schedule_system_job(self, *args, **kwargs):
-            raise AssertionError("must not schedule")
+        def schedule_system_job(self, job_id, **kwargs):
+            installed.append(job_id)
 
     install_feishu_kb_job(Cron(), server=object())
+    assert installed == ["feishu-shared-kb-scan"]
 
 
 def test_refresh_is_serialized_and_recovery_requires_new_grant(setup):
@@ -298,6 +300,19 @@ async def test_api_owner_and_live_content(setup, monkeypatch):
         assert response.status_code == 200
         response = await client.get(f"/api/feishu-kb/sources/{source_id}/content", headers=headers)
         assert response.json() == {"content": "first"}
+        response = await client.get("/api/feishu-kb/sources", headers=headers)
+        assert response.status_code == 200
+        [item] = response.json()
+        assert item["has_staged_content"] is True
+        assert "digest" not in item and "content" not in item
+        response = await client.put(
+            f"/api/feishu-kb/sources/{source_id}",
+            json={"enabled": False, "interval_seconds": 900},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        response = await client.get("/api/feishu-kb/sources", headers=headers)
+        assert response.json()[0]["has_staged_content"] is False
         owner[0] = 2  # An administrator does not bypass ownership.
         response = await client.get(f"/api/feishu-kb/sources/{source_id}/content", headers=headers)
         assert response.status_code == 400

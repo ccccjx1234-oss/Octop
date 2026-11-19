@@ -217,7 +217,6 @@ async def binding_status(
 
 async def _bind_verified(
     body: YouliBindingBody,
-    request: Request,
     response: Response,
     authorization: str | None,
     user: User,
@@ -231,7 +230,6 @@ async def _bind_verified(
         user_id=user.id,
         mobile=body.mobile.strip(),
         password=body.password,
-        public_base=str(request.base_url).rstrip("/"),
         feishu_claim=claim,
     )
     return service.binding_status(user.id)
@@ -245,13 +243,12 @@ async def _bind_verified(
 )
 async def bind_employee(
     body: YouliBindingBody,
-    request: Request,
     response: Response,
     authorization: str | None = Header(None),
     user: User = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    return await _bind_verified(body, request, response, authorization, user, server)
+    return await _bind_verified(body, response, authorization, user, server)
 
 
 @router.delete(

@@ -7,6 +7,7 @@ import time
 import pytest
 
 from octop.config import OctopConfig
+from octop.infra.db import migrate
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.services import build_shared_services
@@ -147,20 +148,21 @@ def test_business_template_whitelist(services):
     assert [row.published_expert_id for row in repo.list()] == [101]
 
 
-def test_binding_schema_upgrades_from_v27_and_is_idempotent(services):
-    db = services.db
+def test_binding_schema_upgrades_from_workbench_schema_and_is_idempotent(tmp_path, monkeypatch):
+    db = SqlitePool(tmp_path / "octop.db")
+    discover = migrate._discover
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            migrate,
+            "_discover",
+            lambda dialect="sqlite": [item for item in discover(dialect) if item[0] <= 27],
+        )
+        run_migrations(db)
+    # 027 installs the workbench tables without advancing the watermark.
+    assert migrate._current_version(db) == 26
+    assert migrate._table_exists(db, "workbench_tasks")
     with db.transaction() as conn:
-        conn.execute("DROP TABLE feishu_kb_private_index_versions")
-        conn.execute("DROP TABLE feishu_kb_private_index")
-        conn.execute("DROP TABLE feishu_erp_reauth_state")
-        conn.execute("DROP TABLE feishu_erp_reauth_proof")
-        conn.execute("DROP TABLE feishu_kb_source")
-        conn.execute("DROP TABLE feishu_kb_grant")
-        conn.execute("DROP TABLE feishu_kb_state")
-        conn.execute("DROP TABLE youli_identity_binding")
-        conn.execute("DROP TABLE youli_binding_generation")
-        conn.execute("ALTER TABLE threads DROP COLUMN private_knowledge_protected")
-        conn.execute("UPDATE _schema_version SET version = 27")
+        conn.execute("INSERT INTO users(username, role, created_at) VALUES ('old-user', 'user', 0)")
     run_migrations(db)
     run_migrations(db)
     with db.connect() as conn:
@@ -171,5 +173,8 @@ def test_binding_schema_upgrades_from_v27_and_is_idempotent(services):
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'youli_%'"
             ).fetchall()
         }
-    assert version == 34
+        user = conn.execute("SELECT mobile FROM users WHERE username = 'old-user'").fetchone()
+    assert version == 36
     assert {"youli_identity_binding", "youli_binding_generation"} <= names
+    assert "unlinked" in migrate._table_columns(db, "youli_identity_binding")
+    assert user is not None and user["mobile"] is None

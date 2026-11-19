@@ -1,5 +1,9 @@
 import { request } from "../request";
 import type { AgentRuntimeApiFields } from "../../utils/agentRuntimeConfig";
+import type {
+  ResourceScopeExtensions,
+  ScopedResourceVisibilityMode,
+} from "./erpOrg";
 
 export interface PublishedExpert {
   id: string;
@@ -34,7 +38,9 @@ export interface PublishExpertBody {
 
 export type RefreshPublishedExpertBody = PublishExpertBody;
 
-export interface InstallPublishedExpertBody extends AgentRuntimeApiFields {
+export interface InstallPublishedExpertBody
+  extends AgentRuntimeApiFields,
+    ResourceScopeExtensions {
   name: string;
   description?: string;
   providers?: string[];
@@ -62,7 +68,7 @@ export interface InstallPublishedExpertBody extends AgentRuntimeApiFields {
     summary?: { zh?: string; en?: string };
   }[];
   copy_skills?: { agent_id: string; slug: string }[];
-  visibility?: "owner" | "all" | "groups";
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   quick_prompts?: {
     title: { zh?: string; en?: string };

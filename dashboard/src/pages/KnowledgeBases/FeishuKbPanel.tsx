@@ -6,9 +6,11 @@ import {
   Input,
   InputNumber,
   List,
+  Modal,
   Popconfirm,
   Select,
   Space,
+  Spin,
   Switch,
   Typography,
   message,
@@ -36,11 +38,16 @@ function SourceRow({
   busy,
   scheduler,
   run,
+  onViewContent,
 }: {
   source: FeishuSource;
   busy: boolean;
   scheduler: boolean;
-  run: (action: () => Promise<unknown>) => void;
+  run: <T>(
+    action: () => Promise<T>,
+    onSuccess?: (result: T) => string | void,
+  ) => void;
+  onViewContent: (source: FeishuSource) => void;
 }) {
   const { t } = useTranslation();
   const timezone = useServerTimezone();
@@ -61,6 +68,15 @@ function SourceRow({
         <Typography.Text>
           {t("feishuKb.lastStatus", { status: source.status })}
         </Typography.Text>
+        {source.has_staged_content !== undefined && (
+          <Typography.Text type="secondary">
+            {t(
+              source.has_staged_content
+                ? "feishuKb.staged"
+                : "feishuKb.notStaged",
+            )}
+          </Typography.Text>
+        )}
         <Typography.Text>
           {t("feishuKb.nextRun", {
             time: !scheduler
@@ -86,12 +102,14 @@ function SourceRow({
           <Button
             disabled={!valid || busy}
             onClick={() =>
-              run(() =>
-                feishuKbApi.configure(
-                  source.source_id,
-                  !!source.enabled,
-                  interval * 60,
-                ),
+              run(
+                () =>
+                  feishuKbApi.configure(
+                    source.source_id,
+                    !!source.enabled,
+                    interval * 60,
+                  ),
+                () => t("feishuKb.saved", "配置已保存。"),
               )
             }
           >
@@ -102,21 +120,52 @@ function SourceRow({
             checked={!!source.enabled}
             disabled={busy || !valid}
             onChange={(enabled) =>
-              run(() =>
-                feishuKbApi.configure(source.source_id, enabled, interval * 60),
+              run(
+                () =>
+                  feishuKbApi.configure(
+                    source.source_id,
+                    enabled,
+                    interval * 60,
+                  ),
+                () => t("feishuKb.saved", "配置已保存。"),
               )
             }
           />{" "}
           {t("feishuKb.enabled")}
           <Button
             disabled={!source.enabled || busy}
-            onClick={() => run(() => feishuKbApi.sync(source.source_id))}
+            onClick={() =>
+              run(
+                () => feishuKbApi.sync(source.source_id),
+                (res) =>
+                  res?.status === "updated"
+                    ? t(
+                        "feishuKb.syncUpdated",
+                        "同步完成：已抓取最新文档内容（updated）。",
+                      )
+                    : t(
+                        "feishuKb.syncUnchanged",
+                        "同步完成：文档内容暂无变化（unchanged）。",
+                      ),
+              )
+            }
           >
             {t("feishuKb.sync")}
           </Button>
+          <Button
+            disabled={!source.enabled || busy}
+            onClick={() => onViewContent(source)}
+          >
+            {t("feishuKb.viewContent", "查看正文")}
+          </Button>
           <Popconfirm
             title={t("feishuKb.deleteConfirm")}
-            onConfirm={() => run(() => feishuKbApi.remove(source.source_id))}
+            onConfirm={() =>
+              run(
+                () => feishuKbApi.remove(source.source_id),
+                () => t("feishuKb.deleted", "已删除来源。"),
+              )
+            }
           >
             <Button danger disabled={busy}>
               {t("feishuKb.delete")}
@@ -129,13 +178,15 @@ function SourceRow({
             checked={!!source.retrieval_enabled}
             disabled={busy || !source.enabled || !valid}
             onChange={(enabled) =>
-              run(() =>
-                feishuKbApi.configure(
-                  source.source_id,
-                  !!source.enabled,
-                  interval * 60,
-                  enabled,
-                ),
+              run(
+                () =>
+                  feishuKbApi.configure(
+                    source.source_id,
+                    !!source.enabled,
+                    interval * 60,
+                    enabled,
+                  ),
+                () => t("feishuKb.saved", "配置已保存。"),
               )
             }
           />
@@ -149,18 +200,23 @@ function SourceRow({
   );
 }
 
-export default function FeishuKbPanel() {
+export default function FeishuKbPanel({ active }: { active: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [identities, setIdentities] = useState<FeishuIdentity[]>([]);
   const [sources, setSources] = useState<FeishuSource[]>([]);
   const [scheduler, setScheduler] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [sessionChanged, setSessionChanged] = useState(false);
   const [provider, setProvider] = useState<number>();
   const [document, setDocument] = useState("");
+  const [preview, setPreview] = useState<{
+    title: string;
+    content: string;
+  } | null>(null);
   const pending = useRef<Pending | null>(null);
   const mounted = useRef(true);
   const displayedSession = useRef(getAuthToken());
@@ -176,12 +232,14 @@ export default function FeishuKbPanel() {
       setScheduler(status.scheduler_configured);
       setSources(list);
       setLoaded(true);
+      setLoadFailed(false);
     } catch (error) {
       if (mounted.current && session === getAuthToken()) {
         setIdentities([]);
         setSources([]);
         setScheduler(false);
         setLoaded(false);
+        setLoadFailed(true);
       }
       throw error;
     }
@@ -211,7 +269,9 @@ export default function FeishuKbPanel() {
     setSources([]);
     setProvider(undefined);
     setDocument("");
+    setPreview(null);
     setLoaded(false);
+    setLoadFailed(false);
     if (current?.completing) setSessionChanged(true);
     void refresh().catch(fail);
     return true;
@@ -265,11 +325,11 @@ export default function FeishuKbPanel() {
     };
   }, [cancel, refresh, reconcileSession]);
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     if (!reconcileSession()) void refresh().catch(fail);
     const timer = window.setInterval(reconcileSession, 500);
     return () => window.clearInterval(timer);
-  }, [open, refresh, fail, reconcileSession]);
+  }, [active, refresh, fail, reconcileSession]);
   const start = async (id: number) => {
     if (pending.current || busy) return;
     const session = getAuthToken();
@@ -315,11 +375,29 @@ export default function FeishuKbPanel() {
       cancel(current, true);
     }
   };
-  const run = async (action: () => Promise<unknown>) => {
+  useEffect(() => {
+    const availableIds = identities
+      .filter((i) => i.consent === "authorized")
+      .map((i) => i.provider_id);
+    if (
+      availableIds.length === 1 &&
+      (provider === undefined || !availableIds.includes(provider))
+    ) {
+      setProvider(availableIds[0]);
+    } else if (provider !== undefined && !availableIds.includes(provider)) {
+      setProvider(undefined);
+    }
+  }, [identities, provider]);
+  const run = async <T,>(
+    action: () => Promise<T>,
+    onSuccess?: (result: T) => string | void,
+  ) => {
     if (busy) return;
     setBusy(true);
     try {
-      await action();
+      const result = await action();
+      const feedback = onSuccess?.(result);
+      if (feedback && mounted.current) message.success(feedback);
     } catch {
       fail();
     } finally {
@@ -327,12 +405,78 @@ export default function FeishuKbPanel() {
       if (mounted.current) setBusy(false);
     }
   };
+  const viewContent = (source: FeishuSource) => {
+    const session = getAuthToken();
+    void run(async () => {
+      const res = await feishuKbApi.content(source.source_id);
+      if (mounted.current && session === getAuthToken()) {
+        setPreview({
+          title: t("feishuKb.contentTitle", { id: source.document_id }),
+          content: res?.content || "",
+        });
+      }
+    });
+  };
   const available = identities.filter((i) => i.consent === "authorized");
+  const stagedCount = sources.every(
+    (source) => source.has_staged_content !== undefined,
+  )
+    ? sources.filter((source) => source.has_staged_content).length
+    : null;
   return (
     <>
-      <Button onClick={() => setOpen(true)}>{t("feishuKb.title")}</Button>
+      <List
+        header={
+          <Space wrap>
+            {loaded && (
+              <>
+                <Typography.Text strong>
+                  {t("feishuKb.sourceCount", { total: sources.length })}
+                </Typography.Text>
+                {stagedCount !== null && (
+                  <Typography.Text>
+                    {t("feishuKb.stagedCount", { total: stagedCount })}
+                  </Typography.Text>
+                )}
+              </>
+            )}
+            <Button onClick={() => setOpen(true)}>
+              {t("feishuKb.manageSources")}
+            </Button>
+          </Space>
+        }
+        dataSource={sources}
+        locale={{
+          emptyText: loadFailed ? (
+            <Alert
+              type="error"
+              showIcon
+              message={t("feishuKb.failed")}
+              action={
+                <Button size="small" onClick={() => void refresh().catch(fail)}>
+                  {t("common.retry")}
+                </Button>
+              }
+            />
+          ) : loaded ? (
+            t("feishuKb.noSources")
+          ) : (
+            <Spin />
+          ),
+        }}
+        renderItem={(source) => (
+          <SourceRow
+            key={source.source_id}
+            source={source}
+            busy={busy}
+            scheduler={scheduler}
+            run={(action, onSuccess) => void run(action, onSuccess)}
+            onViewContent={viewContent}
+          />
+        )}
+      />
       <Drawer
-        title={t("feishuKb.title")}
+        title={t("feishuKb.manageSources")}
         open={open}
         width={640}
         closable={!finalizing}
@@ -341,6 +485,7 @@ export default function FeishuKbPanel() {
         onClose={() => {
           if (pending.current?.completing) return;
           if (pending.current) cancel(pending.current, false);
+          setPreview(null);
           setOpen(false);
         }}
         destroyOnHidden
@@ -404,7 +549,10 @@ export default function FeishuKbPanel() {
                   <Popconfirm
                     title={t("feishuKb.revokeConfirm")}
                     onConfirm={() =>
-                      void run(() => feishuKbApi.revoke(item.provider_id))
+                      void run(
+                        () => feishuKbApi.revoke(item.provider_id),
+                        () => t("feishuKb.revoked", "已撤销授权。"),
+                      )
                     }
                   >
                     <Button danger disabled={busy}>
@@ -444,29 +592,37 @@ export default function FeishuKbPanel() {
               }
               onClick={() => {
                 if (provider !== undefined)
-                  void run(async () => {
-                    await feishuKbApi.create(provider, document);
-                    setDocument("");
-                  });
+                  void run(
+                    async () => {
+                      await feishuKbApi.create(provider, document);
+                      setDocument("");
+                    },
+                    () =>
+                      t(
+                        "feishuKb.added",
+                        "已添加来源（默认禁用，请开启「启用」后再同步）。",
+                      ),
+                  );
               }}
             >
               {t("feishuKb.add")}
             </Button>
           </Space>
-          <List
-            dataSource={sources}
-            renderItem={(source) => (
-              <SourceRow
-                key={source.source_id}
-                source={source}
-                busy={busy}
-                scheduler={scheduler}
-                run={(action) => void run(action)}
-              />
-            )}
-          />
         </Space>
       </Drawer>
+      <Modal
+        title={preview?.title}
+        open={preview !== null}
+        footer={null}
+        onCancel={() => setPreview(null)}
+        destroyOnHidden
+      >
+        <Typography.Paragraph
+          style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}
+        >
+          {preview?.content || t("feishuKb.contentEmpty", "文档正文为空。")}
+        </Typography.Paragraph>
+      </Modal>
     </>
   );
 }

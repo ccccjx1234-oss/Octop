@@ -133,13 +133,7 @@ class Gateway:
         self._dispatcher = build_default_dispatcher()
         self._slash_meta: SlashRuntimeMeta | None = None
 
-        def thread_access(thread_id: str, user_id: int | None) -> bool:
-            row = self._thread_registry.get_thread(thread_id)
-            return row is not None and (
-                not row.private_knowledge_protected or row.user_id == user_id
-            )
-
-        self._ws_hub = WebSocketHub(thread_access=thread_access)
+        self._ws_hub = WebSocketHub(get_thread=self._thread_registry.get_thread)
         self._cli_hub = CliHub()
         self._steer = SteerCoordinator()
         self._ws_channel: WebSocketChannel | None = None

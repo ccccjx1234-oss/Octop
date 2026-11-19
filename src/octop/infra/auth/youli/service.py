@@ -24,6 +24,7 @@ from octop.infra.auth.youli.client import (
     YouliClientUnavailable,
     YouliIssuedToken,
 )
+from octop.infra.auth.youli.org_sync import ErpOrgSyncService
 from octop.infra.db.repos.youli import YouliSessionRow
 from octop.infra.db.services import SharedServices
 from octop.infra.errors import ErrorCode, OctopError
@@ -295,6 +296,14 @@ class YouliAuthService:
             permissions=list(user_row.permissions),
         )
         self._users.register_cached_user(user)
+        try:
+            await ErpOrgSyncService(self._services, self._cfg).async_refresh_user_membership(
+                user_id=user.id,
+                company_id=issued.company_id,
+                employee_id=issued.employee_id,
+            )
+        except Exception:  # noqa: BLE001 - best-effort org refresh
+            logger.debug("youli org refresh skipped on exchange for user %s", user.id)
         for old_sid in replaced_sids:
             record_sid_revocation_reason(old_sid, REASON_SESSION_REPLACED)
             if self._ws_hub is not None:
@@ -376,39 +385,24 @@ class YouliAuthService:
         return issued
 
     async def bind_employee(
-        self, *, user_id: int, mobile: str, password: str, public_base: str, feishu_claim: Any
+        self, *, user_id: int, mobile: str, password: str, feishu_claim: Any
     ) -> None:
         """Prove the employee account without changing the current Octop login."""
-        if not self._cfg.mdm_base_url:
+        if not self.enabled or not self._cfg.mdm_base_url:
             raise OctopError(
                 ErrorCode.NETWORK_ERROR, "business verification unavailable", status=503
             )
-        started = await self.start(public_base=public_base)
-        loop = asyncio.get_running_loop()
         try:
-            token = await loop.run_in_executor(
-                None, lambda: self._client.password_login(mobile=mobile, password=password)
+            issued = await asyncio.to_thread(
+                self._client.issue_delegation, mobile=mobile, password=password
             )
-            code = await loop.run_in_executor(
-                None,
-                lambda: self._client.issue_code(
-                    request_id=started.request_id, audience=self._cfg.audience, token=token
-                ),
-            )
-            issued = await self._redeem_verified(
-                code=code,
-                state=started.state,
-                request_id=started.request_id,
-                browser_token=started.browser_token,
-            )
+            await self._verify_identity(issued)
         except YouliClientUnavailable as exc:
             raise OctopError(
                 ErrorCode.NETWORK_ERROR, "business verification unavailable", status=503
             ) from exc
         except YouliClientError as exc:
             raise OctopError(ErrorCode.AUTH_FAILED, "business verification failed") from exc
-        finally:
-            self._services.youli_login_request_repo.consume(started.request_id)
         now = int(time.time())
         ttl = int(self._cfg.token_ttl_seconds)
         try:
@@ -430,13 +424,18 @@ class YouliAuthService:
             )
         except ValueError as exc:
             raise OctopError(ErrorCode.SSO_IDENTITY_TAKEN, "business identity conflict") from exc
+        try:
+            await ErpOrgSyncService(self._services, self._cfg).async_refresh_user_membership(
+                user_id=user_id,
+                company_id=issued.company_id,
+                employee_id=issued.employee_id,
+            )
+        except Exception:  # noqa: BLE001 - best-effort org refresh
+            logger.debug("youli org refresh skipped on bind_employee for user %s", user_id)
 
     def binding_status(self, user_id: int) -> dict[str, Any]:
         row = self._services.youli_identity_binding_repo.get(user_id)
-        if row is None:
-            return {"bound": False, "delegation_active": False}
-        stored_session = self._services.youli_session_repo.get(str(row["sid"]))
-        if stored_session is None or stored_session.status == "revoked":
+        if row is None or row["unlinked"]:
             return {"bound": False, "delegation_active": False}
         session = self._services.youli_session_repo.get_active(str(row["sid"]))
         return {
@@ -449,6 +448,9 @@ class YouliAuthService:
     async def unlink_employee(self, user_id: int) -> None:
         provider = self._services.sso_repo.get_by_kind(YOULI_PROVIDER_KIND)
         self._services.youli_identity_binding_repo.unlink(user_id, provider.id if provider else 0)
+        org_repo = getattr(self._services.repos, "erp_org_repo", None)
+        if org_repo is not None:
+            org_repo.unlink_user(user_id)
 
     async def _verify_identity(self, issued: YouliIssuedToken) -> None:
         payload = await asyncio.get_running_loop().run_in_executor(

@@ -89,6 +89,8 @@ def revoke_binding(conn: Any, user_id: int, row: Any) -> None:
         row["had_independent_identity"] == 0 and not unexpected_mapping
     ):
         conn.execute("DELETE FROM youli_identity_binding WHERE user_id = ?", (user_id,))
+    else:
+        conn.execute("UPDATE youli_identity_binding SET unlinked = 1 WHERE user_id = ?", (user_id,))
 
 
 def _is_unique_violation(exc: BaseException) -> bool:
@@ -361,13 +363,17 @@ class YouliSessionRepo:
         user_id, sid = values["user_id"], values["sid"]
         if self._db.dialect == "postgresql":
             conn.execute("SELECT id FROM users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
+        independent_sessions = (
+            "WHERE user_id = ? AND status = 'active' AND sid NOT IN "
+            "(SELECT sid FROM youli_identity_binding WHERE user_id = ? AND unlinked = 0)"
+        )
         rows = conn.execute(
-            "SELECT sid FROM youli_session WHERE user_id = ? AND status = 'active'", (user_id,),
+            f"SELECT sid FROM youli_session {independent_sessions}", (user_id, user_id)
         ).fetchall()
         replaced = [str(row["sid"]) for row in rows]
         conn.execute(
             "UPDATE youli_session SET status = 'revoked', revoked_at = ?, token_blob = NULL "
-            "WHERE user_id = ? AND status = 'active'", (now_ts(), user_id),
+            f"{independent_sessions}", (now_ts(), user_id, user_id),
         )
         conn.execute(
             "INSERT INTO youli_session(sid, user_id, account_user_id, account_username, company_id, "
@@ -449,6 +455,17 @@ class YouliSessionRepo:
                 (row.user_id, row.company_id, row.employee_id, sid, sid),
             ).fetchone()
         return None if invalid else row
+
+    def delegated_sid_for_user(self, user_id: int) -> str | None:
+        with self._db.connect() as conn:
+            binding = conn.execute(
+                "SELECT sid FROM youli_identity_binding WHERE user_id = ? AND unlinked = 0",
+                (user_id,),
+            ).fetchone()
+        if binding is None:
+            return None
+        session = self.get_active(str(binding["sid"]))
+        return session.sid if session is not None and session.user_id == user_id else None
 
     def is_bound_sid(self, sid: str) -> bool:
         with self._db.connect() as conn:
@@ -724,7 +741,7 @@ class YouliIdentityBindingRepo:
                 conn.execute(
                     "INSERT INTO youli_identity_binding(user_id, company_id, employee_id, feishu_subject, sid, "
                     "had_independent_identity) VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(user_id) DO UPDATE SET sid = excluded.sid",
+                    "ON CONFLICT(user_id) DO UPDATE SET sid = excluded.sid, unlinked = 0",
                     (user_id, company_id, employee_id, values["feishu_subject"], values["sid"],
                      int(bool(identity or legacy))),
                 )

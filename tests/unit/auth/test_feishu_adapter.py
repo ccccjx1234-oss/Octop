@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from unittest.mock import patch
 
 import httpx
@@ -303,3 +304,30 @@ async def test_existing_scoped_feishu_identity_cannot_be_replaced(service, monke
     assert "identity_taken" in result.url
     assert users.get_by_sso(row.id, original).id == owner
     assert users.get_by_sso(row.id, new_tenant) is None
+
+
+@pytest.mark.asyncio
+async def test_erp_deployment_requires_existing_account_for_first_feishu_login(service, monkeypatch):
+    row = _feishu_row(service)
+    config = service._services.config
+    services = replace(
+        service._services, config=replace(config, youli=replace(config.youli, enabled=True))
+    )
+    service = SsoService(services, UserManager(services))
+    owner = services.user_repo.create(username="erp-user", password_hash=None, role="user")
+    subject = 'feishu-v1:["feishu","cli_xxx","tenant-a","subject"]'
+    monkeypatch.setattr(FeishuAdapter, "complete_login", lambda *_args, **_kwargs: (subject, {}))
+
+    async def callback(user_id=None):
+        start = service.start_login_for_kind(
+            "feishu", redirect_after=None, public_base="https://octop.example", bind_user_id=user_id
+        )
+        return await service.handle_callback(
+            code="code", state=start["state"], error=None, public_base="https://octop.example"
+        )
+
+    assert "binding_required" in (await callback()).url
+    assert services.user_repo.count() == 1
+    assert "#code=" in (await callback(owner)).url
+    assert "#code=" in (await callback()).url
+    assert services.user_repo.get_by_sso(row.id, subject).id == owner

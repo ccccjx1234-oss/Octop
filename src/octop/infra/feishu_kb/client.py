@@ -35,7 +35,14 @@ class Grant:
     expires_in: int
 
 
-def authorize_url(*, client_id: str, redirect_uri: str, state: str, challenge: str) -> str:
+def authorize_url(
+    *,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    challenge: str,
+    scopes: tuple[str, ...] = ("docx:document:readonly", "offline_access"),
+) -> str:
     query = urlencode(
         {
             "client_id": client_id,
@@ -44,7 +51,7 @@ def authorize_url(*, client_id: str, redirect_uri: str, state: str, challenge: s
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
-            "scope": "docx:document:readonly offline_access",
+            "scope": " ".join(scopes),
         }
     )
     return f"{_ACCOUNTS}/oauth/v3/authorize?{query}"

@@ -49,10 +49,9 @@ remain encrypted at rest because their provenance and concurrent updates cannot
 be established safely here; a separate guarded cleanup is still needed. Local
 unlink does not revoke the upstream credential or an already in-flight request.
 
-A normal Octop access token does not contain a Youli sid. Authentication can
-resolve the owner's current binding, check MDM and attach its sid to the request
-context. A failed verification leaves the Octop login usable without ERP
-access. The in-process MCN connector checks turn user ownership, active session,
+A normal Octop access token does not contain a Youli sid. A Dashboard turn can
+resolve the owner's current delegation locally. The in-process MCN connector
+checks turn user ownership, active session,
 expiry and MDM before returning a bound credential; legacy Youli tools check
 the same properties. Internal HTTP MCP lacks an authenticated turn user and
 therefore does not receive the new bound delegation. Local revocation cannot
@@ -101,10 +100,11 @@ existing upstream `revoke` endpoint: that endpoint identifies an account and
 terminal rather than a particular token, and an asynchronous revoke can cancel
 a concurrent new login or another session. Safe upstream revocation needs an
 upstream token-specific contract or coordinated serialization; until then a
-previously issued token may remain valid upstream until expiration. The Youli
-password login itself uses terminal 10 and may replace an existing upstream
-terminal-10 session even if a later binding check fails; this behavior depends
-on the upstream service and needs confirmation in an isolated test environment.
+previously issued token may remain valid upstream until expiration. ERP binding
+uses the CRM delegation endpoint, which assigns a distinct terminal to each
+attempt. The independent employee login uses terminal 10. Migration 036 records
+explicit unlink for bindings retained as reservations. Credentials revoked by
+MDM leave the binding available for unlink or reauthorization.
 Older MCN connector installations could have saved a copy of an employee token
 in their own encrypted credentials. New session-based installations no longer
 copy it, and tool resolution no longer falls back to that stored snapshot, but
@@ -121,6 +121,14 @@ the sandbox. These checks do not establish production readiness.
 A configured Feishu app must return `tenant_key`; Youli requires its existing
 client, callback, business entry and MDM configuration. No credentials are
 stored in this document.
+
+## Shared directory imports
+
+Open a knowledge base and choose **Connect Feishu**. The base owner can authorize multiple Feishu accounts against an enabled Feishu application, then select a Wiki space, a Wiki subtree, or a Drive folder. The authorization callback remains `/feishu-kb/callback`. Directory browsing requires the app and user grants for Wiki, Drive metadata, and read-only Docx, plus offline access for scheduled refresh. These connections are independent of login identities and the private document-staging grants.
+
+Review displays the documents and the current knowledge-base audience. Confirmation persists the reviewed document IDs and audience before scheduling work. Imported copies use the knowledge base's existing access and search controls. The first version imports Docx as text, skips unsupported entries and Wiki shortcuts, and keeps newly found documents pending unless the owner explicitly allows automatic inclusion. The owner can review again, pause, resume, or disconnect a connection. Disconnect hides that connection's imported copies and schedules their storage and index cleanup.
+
+The shared worker polls eligible jobs every minute and uses a database lease per source. A successful job publishes a bounded snapshot in a single metadata transaction. Transient failures retain the previous snapshot. New databases and existing installations require migration 037. Shared imports are excluded from graph extraction, and moving an imported document into a different knowledge base requires a new source approval in that base. Private document staging continues to use its existing scheduler switch.
 
 ## Private document staging (local implementation)
 
@@ -233,8 +241,6 @@ When pulling or rebasing against upstream Octop, watch these core touchpoints ad
 2. **Core user & SSO classes (`UserRepo`, `UserManager`, `SsoService`)**:
    - Business logic for phone normalization and tenant allowlist checks lives in the isolated module `src/octop/infra/auth/sso/mobile_linking.py`.
    - `UserRepo` (`infra/db/repos/users.py`) only adds `UserRow.mobile`, optional `create(..., mobile=None)`, `get_by_mobile`, and `set_mobile_if_empty`.
-   - `UserManager.resolve_or_create_sso_user` (`infra/users/manager.py`) only adds optional `allow_mobile_link: bool = False` (default off).
-   - `SsoService` (`infra/auth/sso/service.py`) only stores `auto_link_mobile` / `allowed_tenants` in `extra` and passes `allow_mobile_link` inside `handle_callback`.
-   - When resolving merge conflicts with upstream, keep `mobile_linking.py` intact and re-apply only those small opt-in hooks.
+   - The existing `auto_link_mobile` / `allowed_tenants` settings control duplicate detection. A match requires login to the original account and an explicit binding. ERP-enabled installations require explicit binding for any new Feishu identity.
 3. **Feishu OAuth PKCE endpoint alignment**:
    - `FeishuAdapter.authorize_url`, `feishu_kb/client.py`, `FeishuKbPanel.tsx`, and `AccountSecurityDrawer.tsx` use `https://accounts.feishu.cn/oauth/v3/authorize` to match `https://accounts.feishu.cn/oauth/v3/token` strict PKCE validation (real Feishu rejects `/open-apis/authen/v1/authorize` + `/oauth/v3/token` with `PKCE code challenge failed.`).

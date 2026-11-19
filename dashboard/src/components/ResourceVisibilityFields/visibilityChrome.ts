@@ -1,4 +1,4 @@
-import type { ResourceVisibilityMode } from "../../api/modules/userGroups";
+import type { ScopedResourceVisibilityMode } from "../../api/modules/erpOrg";
 
 /** Loaded sharing context for the who-can-use picker. */
 export type AudienceSnapshot = {
@@ -27,7 +27,7 @@ export function needsGroupCatalog(counts: {
 
 export function showGroupVisibilityOption(
   audience: AudienceSnapshot,
-  visibility: ResourceVisibilityMode,
+  visibility: ScopedResourceVisibilityMode,
 ): boolean {
   if (visibility === "groups") return true;
   if (audience.groupCount === 0) return false;
@@ -39,9 +39,15 @@ export function showGroupVisibilityOption(
 /** Hide the whole picker when one account is the only audience, or when a single remaining choice would be "everyone". */
 export function isVisibilityControlVisible(
   audience: AudienceSnapshot,
-  opts: { allowOwner: boolean; visibility: ResourceVisibilityMode },
+  opts: {
+    allowOwner: boolean;
+    visibility: ScopedResourceVisibilityMode;
+    enableErpScope?: boolean;
+    isAdmin?: boolean;
+  },
 ): boolean {
   if (audience.status !== "ready") return false;
+  if (opts.enableErpScope && opts.isAdmin) return true;
   if (audience.userCount === 1) return false;
   const groups = showGroupVisibilityOption(audience, opts.visibility);
   const choices = (opts.allowOwner ? 1 : 0) + 1 + (groups ? 1 : 0);

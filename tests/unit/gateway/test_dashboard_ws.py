@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from octop_gateway.models import ChannelSubject, ImageContent, InboundMessage, TextContent
 
+from octop.infra.db.repos.threads import ThreadRow
 from octop.infra.gateway.media.tool_media import enrich_media_block_preview
 from octop.infra.gateway.ws import WS_CHANNEL_ID, WebSocketChannel, WebSocketHub
 
@@ -78,6 +80,54 @@ async def test_ws_hub_push() -> None:
     hub.unregister("c1")
     await hub.push("c1", {"type": "token", "content": "miss"})
     assert frames == [{"type": "token", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_ws_hub_checks_current_thread_once_per_frame_across_subscribers() -> None:
+    row = ThreadRow(
+        id=1,
+        thread_id="thread",
+        agent_id="agent",
+        user_id=1,
+        channel_type="dashboard",
+        session_key="agent:dashboard:1:dm",
+        title=None,
+        last_active=0,
+        created_at=0,
+        contributed=True,
+    )
+    lookups = []
+
+    def get_thread(thread_id: str) -> ThreadRow:
+        lookups.append(thread_id)
+        return row
+
+    hub = WebSocketHub(get_thread=get_thread)
+    received: dict[str, list[str]] = {}
+
+    def capture(connection_id: str):
+        async def send(frame: dict[str, Any]) -> None:
+            received.setdefault(connection_id, []).append(frame["content"])
+
+        return send
+
+    for connection_id, user_id, agent_id in [
+        ("owner", 1, "agent"),
+        ("reader", 2, "agent"),
+        ("other-agent", 1, "different"),
+        ("bridge", 2, None),
+    ]:
+        hub.register(connection_id, capture(connection_id), user_id=user_id, agent_id=agent_id)
+        hub.subscribe("thread", connection_id)
+
+    await hub.push_to_thread("thread", _token("shared", "thread"))
+    row = replace(row, contributed=False, private_knowledge_protected=True)
+    await hub.push_to_thread("thread", _token("private", "thread"))
+    assert lookups == ["thread", "thread"]
+    assert received == {"owner": ["shared", "private"], "reader": ["shared"], "bridge": ["shared"]}
+
+    await hub.push("reader", _token("private catch-up", "thread"))
+    assert received["reader"] == ["shared"]
 
 
 @pytest.mark.asyncio

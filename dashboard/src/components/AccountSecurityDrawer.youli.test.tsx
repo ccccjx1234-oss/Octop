@@ -72,6 +72,14 @@ afterEach(() => {
 });
 
 describe("ERP binding verification", () => {
+  it("keeps unlink available when delegation is inactive", async () => {
+    mocks.binding.mockResolvedValue({ bound: true, delegation_active: false });
+    render(<YouliBindingCard providerId={1} />);
+
+    expect(await screen.findByText("account.youliExpired")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "account.youliUnlink" })).toBeEnabled();
+  });
+
   it("starts only once on a synchronous double click", async () => {
     const request = deferred();
     mocks.start.mockReturnValue(request.promise);

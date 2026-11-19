@@ -401,12 +401,17 @@ class SsoService:
                     subject=subject,
                     claims=claims,
                     allow_mobile_link=allow_mobile_link,
+                    allow_create=not (
+                        provider.kind == "feishu" and self._services.config.youli.enabled
+                    ),
                 )
         except OctopError as exc:
             if exc.code is ErrorCode.USER_DISABLED:
                 return self._error_redirect(frontend, "disabled")
             if exc.code is ErrorCode.SSO_IDENTITY_TAKEN:
                 return self._error_redirect(frontend, "identity_taken")
+            if exc.code is ErrorCode.SSO_BINDING_REQUIRED:
+                return self._error_redirect(frontend, "binding_required")
             return self._error_redirect(frontend, "generic")
         except Exception:
             return self._error_redirect(frontend, "generic")

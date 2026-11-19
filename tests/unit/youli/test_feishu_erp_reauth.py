@@ -264,7 +264,6 @@ async def test_claim_to_commit_fence(ctx, monkeypatch, mutation):
             user_id=uid,
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
             feishu_claim=claim,
         )
     assert not service.binding_status(uid)["bound"]

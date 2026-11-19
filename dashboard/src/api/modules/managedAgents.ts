@@ -1,6 +1,9 @@
 import { request } from "../request";
 import type { OctopAgent } from "../../context/AgentContext";
-import type { ResourceVisibilityMode } from "./userGroups";
+import type {
+  ResourceScopeExtensions,
+  ScopedResourceVisibilityMode,
+} from "./erpOrg";
 
 export interface ManagedWorkspaceFile {
   name: string;
@@ -28,7 +31,7 @@ export function managedWorkspaceDir(home: string, agentId: string): string {
   return `${base}${sep}${agentId}`;
 }
 
-export interface ManagedAgentCreate {
+export interface ManagedAgentCreate extends ResourceScopeExtensions {
   name: string;
   runner: string;
   workspace_dir: string;
@@ -38,7 +41,7 @@ export interface ManagedAgentCreate {
   color?: string;
   icon_url?: string;
   enable_trajectory?: boolean;
-  visibility?: ResourceVisibilityMode;
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   quick_prompts?: ManagedQuickPrompt[];
   file_overrides?: ManagedWorkspaceFile[];

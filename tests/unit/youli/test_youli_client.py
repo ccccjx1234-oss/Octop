@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from octop.config import YouliConfig
+from octop.infra.auth.youli import http_pool
 from octop.infra.auth.youli.client import YouliClient, YouliClientError
 
 
@@ -32,7 +33,7 @@ def _patch_http(monkeypatch, *, status_code: int, body: object, calls: list):
             calls.append((url, kwargs))
             return _FakeResponse(status_code, body)
 
-    monkeypatch.setattr("octop.infra.auth.youli.client.httpx.Client", _FakeClient)
+    monkeypatch.setattr(http_pool.httpx, "Client", _FakeClient)
 
 
 def _client() -> YouliClient:
@@ -65,6 +66,42 @@ def test_verify_sends_the_token_as_raw_body(monkeypatch) -> None:
     assert kwargs["content"] == b"header.payload.signature"
     assert "json" not in kwargs
     assert kwargs["headers"]["Content-Type"] == "application/json"
+
+
+@pytest.mark.parametrize("terminal", [10, 1_000_000_001])
+def test_issue_delegation_uses_only_the_isolated_endpoint(monkeypatch, terminal) -> None:
+    calls: list = []
+    _patch_http(
+        monkeypatch,
+        status_code=200,
+        body={
+            "code": 200,
+            "data": {
+                "token": "test-delegation",
+                "userId": 11,
+                "companyId": 21,
+                "employeeId": 31,
+                "terminal": terminal,
+            },
+        },
+        calls=calls,
+    )
+    if terminal == 10:
+        with pytest.raises(YouliClientError, match="invalid delegation terminal"):
+            _client().issue_delegation(mobile="test-user", password="test-password")
+    else:
+        result = _client().issue_delegation(mobile="test-user", password="test-password")
+        assert (result.company_id, result.employee_id, result.terminal) == (21, 31, terminal)
+    assert len(calls) == 1
+    url, kwargs = calls[0]
+    assert url == "https://youli.example/api/crm/sso/youli/delegation"
+    assert kwargs["json"] == {
+        "clientId": "octop",
+        "clientSecret": "secret",
+        "audience": "octop",
+        "mobile": "test-user",
+        "password": "test-password",
+    }
 
 
 def test_verify_fails_closed_when_identity_is_incomplete(monkeypatch) -> None:

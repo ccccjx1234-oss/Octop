@@ -251,55 +251,6 @@ class UserManager:
 
     # ----- auth -----
 
-    def _link_existing_by_mobile(
-        self,
-        *,
-        mobile: str,
-        provider_id: int,
-        subject: str,
-        email: str | None,
-    ) -> User | None:
-        """Link a new SSO identity to an existing user matched by normalized mobile."""
-        matched = self._services.user_repo.get_by_mobile(mobile)
-        if matched is None:
-            return None
-        if matched.disabled:
-            raise OctopError(ErrorCode.USER_DISABLED, "user is disabled")
-        existing_for_provider = [
-            item
-            for item in self._services.user_repo.list_sso_identities(matched.id)
-            if item.provider_id == provider_id
-        ]
-        if existing_for_provider and existing_for_provider[0].subject != subject:
-            raise OctopError(
-                ErrorCode.SSO_IDENTITY_TAKEN,
-                "this identity is already linked to another user",
-            )
-        try:
-            self._services.user_repo.upsert_sso_identity(
-                matched.id, provider_id=provider_id, subject=subject
-            )
-        except Exception as exc:
-            if _is_unique_violation(exc):
-                owner = self._services.user_repo.get_by_sso(provider_id, subject)
-                if owner is not None and owner.id != matched.id:
-                    raise OctopError(
-                        ErrorCode.SSO_IDENTITY_TAKEN,
-                        "this identity is already linked to another user",
-                    ) from exc
-            raise
-        if email is not None:
-            email_owner = self._services.user_repo.get_by_email(email)
-            if email_owner is not None and email_owner.id != matched.id:
-                email = None
-        self._services.user_repo.update_sso_profile(matched.id, email=email)
-        self._services.audit_repo.write(
-            actor=matched.username,
-            action="user.sso_auto_link",
-            target=matched.username,
-        )
-        return self._cached_or_row_user(matched)
-
     async def resolve_or_create_sso_user(
         self,
         *,
@@ -307,6 +258,7 @@ class UserManager:
         subject: str,
         claims: dict[str, Any],
         allow_mobile_link: bool = False,
+        allow_create: bool = True,
         role_assignment: tuple[str, str | None, builtins.list[str], builtins.list[tuple[str, str]]]
         | None = None,
     ) -> User:
@@ -318,17 +270,11 @@ class UserManager:
             display_name = _claim_display_name(claims)
             mobile = normalize_mobile(claims.get("mobile")) if allow_mobile_link else None
 
-            if row is None and mobile is not None:
-                linked = self._link_existing_by_mobile(
-                    mobile=mobile,
-                    provider_id=provider_id,
-                    subject=subject,
-                    email=email,
-                )
-                if linked is not None:
-                    return linked
-
             if row is None:
+                if not allow_create or (
+                    mobile is not None and self._services.user_repo.get_by_mobile(mobile) is not None
+                ):
+                    raise OctopError(ErrorCode.SSO_BINDING_REQUIRED, "authenticated binding required")
                 from octop.infra.db.repos.user_roles import seeded_user_role_assignment
 
                 assignment = role_assignment or seeded_user_role_assignment(self._services.db)
@@ -372,15 +318,10 @@ class UserManager:
                         row = self._services.user_repo.get_by_sso(provider_id, subject)
                         if row is not None:
                             break
-                        if mobile is not None:
-                            linked = self._link_existing_by_mobile(
-                                mobile=mobile,
-                                provider_id=provider_id,
-                                subject=subject,
-                                email=email,
-                            )
-                            if linked is not None:
-                                return linked
+                        if mobile is not None and self._services.user_repo.get_by_mobile(mobile):
+                            raise OctopError(
+                                ErrorCode.SSO_BINDING_REQUIRED, "authenticated binding required"
+                            ) from exc
                         if attempt == 2:
                             raise
                         await asyncio.sleep(0.01 * (attempt + 1))

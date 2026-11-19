@@ -15,9 +15,14 @@ from octop.api.common.agent import (
     assert_agent_owner,
 )
 from octop.api.common.agent_runtime import AgentRuntimeFields, persisted_agent_settings
+from octop.api.common.scope import (
+    SCOPE_FIELD_NAMES,
+    ResourceScopeFields,
+    validate_body_scope,
+)
 from octop.api.common.validators import assert_user_backend_root_dirs
 from octop.api.common.workspace import require_agent_workspace
-from octop.api.deps import current_user, get_server
+from octop.api.deps import current_user, get_server, require_admin
 from octop.infra.agents.experts.avatar import (
     agent_avatar_api_path,
     delete_workspace_avatar,
@@ -46,7 +51,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class AgentCreateBody(AgentRuntimeFields):
+class AgentCreateBody(AgentRuntimeFields, ResourceScopeFields):
     name: str
     description: str | None = None
     persona_mbti: str | None = None
@@ -56,8 +61,6 @@ class AgentCreateBody(AgentRuntimeFields):
     icon: str | None = None
     template_name: str | None = None
     is_shared: bool = False
-    visibility: Literal["owner", "all", "groups"] | None = None
-    group_ids: list[str] | None = None
     color: str | None = None
     icon_name: str | None = None
     icon_url: str | None = None
@@ -65,9 +68,10 @@ class AgentCreateBody(AgentRuntimeFields):
     skill_package_ids: list[str] | None = None
     knowledge_base_ids: list[str] | None = None
     mcp_servers: list[str] | None = None
+    sync_knowledge_bases: bool = False
 
 
-class AgentPatchBody(AgentRuntimeFields):
+class AgentPatchBody(AgentRuntimeFields, ResourceScopeFields):
     name: str | None = None
     description: str | None = None
     persona_mbti: str | None = None
@@ -77,8 +81,6 @@ class AgentPatchBody(AgentRuntimeFields):
     icon: str | None = None
     template_name: str | None = None
     is_shared: bool | None = None
-    visibility: Literal["owner", "all", "groups"] | None = None
-    group_ids: list[str] | None = None
     color: str | None = None
     icon_name: str | None = None
     icon_url: str | None = None
@@ -86,6 +88,11 @@ class AgentPatchBody(AgentRuntimeFields):
     skill_package_ids: list[str] | None = None
     knowledge_base_ids: list[str] | None = None
     mcp_servers: list[str] | None = None
+    sync_knowledge_bases: bool = False
+
+
+class ScopeKbCheckBody(ResourceScopeFields):
+    knowledge_base_ids: list[str] | None = None
 
 
 def _attach_viewer_stats(
@@ -252,7 +259,7 @@ def _row_dict(
     repos = getattr(getattr(server, "services", None), "repos", None)
     if repos is not None:
         payload.update(
-            GroupAccess(repos).visibility(
+            GroupAccess(repos).scope_payload(
                 RESOURCE_EXPERT,
                 row.agent_id,
                 shared=payload["is_shared"],
@@ -390,16 +397,30 @@ async def create_agent(
         knowledge_base_ids=knowledge_ids,
         mcp_servers=mcp_servers,
     )
-    if body.visibility is not None:
-        GroupAccess(server.services.repos).validate_visibility(body.visibility, body.group_ids)
+    access = GroupAccess(server.services.repos)
+    scope_dict, normalized_scope = validate_body_scope(
+        access,
+        body,
+        user=user,
+        fallback_visibility="all" if body.is_shared else "owner",
+    )
     row = await server.app_runtime.agent_registry.create(spec)
-    if body.visibility is not None:
+    if body.visibility is not None or scope_dict is not None:
         row = await apply_agent_audience(
             server,
             row.agent_id,
             visibility=body.visibility,
             group_ids=body.group_ids,
             shared=body.is_shared,
+            scope=scope_dict,
+            actor_user_id=user.id,
+            actor_is_admin=bool(user.is_admin),
+        )
+    if body.sync_knowledge_bases and user.is_admin and normalized_scope is not None:
+        access.sync_agent_kb_grants(
+            kb_ids=id_list_from_row(row, "knowledge_base_ids"),
+            scope=normalized_scope,
+            actor_user_id=user.id,
         )
     return _row_dict(
         row,
@@ -472,20 +493,27 @@ async def patch_agent(
             policy_repo=server.services.user_policy_repo,
             paths=server.paths,
         )
+    access = GroupAccess(server.services.repos)
+    scope_dict, normalized_scope = validate_body_scope(
+        access,
+        body,
+        user=user,
+        fallback_visibility="all" if body.is_shared else ("all" if row.is_shared else "owner"),
+    )
+    excluded_keys = {
+        "config",
+        "is_shared",
+        "welcome_message",
+        "skill_package_ids",
+        "knowledge_base_ids",
+        "mcp_servers",
+        "sync_knowledge_bases",
+        *SCOPE_FIELD_NAMES,
+    }
     updates = {
         key: value
         for key, value in body.model_dump(exclude_unset=True).items()
-        if key
-        not in {
-            "config",
-            "is_shared",
-            "visibility",
-            "group_ids",
-            "welcome_message",
-            "skill_package_ids",
-            "knowledge_base_ids",
-            "mcp_servers",
-        }
+        if key not in excluded_keys
     }
     if body.config is not None:
         updates["config_json"] = json.dumps(body.config)
@@ -512,13 +540,42 @@ async def patch_agent(
         refreshed = server.app_runtime.agent_registry.get_row(agent_id)
         if refreshed is not None:
             row = refreshed
-    if body.visibility is not None or body.is_shared is not None:
+    if body.visibility is not None or body.is_shared is not None or scope_dict is not None:
         row = await apply_agent_audience(
             server,
             agent_id,
             visibility=body.visibility,
             group_ids=body.group_ids,
             shared=body.is_shared,
+            scope=scope_dict,
+            actor_user_id=user.id,
+            actor_is_admin=bool(user.is_admin),
+        )
+    if body.sync_knowledge_bases and user.is_admin:
+        effective_scope = normalized_scope
+        if effective_scope is None:
+            cur_payload = access.scope_payload(
+                RESOURCE_EXPERT,
+                row.agent_id,
+                shared=bool(int(getattr(row, "is_shared", 0) or 0)),
+            )
+            effective_scope = access.validate_scope(
+                visibility=cur_payload["visibility"],
+                group_ids=cur_payload["group_ids"],
+                company_id=cur_payload["company_id"],
+                department_grants=cur_payload["department_grants"],
+                user_ids=cur_payload["user_ids"],
+                erp_employees=cur_payload["erp_employees"],
+                deny_department_grants=cur_payload["deny_department_grants"],
+                deny_user_ids=cur_payload["deny_user_ids"],
+                deny_erp_employees=cur_payload["deny_erp_employees"],
+                actor_user_id=user.id,
+                actor_is_admin=True,
+            )
+        access.sync_agent_kb_grants(
+            kb_ids=id_list_from_row(row, "knowledge_base_ids"),
+            scope=effective_scope,
+            actor_user_id=user.id,
         )
     return _row_dict(
         row,
@@ -680,3 +737,36 @@ async def agent_status(
         ],
         "memory_maintenance": _memory_maintenance_status(server, agent_id),
     }
+
+
+@router.post("/{agent_id}/scope-kb-check", summary="Check KB grant gaps for an expert scope")
+async def check_agent_scope_kb_gaps(
+    agent_id: str,
+    body: ScopeKbCheckBody,
+    user: Any = Depends(require_admin()),
+    server: Any = Depends(get_server),
+) -> dict[str, Any]:
+    assert server.app_runtime is not None
+    row = server.app_runtime.agent_registry.get_row(agent_id)
+    if row is None:
+        raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
+    kb_ids = (
+        list(body.knowledge_base_ids)
+        if body.knowledge_base_ids is not None
+        else id_list_from_row(row, "knowledge_base_ids")
+    )
+    access = GroupAccess(server.services.repos)
+    normalized = access.validate_scope(
+        visibility=body.visibility or ("all" if row.is_shared else "owner"),
+        group_ids=body.group_ids,
+        company_id=body.company_id,
+        department_grants=body.department_grants,
+        user_ids=body.user_ids,
+        erp_employees=body.erp_employees,
+        deny_department_grants=body.deny_department_grants,
+        deny_user_ids=body.deny_user_ids,
+        deny_erp_employees=body.deny_erp_employees,
+        actor_user_id=user.id,
+        actor_is_admin=True,
+    )
+    return {"gaps": access.check_agent_kb_gaps(kb_ids=kb_ids, scope=normalized)}

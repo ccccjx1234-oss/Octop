@@ -7,6 +7,7 @@ import time
 import pytest
 
 from octop.config import OctopConfig, YouliConfig
+from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.auth.tokens import decode_token
 from octop.infra.auth.youli.client import (
     YouliClient,
@@ -314,13 +315,20 @@ def _feishu_user(service, username: str) -> int:
 
 
 def _mock_password(monkeypatch):
-    def password_login(self, *, mobile, password):
+    def issue_delegation(self, *, mobile, password):
         if (mobile, password) != ("123456", "correct"):
             raise YouliClientError("wrong credentials")
-        return "password-token"
+        return YouliIssuedToken(
+            token="delegated-token",
+            username="alice",
+            user_id=11,
+            company_id=21,
+            employee_id=31,
+            industry=7,
+            terminal=1_000_000_001,
+        )
 
-    monkeypatch.setattr(YouliClient, "password_login", password_login)
-    monkeypatch.setattr(YouliClient, "issue_code", lambda self, **kwargs: "code")
+    monkeypatch.setattr(YouliClient, "issue_delegation", issue_delegation)
 
 
 def _claim(service, user_id, generation=None):
@@ -496,7 +504,6 @@ async def test_bind_requires_both_accounts_and_unlink_erases_delegation(service,
             feishu_claim=_claim(service, user_id),
             mobile="123456",
             password="wrong",
-            public_base="https://octop.example",
         )
     assert not service.binding_status(user_id)["bound"]
     await service.bind_employee(
@@ -504,14 +511,15 @@ async def test_bind_requires_both_accounts_and_unlink_erases_delegation(service,
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     binding = service._services.youli_identity_binding_repo.get(user_id)
     sid = binding["sid"]
     assert all(i.kind != "youli" for i in service._services.user_repo.list_sso_identities(user_id))
     assert service._services.user_repo.get(user_id).sso_provider_id != service.ensure_provider()
     assert service.binding_status(user_id)["delegation_active"]
-    assert service._services.youli_session_repo.get(sid).token_blob != b"business-token"
+    stored_token = service._services.youli_session_repo.get(sid).token_blob
+    assert stored_token is not None and stored_token != b"delegated-token"
+    assert decrypt_secret(service._services.secret_repo, stored_token) == "delegated-token"
     assert not service.binding_status(other_id)["bound"]
     await service.unlink_employee(other_id)
     assert service._services.youli_session_repo.get_active(sid) is not None
@@ -532,7 +540,6 @@ async def test_bind_rejects_other_owner_and_mismatched_reauthorization(service, 
         feishu_claim=_claim(service, one),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     sid = service._services.youli_identity_binding_repo.get(one)["sid"]
     with pytest.raises(OctopError):
@@ -541,12 +548,11 @@ async def test_bind_rejects_other_owner_and_mismatched_reauthorization(service, 
             feishu_claim=_claim(service, two),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert service._services.youli_session_repo.get_active(sid) is not None
     monkeypatch.setattr(
         YouliClient,
-        "redeem",
+        "issue_delegation",
         lambda self, **kwargs: YouliIssuedToken(
             token="different",
             username="alice",
@@ -554,7 +560,7 @@ async def test_bind_rejects_other_owner_and_mismatched_reauthorization(service, 
             company_id=22,
             employee_id=31,
             industry=7,
-            terminal=10,
+            terminal=1_000_000_002,
         ),
     )
     monkeypatch.setattr(YouliClient, "verify", lambda self, token: _verified(22))
@@ -564,7 +570,6 @@ async def test_bind_rejects_other_owner_and_mismatched_reauthorization(service, 
             feishu_claim=_claim(service, one),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert service._services.youli_session_repo.get_active(sid) is not None
 
@@ -592,7 +597,6 @@ async def test_binding_fails_closed_on_mdm_rejection(service, monkeypatch, chang
             feishu_claim=_claim(service, user_id),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert not service.binding_status(user_id)["bound"]
     assert not service._services.youli_session_repo.list_active_for_user(user_id)
@@ -616,7 +620,6 @@ async def test_unlink_invalidates_inflight_binding(service, monkeypatch):
             feishu_claim=_claim(service, user_id),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert not service.binding_status(user_id)["bound"]
 
@@ -692,7 +695,6 @@ async def test_changed_feishu_identity_never_activates_old_delegation(service, m
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     sid = service._services.youli_identity_binding_repo.get(user_id)["sid"]
     provider = service._services.sso_repo.get_by_kind("feishu")
@@ -706,12 +708,11 @@ async def test_changed_feishu_identity_never_activates_old_delegation(service, m
             feishu_claim=_claim(service, user_id),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
 
 
 @pytest.mark.asyncio
-async def test_regular_access_token_resolves_only_live_verified_delegation(service, monkeypatch):
+async def test_regular_access_token_never_calls_mdm_or_attaches_delegation(service, monkeypatch):
     from types import SimpleNamespace
 
     from octop.api.deps import async_resolve_user_from_token
@@ -727,7 +728,6 @@ async def test_regular_access_token_resolves_only_live_verified_delegation(servi
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     sid = service._services.youli_identity_binding_repo.get(user_id)["sid"]
     server = SimpleNamespace(services=service._services, user_manager=service._users)
@@ -738,18 +738,17 @@ async def test_regular_access_token_resolves_only_live_verified_delegation(servi
         role="user",
         purpose=PURPOSE_ACCESS,
     )
-    assert (await async_resolve_user_from_token(server, jwt_token)).id == user_id
-    assert current_youli_sid() == sid
+    def unexpected_verify(self, token):
+        pytest.fail("ordinary Octop authentication must not verify an ERP delegation")
 
-    def unavailable(self, token):
-        raise YouliClientUnavailable("unavailable")
-
-    monkeypatch.setattr(YouliClient, "verify", unavailable)
+    monkeypatch.setattr(YouliClient, "verify", unexpected_verify)
     assert (await async_resolve_user_from_token(server, jwt_token)).id == user_id
     assert current_youli_sid() is None
+    assert service._services.youli_session_repo.delegated_sid_for_user(user_id) == sid
     await service.unlink_employee(user_id)
     assert (await async_resolve_user_from_token(server, jwt_token)).id == user_id
     assert current_youli_sid() is None
+    assert service._services.youli_session_repo.delegated_sid_for_user(user_id) is None
 
 
 @pytest.mark.asyncio
@@ -762,7 +761,6 @@ async def test_reauthorization_replaces_session_and_expiration_disables_it(servi
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     first = service._services.youli_identity_binding_repo.get(user_id)["sid"]
     await service.bind_employee(
@@ -770,7 +768,6 @@ async def test_reauthorization_replaces_session_and_expiration_disables_it(servi
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     second = service._services.youli_identity_binding_repo.get(user_id)["sid"]
     assert first != second
@@ -782,6 +779,15 @@ async def test_reauthorization_replaces_session_and_expiration_disables_it(servi
             (int(time.time()) - 1, second),
         )
     assert service.binding_status(user_id)["delegation_active"] is False
+    service._services.youli_session_repo.revoke(second)
+    assert service.binding_status(user_id) == {
+        "bound": True,
+        "company_id": 21,
+        "employee_id": 31,
+        "delegation_active": False,
+    }
+    await service.unlink_employee(user_id)
+    assert service.binding_status(user_id)["bound"] is False
 
 
 @pytest.mark.asyncio
@@ -801,7 +807,6 @@ async def test_cross_user_sid_claim_is_rejected(service, monkeypatch):
         feishu_claim=_claim(service, owner),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     sid = service._services.youli_identity_binding_repo.get(owner)["sid"]
     token = sign_token(
@@ -821,6 +826,12 @@ async def test_cross_user_sid_claim_is_rejected(service, monkeypatch):
 async def test_existing_youli_login_identity_cannot_be_claimed(service, monkeypatch):
     existing = await _active_session(service, monkeypatch)
     _mock_password(monkeypatch)
+
+    def unexpected_login(*args, **kwargs):
+        pytest.fail("the binding flow must not use the independent ERP login terminal")
+
+    monkeypatch.setattr(YouliClient, "password_login", unexpected_login)
+    monkeypatch.setattr(YouliClient, "redeem", unexpected_login)
     claimant = _feishu_user(service, "claimant")
     with pytest.raises(OctopError) as caught:
         await service.bind_employee(
@@ -828,7 +839,6 @@ async def test_existing_youli_login_identity_cannot_be_claimed(service, monkeypa
             feishu_claim=_claim(service, claimant),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert caught.value.code is ErrorCode.SSO_IDENTITY_TAKEN
     assert service._services.youli_session_repo.get_active(existing.session.sid) is not None
@@ -845,7 +855,6 @@ async def test_feishu_unlink_permanently_revokes_delegation(service, monkeypatch
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     sid = service._services.youli_identity_binding_repo.get(user_id)["sid"]
     provider = service._services.sso_repo.get_by_kind("feishu")
@@ -877,7 +886,6 @@ async def test_unlink_quarantines_legacy_mapping_and_matching_sessions(
         feishu_claim=_claim(service, user_id),
         mobile="123456",
         password="correct",
-        public_base="https://octop.example",
     )
     with service._services.db.transaction() as conn:
         conn.execute("UPDATE youli_identity_binding SET had_independent_identity = NULL WHERE user_id = ?", (user_id,))
@@ -948,13 +956,12 @@ async def test_feishu_unlink_invalidates_inflight_binding(service, monkeypatch):
             feishu_claim=_claim(service, user_id),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert not service.binding_status(user_id)["bound"]
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_mdm_rejects_before_password_login(service, monkeypatch):
+async def test_unconfigured_mdm_rejects_before_issuing_delegation(service, monkeypatch):
     _mock_client(monkeypatch)
     _mock_password(monkeypatch)
     user_id = _feishu_user(service, "employee")
@@ -962,14 +969,13 @@ async def test_unconfigured_mdm_rejects_before_password_login(service, monkeypat
 
     service._cfg = replace(service._cfg, mdm_base_url="")
     called = []
-    monkeypatch.setattr(YouliClient, "password_login", lambda *args, **kwargs: called.append(True))
+    monkeypatch.setattr(YouliClient, "issue_delegation", lambda *args, **kwargs: called.append(True))
     with pytest.raises(OctopError):
         await service.bind_employee(
             user_id=user_id,
             feishu_claim=_claim(service, user_id),
             mobile="123456",
             password="correct",
-            public_base="https://octop.example",
         )
     assert called == []
     assert not service.binding_status(user_id)["bound"]
@@ -987,6 +993,7 @@ async def test_independent_login_survives_binding_and_unlink(service, monkeypatc
     assert service._services.youli_identity_binding_repo.get(user_id)["had_independent_identity"] == 1
     result = await _active_session(service, monkeypatch)
     assert result.user.id == user_id
+    assert service.binding_status(user_id)["delegation_active"] is True
     await service.unlink_employee(user_id)
     assert service._services.youli_session_repo.get_active(result.session.sid) is not None
     assert service._services.user_repo.get_by_sso(provider, "youli:21:31").id == user_id

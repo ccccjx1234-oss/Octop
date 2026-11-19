@@ -1,4 +1,4 @@
-"""Mobile normalization and tenant-scoped auto-linking helpers for SSO."""
+"""Mobile normalization and tenant-scoped duplicate-account detection for SSO."""
 
 from __future__ import annotations
 
@@ -70,11 +70,10 @@ def should_auto_link_mobile(
     extra: Mapping[str, Any] | None,
     subject: str,
 ) -> bool:
-    """Return True only when mobile auto-linking is explicitly enabled and safe.
+    """Enable duplicate-account detection for the configured providers.
 
     Feishu requires a non-empty ``allowed_tenants`` list matching the subject's
-    ``tenant_key`` so external/personal tenants cannot take over accounts.
-    DingTalk enterprise apps are already scoped to one enterprise by ``client_id``.
+    ``tenant_key``. A phone match only prompts for authenticated binding.
     """
     if not extra or not bool(extra.get("auto_link_mobile")):
         return False

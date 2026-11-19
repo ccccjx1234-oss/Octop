@@ -181,32 +181,7 @@ async def async_resolve_user_from_token(server: OctopServer, token: str) -> User
     set_current_youli_sid(None)
     payload = _decode(server, token)
     await _async_require_active_session(server, payload)
-    user = _resolve_user_from_payload(server, payload)
-    if not payload.get("sid"):
-        assert server.services is not None
-        binding = server.services.youli_identity_binding_repo.get(user.id)
-        if binding is not None:
-            session = server.services.youli_session_repo.get_active(str(binding["sid"]))
-            if session is not None and session.user_id == user.id:
-                from octop.infra.auth.youli.service import revalidate_business_session
-
-                try:
-                    await asyncio.to_thread(
-                        revalidate_business_session,
-                        services=server.services,
-                        cfg=server.services.config.youli,
-                        session=session,
-                        strict=True,
-                    )
-                except OctopError:
-                    pass  # Login remains usable; unavailable delegation is never activated.
-                else:
-                    # A concurrent unlink or replacement must win over verification.
-                    latest = server.services.youli_identity_binding_repo.get(user.id)
-                    active = server.services.youli_session_repo.get_active(session.sid)
-                    if latest is not None and latest["sid"] == session.sid and active is not None:
-                        set_current_youli_sid(session.sid)
-    return user
+    return _resolve_user_from_payload(server, payload)
 
 
 def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> str | None:

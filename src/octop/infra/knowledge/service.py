@@ -328,6 +328,8 @@ class KnowledgeService:
         document = self._repo.get_document(doc_id)
         if document is None or document.kb_id != kb_id:
             raise LookupError("knowledge document not found")
+        if getattr(document, "feishu_source_id", None):
+            raise PermissionError("imported Feishu documents must be edited at the source")
         if document.is_dir:
             raise LookupError("knowledge document not found")
         if document.content_type not in _TEXT_CONTENT_TYPES:
@@ -514,6 +516,10 @@ class KnowledgeService:
                 "the target folder already has an item with this name",
             )
         files = [row for row in self._repo.list_subtree(document) if not row.is_dir]
+        if any(getattr(row, "feishu_source_id", None) for row in files):
+            raise PermissionError(
+                "Feishu imports require approval in the destination knowledge base"
+            )
         if any(row.status == "processing" for row in files):
             raise OctopError(
                 ErrorCode.KNOWLEDGE_MOVE_BUSY,
@@ -694,7 +700,9 @@ class KnowledgeService:
         return [
             document.id
             for document in self._repo.list_documents(kb_id)
-            if document.status == "ready" and not document.is_dir
+            if document.status == "ready"
+            and not document.is_dir
+            and not getattr(document, "feishu_source_id", None)
         ]
 
     def delete_base(self, kb_id: str, *, actor_user_id: int, is_admin: bool = False) -> None:

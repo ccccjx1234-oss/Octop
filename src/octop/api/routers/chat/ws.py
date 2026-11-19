@@ -112,14 +112,9 @@ async def dashboard_chat_ws(
     connection_id = uuid.uuid4().hex
     await websocket.accept()
 
-    async def send_frame(frame: dict[str, Any]) -> None:
+    async def send_socket_frame(frame: dict[str, Any]) -> None:
         if websocket.application_state != WebSocketState.CONNECTED:
             return
-        frame_thread_id = frame.get("thread_id")
-        if isinstance(frame_thread_id, str) and frame_thread_id:
-            row = gateway.thread_registry.get_thread(frame_thread_id)
-            if not _ws_thread_visible(row, agent_id, user.id):
-                return
         if frame.get("type") == "session_revoked":
             with contextlib.suppress(Exception):
                 await websocket.close(code=4001, reason="auth:session_replaced")
@@ -128,7 +123,10 @@ async def dashboard_chat_ws(
             json.dumps(frame, ensure_ascii=False, default=json_chunk_default),
         )
 
-    hub.register(connection_id, send_frame, user_id=user.id, sid=sid)
+    hub.register(connection_id, send_socket_frame, user_id=user.id, sid=sid, agent_id=agent_id)
+
+    async def send_frame(frame: dict[str, Any]) -> None:
+        await hub.push(connection_id, frame)
 
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
@@ -147,6 +145,14 @@ async def dashboard_chat_ws(
             if msg_type == "ping":
                 await send_frame({"type": "pong"})
                 continue
+
+            try:
+                assert_agent_access(server, agent_id, user)
+            except OctopError as exc:
+                await send_frame(_prepare_error_frame(exc))
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=4403, reason=str(exc.code.value))
+                break
 
             if msg_type == "subscribe":
                 thread_id = str(payload.get("thread_id") or "").strip()
@@ -341,6 +347,11 @@ async def dashboard_chat_ws(
                 await send_frame({"type": "done"})
                 continue
 
+            delegated_sid = None
+            if not sid and server.services.config.youli.enabled:
+                delegated_sid = await asyncio.to_thread(
+                    server.services.youli_session_repo.delegated_sid_for_user, user.id
+                )
             inbound = build_dashboard_inbound(
                 agent_id=agent_id,
                 user_id=user.id,
@@ -348,6 +359,7 @@ async def dashboard_chat_ws(
                 turn=turn,
                 ws_connection_id=connection_id,
                 user_is_admin=bool(getattr(user, "is_admin", False)),
+                delegated_sid=delegated_sid,
             )
             from octop.infra.knowledge.private_authority import dashboard_authority  # noqa: PLC0415
 
@@ -544,6 +556,7 @@ async def _bridge_chat_ws(
             if msg_type == "ping":
                 await send_frame({"type": "pong"})
                 continue
+
             if msg_type == "subscribe":
                 thread_id = str(payload.get("thread_id") or "").strip()
                 last_thread_id = thread_id or last_thread_id

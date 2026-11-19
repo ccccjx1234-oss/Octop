@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   configure: vi.fn(),
   sync: vi.fn(),
+  content: vi.fn(),
   remove: vi.fn(),
   revoke: vi.fn(),
   token: vi.fn(),
@@ -28,11 +29,16 @@ vi.mock("../../hooks/useServerTimezone", () => ({
   useServerTimezone: () => "UTC",
 }));
 vi.mock("react-i18next", () => {
-  const t = (key: string, values?: { time?: string; status?: string }) =>
+  const t = (
+    key: string,
+    values?: { time?: string; status?: string; total?: number },
+  ) =>
     values?.time
       ? `${key}: ${values.time}`
       : values?.status
       ? `${key}: ${values.status}`
+      : values?.total !== undefined
+      ? `${key}: ${values.total}`
       : key;
   return { useTranslation: () => ({ t }) };
 });
@@ -70,8 +76,10 @@ const send = (
     );
   });
 async function setup() {
-  render(<FeishuKbPanel />);
-  fireEvent.click(screen.getByRole("button", { name: "feishuKb.title" }));
+  render(<FeishuKbPanel active />);
+  fireEvent.click(
+    screen.getByRole("button", { name: "feishuKb.manageSources" }),
+  );
   await screen.findByRole("button", { name: "feishuKb.authorize" });
 }
 beforeEach(() => {
@@ -100,7 +108,8 @@ beforeEach(() => {
   });
   mocks.remove.mockResolvedValue({});
   mocks.revoke.mockResolvedValue({});
-  mocks.sync.mockResolvedValue({});
+  mocks.sync.mockResolvedValue({ status: "unchanged" });
+  mocks.content.mockResolvedValue({ content: "live body" });
   mocks.configure.mockResolvedValue({});
   mocks.create.mockResolvedValue({});
 });
@@ -314,4 +323,39 @@ it("requires a separate opt-in for semantic retrieval", async () => {
   await waitFor(() =>
     expect(mocks.configure).toHaveBeenCalledWith("s1", true, 900, true),
   );
+});
+
+it("auto-selects sole authorized provider and previews synced content", async () => {
+  await setup();
+  fireEvent.change(
+    screen.getByRole("textbox", { name: "feishuKb.documentId" }),
+    { target: { value: "doc-auto" } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "feishuKb.add" }));
+  await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(1, "doc-auto"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "feishuKb.viewContent" }),
+  );
+  await waitFor(() => expect(mocks.content).toHaveBeenCalledWith("s1"));
+  expect(await screen.findByText("live body")).toBeInTheDocument();
+});
+
+it("counts only sources with currently staged content", async () => {
+  mocks.sources.mockResolvedValue([
+    { ...source, status: "updated", has_staged_content: true },
+    {
+      ...source,
+      source_id: "s2",
+      document_id: "doc2",
+      enabled: false,
+      status: "unchanged",
+      has_staged_content: false,
+    },
+  ]);
+  render(<FeishuKbPanel active />);
+  expect(await screen.findByText("feishuKb.sourceCount: 2")).toBeVisible();
+  expect(screen.getByText("feishuKb.stagedCount: 1")).toBeVisible();
+  expect(screen.getByText("doc1")).toBeVisible();
+  expect(screen.getByText("doc2")).toBeVisible();
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
