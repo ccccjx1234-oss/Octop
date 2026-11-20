@@ -6,6 +6,7 @@ stays isolated from HuiHuo ERP admission and binding rules.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import time
@@ -13,10 +14,12 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 from urllib.parse import urlencode
 
+from octop.infra.auth.sso.mobile_linking import extract_feishu_tenant, parse_allowed_tenants
 from octop.infra.auth.sso.providers.feishu import mask_mobile, normalize_cn_mobile
 from octop.infra.auth.youli.client import YouliClientError, YouliClientUnavailable
 from octop.infra.auth.youli.service import YouliAuthService
 from octop.infra.db.repos.sso import SsoLoginStateRow, SsoPendingBindRow, SsoProviderRow
+from octop.infra.db.repos.users import UserRow
 from octop.infra.db.services import SharedServices
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
@@ -27,6 +30,19 @@ _PENDING_BIND_TTL_SECONDS = 600
 logger = logging.getLogger(__name__)
 
 _R = TypeVar("_R")
+
+
+def _extract_legacy_feishu_subject(subject: str) -> str | None:
+    """Return the bare legacy Feishu ID carried inside a ``feishu-v1:...`` subject."""
+    if not subject.startswith("feishu-v1:"):
+        return None
+    try:
+        parts = json.loads(subject.removeprefix("feishu-v1:"))
+    except ValueError:
+        return None
+    if isinstance(parts, list) and len(parts) == 4 and isinstance(parts[3], str) and parts[3]:
+        return parts[3]
+    return None
 
 
 class FeishuErpGate:
@@ -59,8 +75,20 @@ class FeishuErpGate:
         identities = self._services.user_repo.list_sso_identities(owner.id)
         return len(identities) == 1 and identities[0].provider_id == provider_id
 
-    def _ensure_bindable(self, *, erp_user_id: int, provider_id: int, subject: str) -> None:
+    def _find_feishu_owner(self, provider_id: int, subject: str) -> tuple[UserRow | None, bool]:
+        """Look up by scoped ``feishu-v1:...`` subject first, then fall back to legacy bare ID."""
         owner = self._services.user_repo.get_by_sso(provider_id, subject)
+        if owner is not None:
+            return owner, False
+        legacy_raw = _extract_legacy_feishu_subject(subject)
+        if legacy_raw is not None:
+            legacy_owner = self._services.user_repo.get_by_sso(provider_id, legacy_raw)
+            if legacy_owner is not None:
+                return legacy_owner, True
+        return None, False
+
+    def _ensure_bindable(self, *, erp_user_id: int, provider_id: int, subject: str) -> None:
+        owner, _ = self._find_feishu_owner(provider_id, subject)
         if owner is None or owner.id == erp_user_id:
             return
         if not self._is_reclaimable_feishu_orphan(owner.id, provider_id):
@@ -78,7 +106,7 @@ class FeishuErpGate:
         claims: dict[str, Any],
     ) -> User:
         """Bind a Feishu identity to an ERP user, reclaiming pure legacy Feishu shells only."""
-        owner = self._services.user_repo.get_by_sso(provider_id, subject)
+        owner, _ = self._find_feishu_owner(provider_id, subject)
         if owner is not None and owner.id != erp_user_id:
             if self._is_reclaimable_feishu_orphan(owner.id, provider_id):
                 self._services.user_repo.remove_sso_identity(owner.id, provider_id=provider_id)
@@ -148,7 +176,7 @@ class FeishuErpGate:
         mobile_masked = mask_mobile(mobile)
         youli_svc = self.youli_service()
 
-        existing = self._services.user_repo.get_by_sso(provider.id, subject)
+        existing, is_legacy = self._find_feishu_owner(provider.id, subject)
         if existing is not None:
             if existing.disabled:
                 return error_redirect(frontend, "disabled")
@@ -183,6 +211,10 @@ class FeishuErpGate:
                             make_redirect=make_redirect,
                         )
                     if lookup.status in {"ok", "ok_no_token"} and erp_user is not None:
+                        if is_legacy and erp_user.id == existing.id:
+                            self._services.user_repo.upsert_sso_identity(
+                                existing.id, provider_id=provider.id, subject=subject
+                            )
                         return issue_login_redirect(
                             state=state,
                             user_id=erp_user.id,
@@ -201,12 +233,25 @@ class FeishuErpGate:
                         make_redirect=make_redirect,
                     )
             if existing.role == "admin" and existing.password_hash is not None:
-                return issue_login_redirect(
-                    state=state,
-                    user_id=existing.id,
-                    redirect_after=login_state.redirect_after,
-                    frontend=frontend,
-                )
+                if not is_legacy:
+                    return issue_login_redirect(
+                        state=state,
+                        user_id=existing.id,
+                        redirect_after=login_state.redirect_after,
+                        frontend=frontend,
+                    )
+                tenant = extract_feishu_tenant(subject)
+                allowed = parse_allowed_tenants((provider.extra or {}).get("allowed_tenants"))
+                if tenant and tenant in allowed:
+                    self._services.user_repo.upsert_sso_identity(
+                        existing.id, provider_id=provider.id, subject=subject
+                    )
+                    return issue_login_redirect(
+                        state=state,
+                        user_id=existing.id,
+                        redirect_after=login_state.redirect_after,
+                        frontend=frontend,
+                    )
 
         if not mobile:
             return self._create_pending_bind_redirect(

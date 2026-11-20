@@ -366,9 +366,11 @@ class SsoService:
 
         if not subject:
             return self._error_redirect(frontend, "invalid_token")
+        youli_enabled = bool(getattr(self._services.config.youli, "enabled", False))
         if provider.kind == "feishu":
-            # Legacy subjects carry no tenant or app provenance. Only their already
-            # authenticated owner may reconcile them by explicitly binding again.
+            # Legacy subjects carry no tenant or app provenance. Allow seamless
+            # upgrade only when guarded by the ERP gate or an explicit tenant
+            # allowlist; otherwise require the already authenticated owner to rebind.
             try:
                 import json
 
@@ -377,12 +379,18 @@ class SsoService:
                     raise ValueError("invalid Feishu subject")
                 legacy = self._services.user_repo.get_by_sso(provider.id, parts[3])
                 if legacy is not None and login_state.user_id != legacy.id:
-                    error = (
-                        "legacy_feishu_recovery"
-                        if login_state.user_id is None
-                        else "identity_taken"
-                    )
-                    return self._error_redirect(frontend, error)
+                    if login_state.user_id is not None:
+                        return self._error_redirect(frontend, "identity_taken")
+                    if not youli_enabled:
+                        allowed = parse_allowed_tenants(
+                            (provider.extra or {}).get("allowed_tenants")
+                        )
+                        if isinstance(parts[2], str) and parts[2].strip() in allowed:
+                            self._services.user_repo.upsert_sso_identity(
+                                legacy.id, provider_id=provider.id, subject=subject
+                            )
+                        else:
+                            return self._error_redirect(frontend, "legacy_feishu_recovery")
                 if login_state.user_id is not None:
                     existing = [
                         i
@@ -393,11 +401,7 @@ class SsoService:
                         return self._error_redirect(frontend, "identity_taken")
             except (ValueError, TypeError, IndexError):
                 return self._error_redirect(frontend, "invalid_token")
-        if (
-            login_state.user_id is None
-            and provider.kind == "feishu"
-            and bool(getattr(self._services.config.youli, "enabled", False))
-        ):
+        if login_state.user_id is None and provider.kind == "feishu" and youli_enabled:
             return await self._feishu_gate().handle_callback(
                 provider=provider,
                 subject=subject,

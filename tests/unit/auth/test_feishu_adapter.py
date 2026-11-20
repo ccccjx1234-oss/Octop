@@ -368,3 +368,135 @@ async def test_erp_deployment_requires_existing_account_for_first_feishu_login(s
     assert "#code=" in (await callback(owner)).url
     assert "#code=" in (await callback()).url
     assert services.user_repo.get_by_sso(row.id, subject).id == owner
+
+
+@pytest.mark.asyncio
+async def test_legacy_feishu_identity_auto_upgrades_for_allowed_tenant(service, monkeypatch):
+    secret = encrypt_secret(service._services.secret_repo, "app-secret")
+    row = service._services.sso_repo.upsert_by_kind(
+        "feishu",
+        enabled=True,
+        display_name="Feishu",
+        issuer="",
+        client_id="cli_xxx",
+        client_secret_enc=secret,
+        scopes="",
+        dashboard_origin=None,
+        extra={"region": "feishu", "allowed_tenants": ["tenant-a"]},
+    )
+    users = service._services.user_repo
+    owner = users.create(username="owner", password_hash=None, role="user")
+    users.upsert_sso_identity(owner, provider_id=row.id, subject="old-union")
+
+    untrusted_subject = 'feishu-v1:["feishu","cli_xxx","tenant-b","old-union"]'
+    monkeypatch.setattr(
+        FeishuAdapter, "complete_login", lambda *args, **kwargs: (untrusted_subject, {})
+    )
+    start = service.start_login_for_kind(
+        "feishu", redirect_after=None, public_base="https://octop.example"
+    )
+    blocked = await service.handle_callback(
+        code="code", state=start["state"], error=None, public_base="https://octop.example"
+    )
+    assert "legacy_feishu_recovery" in blocked.url
+    assert users.get_by_sso(row.id, "old-union").id == owner
+
+    trusted_subject = 'feishu-v1:["feishu","cli_xxx","tenant-a","old-union"]'
+    monkeypatch.setattr(
+        FeishuAdapter, "complete_login", lambda *args, **kwargs: (trusted_subject, {})
+    )
+    start = service.start_login_for_kind(
+        "feishu", redirect_after=None, public_base="https://octop.example"
+    )
+    allowed = await service.handle_callback(
+        code="code", state=start["state"], error=None, public_base="https://octop.example"
+    )
+    assert "#code=" in allowed.url
+    assert users.get_by_sso(row.id, trusted_subject).id == owner
+    assert users.get_by_sso(row.id, "old-union") is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_feishu_identity_auto_upgrades_through_erp_gate(service, monkeypatch):
+    from types import SimpleNamespace
+    from octop.infra.auth.youli.service import YouliAuthService
+
+    row = _feishu_row(service)
+    config = service._services.config
+    services = replace(
+        service._services, config=replace(config, youli=replace(config.youli, enabled=True))
+    )
+    youli_provider = services.sso_repo.upsert_by_kind(
+        "youli",
+        enabled=True,
+        display_name="Youli ERP",
+        issuer="https://erp.example",
+        client_id="erp",
+        client_secret_enc=None,
+        scopes="",
+        dashboard_origin=None,
+        extra={},
+    )
+    erp_service = SsoService(services, UserManager(services))
+    owner_id = services.user_repo.create(username="erp-emp", password_hash=None, role="user")
+    services.user_repo.upsert_sso_identity(owner_id, provider_id=youli_provider.id, subject="youli:1:100")
+    services.user_repo.upsert_sso_identity(owner_id, provider_id=row.id, subject="old-union")
+
+    subject = 'feishu-v1:["feishu","cli_xxx","tenant-a","old-union"]'
+    monkeypatch.setattr(FeishuAdapter, "complete_login", lambda *_args, **_kwargs: (subject, {}))
+
+    async def fake_resolve_by_employee(self, *, user_id, company_id, employee_id):
+        assert user_id == owner_id
+        assert (company_id, employee_id) == (1, 100)
+        return SimpleNamespace(status="ok", reason=""), SimpleNamespace(id=owner_id), "sid-1"
+
+    monkeypatch.setattr(YouliAuthService, "resolve_feishu_erp_by_employee", fake_resolve_by_employee)
+
+    start = erp_service.start_login_for_kind(
+        "feishu", redirect_after=None, public_base="https://octop.example"
+    )
+    result = await erp_service.handle_callback(
+        code="code", state=start["state"], error=None, public_base="https://octop.example"
+    )
+    assert "#code=" in result.url
+    assert services.user_repo.get_by_sso(row.id, subject).id == owner_id
+    assert services.user_repo.get_by_sso(row.id, "old-union") is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_feishu_orphan_reclaimed_through_erp_gate_by_phone(service, monkeypatch):
+    from types import SimpleNamespace
+    from octop.infra.auth.youli.service import YouliAuthService
+
+    row = _feishu_row(service)
+    config = service._services.config
+    services = replace(
+        service._services, config=replace(config, youli=replace(config.youli, enabled=True))
+    )
+    erp_service = SsoService(services, UserManager(services))
+    orphan_id = services.user_repo.create(username="feishu-shell", password_hash=None, role="user")
+    services.user_repo.upsert_sso_identity(orphan_id, provider_id=row.id, subject="old-union")
+    erp_user_id = services.user_repo.create(username="erp-real", password_hash=None, role="user")
+
+    subject = 'feishu-v1:["feishu","cli_xxx","tenant-a","old-union"]'
+    monkeypatch.setattr(
+        FeishuAdapter,
+        "complete_login",
+        lambda *_args, **_kwargs: (subject, {"mobile": "13800138000"}),
+    )
+
+    async def fake_resolve_by_phone(self, *, phone):
+        assert phone == "13800138000"
+        return SimpleNamespace(status="ok", reason=""), SimpleNamespace(id=erp_user_id), "sid-2"
+
+    monkeypatch.setattr(YouliAuthService, "resolve_feishu_erp_by_phone", fake_resolve_by_phone)
+
+    start = erp_service.start_login_for_kind(
+        "feishu", redirect_after=None, public_base="https://octop.example"
+    )
+    result = await erp_service.handle_callback(
+        code="code", state=start["state"], error=None, public_base="https://octop.example"
+    )
+    assert "#code=" in result.url
+    assert services.user_repo.get_by_sso(row.id, subject).id == erp_user_id
+    assert services.user_repo.get_by_sso(row.id, "old-union") is None
