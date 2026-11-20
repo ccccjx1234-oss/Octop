@@ -86,7 +86,12 @@ def build_document_graph(
     """Extract one indexed document's chunks and replace its part of the graph."""
     store = open_knowledge_graph(services, kb_id)
     document = services.knowledge_repo.get_document(doc_id)
-    if document is None or document.kb_id != kb_id or document.is_dir:
+    if (
+        document is None
+        or document.kb_id != kb_id
+        or document.is_dir
+        or getattr(document, "feishu_source_id", None)
+    ):
         store.delete_document(doc_id)
         return
     store.mark_document(doc_id, STATUS_PROCESSING)

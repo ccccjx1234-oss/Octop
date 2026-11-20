@@ -84,13 +84,23 @@ import {
 } from "./agentBackendForm";
 import AgentBackendFields from "./AgentBackendFields";
 import { ResourceVisibilityFormItem } from "../../../components/ResourceVisibilityFields";
-import type { ResourceVisibilityMode } from "../../../api/modules/userGroups";
+import {
+  buildScopeRequestPayload,
+  emptyScopeSelection,
+  erpOrgApi,
+  hasScopeAllowTarget,
+  scopeSelectionFromPayload,
+  type ResourceScopeExtensions,
+  type ResourceScopeSelection,
+  type ScopedResourceVisibilityMode,
+} from "../../../api/modules/erpOrg";
+import { useUserRole } from "../../../hooks/useUserRole";
 import ExpertComposerDefaultsFields from "./ExpertComposerDefaultsFields";
 import SkillCatalogDrawer from "./SkillCatalogDrawer";
 import SubagentCatalogDrawer from "./SubagentCatalogDrawer";
 import styles from "../index.module.less";
 
-interface AgentDetail extends AgentRuntimeApiFields {
+interface AgentDetail extends AgentRuntimeApiFields, ResourceScopeExtensions {
   id: string;
   name: string;
   description: string | null;
@@ -100,7 +110,7 @@ interface AgentDetail extends AgentRuntimeApiFields {
   compaction?: AgentCompactionFormValues | null;
   welcome_message?: string | null;
   is_shared?: boolean;
-  visibility?: ResourceVisibilityMode | null;
+  visibility?: ScopedResourceVisibilityMode | null;
   group_ids?: string[];
   knowledge_base_ids?: string[];
   mcp_servers?: string[];
@@ -227,6 +237,7 @@ function EditAgentDrawerBody({
 }: EditAgentDrawerBodyProps) {
   const { t } = useTranslation();
   const { modal, message } = App.useApp();
+  const isAdmin = useUserRole() === "admin";
   const { refresh } = useAgent();
   const skillDisplayName = useSkillDisplayName();
   const [workspaceDrawerOpen, setWorkspaceDrawerOpen] = useState(false);
@@ -248,8 +259,10 @@ function EditAgentDrawerBody({
   const [filesLoading, setFilesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [expertVisibility, setExpertVisibility] =
-    useState<ResourceVisibilityMode>(agent.is_shared ? "all" : "owner");
+    useState<ScopedResourceVisibilityMode>(agent.is_shared ? "all" : "owner");
   const [expertGroupIds, setExpertGroupIds] = useState<string[]>([]);
+  const [expertScope, setExpertScope] =
+    useState<ResourceScopeSelection>(emptyScopeSelection);
   const [fileModalOpen, setFileModalOpen] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
   const [listRenameOpen, setListRenameOpen] = useState(false);
@@ -328,18 +341,23 @@ function EditAgentDrawerBody({
             : [],
           mcp_servers: Array.isArray(ag.mcp_servers) ? ag.mcp_servers : [],
         });
-        const nextVisibility: ResourceVisibilityMode =
+        const nextVisibility: ScopedResourceVisibilityMode =
           ag.visibility === "groups" ||
           ag.visibility === "all" ||
-          ag.visibility === "owner"
+          ag.visibility === "owner" ||
+          ag.visibility === "company" ||
+          ag.visibility === "scoped"
             ? ag.visibility
             : ag.is_shared
             ? "all"
             : "owner";
         setExpertVisibility(nextVisibility);
         setExpertGroupIds(
-          nextVisibility === "groups" ? ag.group_ids ?? [] : [],
+          nextVisibility === "groups" || nextVisibility === "scoped"
+            ? ag.group_ids ?? []
+            : [],
         );
+        setExpertScope(scopeSelectionFromPayload(ag));
         setLoading(false);
 
         if (isAgentChatReady(agent.state)) {
@@ -409,6 +427,17 @@ function EditAgentDrawerBody({
     setSaving(true);
     try {
       const values = await form.validateFields();
+      if (expertVisibility === "groups" && expertGroupIds.length === 0) {
+        message.error(t("resourceVisibility.needGroup"));
+        return;
+      }
+      if (
+        expertVisibility === "scoped" &&
+        !hasScopeAllowTarget(expertVisibility, expertGroupIds, expertScope)
+      ) {
+        message.error(t("resourceVisibility.needScopeTarget"));
+        return;
+      }
       const nextColor = isCuratedPalette(colorPalette)
         ? expertPaletteColor(colorPalette)
         : colorPalette;
@@ -460,14 +489,57 @@ function EditAgentDrawerBody({
       }
 
       const stored = form.getFieldsValue(true) as EditFormValues;
+      const scopePayload = buildScopeRequestPayload({
+        visibility: expertVisibility,
+        groupIds: expertGroupIds,
+        scope: expertScope,
+        isAdmin,
+      });
+      let syncKnowledgeBases = false;
+      const kbIds =
+        agent.kind === "managed" ? [] : stored.knowledge_base_ids ?? [];
+      if (
+        isAdmin &&
+        !remote &&
+        agent.kind !== "managed" &&
+        expertVisibility !== "owner" &&
+        kbIds.length > 0
+      ) {
+        try {
+          const { gaps } = await erpOrgApi.checkAgentScopeKbGaps(
+            agent.agent_id,
+            {
+              ...scopePayload,
+              knowledge_base_ids: kbIds,
+            },
+          );
+          if (gaps.length > 0) {
+            const kbListText = gaps.map((g) => g.name).join("、");
+            syncKnowledgeBases = await new Promise<boolean>((resolve) => {
+              modal.confirm({
+                title: t("experts.kbSyncConfirmTitle"),
+                content: t("experts.kbSyncConfirmBody", {
+                  kbs: kbListText,
+                }),
+                okText: t("experts.kbSyncConfirmOk"),
+                cancelText: t("experts.kbSyncConfirmCancel"),
+                onOk: () => resolve(true),
+                onCancel: () => resolve(false),
+              });
+            });
+          }
+        } catch {
+          // Transient gap-check error should not block saving the expert.
+        }
+      }
       await request(`/agents/${agent.agent_id}`, {
         method: "PATCH",
         body: JSON.stringify({
           name: values.name,
           description: values.description || null,
           is_shared: expertVisibility !== "owner",
-          visibility: expertVisibility,
-          group_ids: expertVisibility === "groups" ? expertGroupIds : [],
+          ...scopePayload,
+          ...(syncKnowledgeBases ? { sync_knowledge_bases: true } : {}),
           ...(agent.kind === "managed"
             ? {}
             : {
@@ -526,11 +598,14 @@ function EditAgentDrawerBody({
     remote,
     colorPalette,
     expertGroupIds,
+    expertScope,
     expertVisibility,
     form,
     iconUrl,
+    isAdmin,
     loading,
     message,
+    modal,
     onClose,
     onSaved,
     saving,
@@ -878,11 +953,17 @@ function EditAgentDrawerBody({
                 allowOwner
                 visibility={expertVisibility}
                 groupIds={expertGroupIds}
+                enableErpScope={!remote}
+                isAdmin={isAdmin}
+                scope={expertScope}
+                onScopeChange={setExpertScope}
                 extra={t("experts.visibilityHint")}
                 onChange={(next) => {
                   setExpertVisibility(next.visibility);
                   setExpertGroupIds(
-                    next.visibility === "groups" ? next.groupIds : [],
+                    next.visibility === "groups" || next.visibility === "scoped"
+                      ? next.groupIds
+                      : [],
                   );
                 }}
               />

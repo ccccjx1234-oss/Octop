@@ -69,6 +69,7 @@ class UserRow:
     role_name: str | None = None
     avatar_icon: str | None = None
     last_login_at: int | None = None
+    mobile: str | None = None
 
     @classmethod
     def from_row(cls, r: DbRow) -> UserRow:
@@ -102,6 +103,7 @@ class UserRow:
             last_login_at=(
                 int(r["last_login_at"]) if "last_login_at" in keys and r["last_login_at"] else None
             ),
+            mobile=r["mobile"] if "mobile" in keys else None,
         )
 
 
@@ -122,15 +124,19 @@ class UserRepo:
         sso_subject: str | None = None,
         permissions: builtins.list[str] | None = None,
         role_name: str | None = None,
+        mobile: str | None = None,
     ) -> int:
         perms_json = json.dumps(permissions or [], ensure_ascii=False)
         with self._db.transaction() as conn:
+            from octop.infra.db.repos.youli import lock_login_mapping
+
+            lock_login_mapping(conn, self._db.dialect, sso_provider_id, sso_subject, None)
             return insert_returning_id(
                 conn,
                 "INSERT INTO users(username, password_hash, role, display_name, locale, "
                 "email, sso_provider_id, sso_subject, disabled, created_at, permissions, "
-                "role_name) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                "role_name, mobile) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
                 (
                     username,
                     password_hash,
@@ -143,6 +149,7 @@ class UserRepo:
                     now_ts(),
                     perms_json,
                     role_name,
+                    mobile,
                 ),
             )
 
@@ -226,6 +233,41 @@ class UserRepo:
         """Link ``(provider_id, subject)`` to ``user_id`` (one subject per provider)."""
         ts = now_ts()
         with self._db.transaction() as conn:
+            from octop.infra.db.repos.youli import lock_login_mapping, lock_user_binding
+
+            provider = conn.execute(
+                "SELECT kind FROM sso_providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+            if provider is not None and provider["kind"] == "feishu":
+                lock_user_binding(conn, self._db.dialect, user_id)
+            else:
+                lock_login_mapping(conn, self._db.dialect, provider_id, subject, user_id)
+                if self._db.dialect == "postgresql":
+                    conn.execute(
+                        "SELECT id FROM users WHERE id = ? FOR UPDATE", (user_id,)
+                    ).fetchone()
+            previous = conn.execute(
+                "SELECT i.subject, p.kind FROM user_sso_identities i JOIN sso_providers p "
+                "ON p.id=i.provider_id WHERE i.user_id = ? AND i.provider_id = ?",
+                (user_id, provider_id),
+            ).fetchone()
+            if previous is not None and previous["subject"] != subject:
+                if previous["kind"] == "youli":
+                    raise ValueError("unlink the existing employee identity before reassignment")
+                if previous["kind"] == "feishu":
+                    conn.execute(
+                        "INSERT INTO youli_binding_generation(user_id,generation) VALUES (?,1) "
+                        "ON CONFLICT(user_id) DO UPDATE SET generation=youli_binding_generation.generation+1",
+                        (user_id,),
+                    )
+                conn.execute(
+                    "DELETE FROM feishu_kb_state WHERE user_id = ? AND provider_id = ?",
+                    (user_id, provider_id),
+                )
+                conn.execute(
+                    "DELETE FROM feishu_kb_grant WHERE user_id = ? AND provider_id = ?",
+                    (user_id, provider_id),
+                )
             conn.execute(
                 "INSERT INTO user_sso_identities(user_id, provider_id, subject, created_at) "
                 "VALUES (?, ?, ?, ?) "
@@ -240,6 +282,41 @@ class UserRepo:
     def remove_sso_identity(self, user_id: int, *, provider_id: int) -> bool:
         """Remove one provider link. Returns True when a row was deleted."""
         with self._db.transaction() as conn:
+            from octop.infra.db.repos.youli import lock_employee, lock_user_binding, revoke_binding
+
+            provider = conn.execute(
+                "SELECT kind FROM sso_providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+            if provider is not None and provider["kind"] == "youli":
+                identity = conn.execute(
+                    "SELECT subject FROM user_sso_identities WHERE user_id = ? AND provider_id = ?",
+                    (user_id, provider_id),
+                ).fetchone()
+                if identity:
+                    parts = str(identity["subject"]).split(":")
+                    if (
+                        len(parts) == 3
+                        and parts[0] == "youli"
+                        and all(p.isdigit() for p in parts[1:])
+                    ):
+                        lock_employee(conn, self._db.dialect, int(parts[1]), int(parts[2]))
+            binding = lock_user_binding(conn, self._db.dialect, user_id)
+            if provider is not None and provider["kind"] == "feishu":
+                conn.execute(
+                    "DELETE FROM feishu_kb_state WHERE user_id = ? AND provider_id = ?",
+                    (user_id, provider_id),
+                )
+                conn.execute(
+                    "DELETE FROM feishu_kb_grant WHERE user_id = ? AND provider_id = ?",
+                    (user_id, provider_id),
+                )
+                conn.execute(
+                    "INSERT INTO youli_binding_generation(user_id, generation) VALUES (?, 1) "
+                    "ON CONFLICT(user_id) DO UPDATE SET generation = youli_binding_generation.generation + 1",
+                    (user_id,),
+                )
+                if binding is not None:
+                    revoke_binding(conn, user_id, binding)
             cur = conn.execute(
                 "DELETE FROM user_sso_identities WHERE user_id = ? AND provider_id = ?",
                 (user_id, provider_id),
@@ -267,6 +344,23 @@ class UserRepo:
             r = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         return UserRow.from_row(r) if r else None
 
+    def get_by_mobile(self, mobile: str) -> UserRow | None:
+        with self._db.connect() as conn:
+            r = conn.execute("SELECT * FROM users WHERE mobile = ?", (mobile,)).fetchone()
+        return UserRow.from_row(r) if r else None
+
+    def set_mobile_if_empty(self, user_id: int, mobile: str) -> None:
+        with self._db.transaction() as conn:
+            existing = conn.execute(
+                "SELECT id FROM users WHERE mobile = ? AND id != ?", (mobile, user_id)
+            ).fetchone()
+            if existing is not None:
+                return
+            conn.execute(
+                "UPDATE users SET mobile = ? WHERE id = ? AND (mobile IS NULL OR mobile = '')",
+                (mobile, user_id),
+            )
+
     def set_sso(
         self,
         user_id: int,
@@ -276,6 +370,25 @@ class UserRepo:
     ) -> None:
         """Legacy primary-slot writer; prefer ``upsert_sso_identity`` / ``remove_sso_identity``."""
         with self._db.transaction() as conn:
+            from octop.infra.db.repos.youli import lock_login_mapping
+
+            lock_login_mapping(conn, self._db.dialect, sso_provider_id, sso_subject, user_id)
+            if self._db.dialect == "postgresql":
+                conn.execute("SELECT id FROM users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
+            current = conn.execute(
+                "SELECT p.kind, u.sso_provider_id, u.sso_subject FROM users u "
+                "LEFT JOIN sso_providers p ON p.id = u.sso_provider_id WHERE u.id = ?",
+                (user_id,),
+            ).fetchone()
+            if (
+                current
+                and current["kind"] == "youli"
+                and (
+                    current["sso_provider_id"] != sso_provider_id
+                    or current["sso_subject"] != sso_subject
+                )
+            ):
+                raise ValueError("unlink the existing employee identity before reassignment")
             conn.execute(
                 "UPDATE users SET sso_provider_id = ?, sso_subject = ? WHERE id = ?",
                 (sso_provider_id, sso_subject, user_id),

@@ -12,6 +12,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from octop.api.common.content_disposition import content_disposition
+from octop.api.common.scope import (
+    ResourceScopeFields,
+    apply_body_scope,
+    scope_shared_flag,
+    validate_body_scope,
+)
 from octop.api.common.workspace import coerce_read_content
 from octop.api.deps import get_server, require_permission
 from octop.infra.agents.experts.skillhub_market import (
@@ -53,19 +59,17 @@ _SAFE_SKILLHUB_REASONS: dict[SkillHubMarketErrorKind, str] = {
 }
 
 
-class CreateSkillPackageBody(BaseModel):
+class CreateSkillPackageBody(ResourceScopeFields):
     name: str
     description: str = ""
     icon_name: str = ""
     icon_url: str = ""
     shared: bool = False
-    visibility: Literal["all", "groups", "owner"] | None = None
-    group_ids: list[str] | None = None
     copy_policy: Literal["snapshot", "lock", "deny"] = "snapshot"
     allow_download: bool = True
 
 
-class UpdateSkillPackageBody(BaseModel):
+class UpdateSkillPackageBody(ResourceScopeFields):
     name: str | None = None
     description: str | None = None
     icon_name: str | None = None
@@ -82,11 +86,9 @@ class UpdateSkillPackageBody(BaseModel):
         default=None,
         description="When false, non-owner users who can view the package cannot export a ZIP.",
     )
-    visibility: Literal["all", "groups", "owner"] | None = None
-    group_ids: list[str] | None = None
 
 
-class FromSkillHubBody(BaseModel):
+class FromSkillHubBody(ResourceScopeFields):
     slug: str
     name: str | None = None
     description: str | None = None
@@ -389,7 +391,7 @@ async def list_skill_packages(
         {
             **_row_public_dict(server, row),
             **_creator_fields(server, row.created_by),
-            **access.visibility(RESOURCE_SKILL_PACKAGE, row.id, shared=bool(row.shared)),
+            **access.scope_payload(RESOURCE_SKILL_PACKAGE, row.id, shared=bool(row.shared)),
             "can_write": store.can_mutate(row, user),
             "can_copy": store.can_copy(row, user),
             "can_download": store.can_download(row, user),
@@ -451,14 +453,16 @@ async def create_skill_package(
 ) -> dict[str, Any]:
     store = _store(server)
     name = _required(body.name, "name")
-    if body.visibility is not None:
-        _package_access(server).validate_visibility(body.visibility, body.group_ids)
+    access = _package_access(server)
+    _scope_dict, normalized_scope = validate_body_scope(
+        access,
+        body,
+        user=user,
+        fallback_visibility="all" if body.shared else "owner",
+    )
+    eff_vis = normalized_scope.visibility if normalized_scope is not None else body.visibility
+    shared = bool(scope_shared_flag(eff_vis, body.shared))
     try:
-        shared = bool(body.shared)
-        if body.visibility == "owner":
-            shared = False
-        elif body.visibility in {"all", "groups"}:
-            shared = True
         row = store.create(
             name=name,
             description=body.description.strip(),
@@ -473,18 +477,18 @@ async def create_skill_package(
         if is_skill_package_name_conflict(exc):
             raise_skill_package_name_taken(name)
         raise
-    if body.visibility is not None:
-        _package_access(server).set_visibility(
-            RESOURCE_SKILL_PACKAGE,
-            row.id,
-            body.visibility,
-            body.group_ids,
+    if body.visibility is not None or normalized_scope is not None:
+        apply_body_scope(
+            access,
+            resource_type=RESOURCE_SKILL_PACKAGE,
+            resource_key=row.id,
+            body=body,
+            normalized=normalized_scope,
+            user=user,
         )
     return {
         **_package_payload_with_creator(server, store, row),
-        **_package_access(server).visibility(
-            RESOURCE_SKILL_PACKAGE, row.id, shared=bool(row.shared)
-        ),
+        **access.scope_payload(RESOURCE_SKILL_PACKAGE, row.id, shared=bool(row.shared)),
     }
 
 
@@ -499,6 +503,15 @@ async def create_from_skillhub(
     user: User = Depends(require_permission("skill_packages")),
 ) -> dict[str, Any]:
     store = _store(server)
+    access = _package_access(server)
+    _scope_dict, normalized_scope = validate_body_scope(
+        access,
+        body,
+        user=user,
+        fallback_visibility="all" if body.shared else "owner",
+    )
+    eff_vis = normalized_scope.visibility if normalized_scope is not None else body.visibility
+    shared = bool(scope_shared_flag(eff_vis, body.shared))
     try:
         result = await asyncio.to_thread(
             create_package_from_skillhub,
@@ -509,11 +522,23 @@ async def create_from_skillhub(
             description=body.description.strip() if body.description is not None else None,
             icon_name=body.icon_name.strip() if body.icon_name is not None else None,
             icon_url=_icon_url(body.icon_url) if body.icon_url is not None else None,
-            shared=bool(body.shared),
+            shared=shared,
         )
     except (SkillHubMarketError, SkillHubDownloadError) as exc:
         raise _map_skillhub_error(exc) from exc
-    payload = _package_payload_with_creator(server, store, result.row)
+    if body.visibility is not None or normalized_scope is not None:
+        apply_body_scope(
+            access,
+            resource_type=RESOURCE_SKILL_PACKAGE,
+            resource_key=result.row.id,
+            body=body,
+            normalized=normalized_scope,
+            user=user,
+        )
+    payload = {
+        **_package_payload_with_creator(server, store, result.row),
+        **access.scope_payload(RESOURCE_SKILL_PACKAGE, result.row.id, shared=bool(result.row.shared)),
+    }
     if result.skipped_slugs:
         payload["skipped_skills"] = list(result.skipped_slugs)
     return payload
@@ -536,7 +561,7 @@ async def get_skill_package(
             row,
             locale=locale,
         ),
-        **_package_access(server).visibility(
+        **_package_access(server).scope_payload(
             RESOURCE_SKILL_PACKAGE, row.id, shared=bool(row.shared)
         ),
         "can_write": store.can_mutate(row, user),
@@ -557,19 +582,22 @@ async def update_skill_package(
     locale = resolve_request_locale(request)
     row = _package_or_404(store, package_id, locale=locale)
     store.assert_can_mutate(row, user)
+    access = _package_access(server)
+    _scope_dict, normalized_scope = validate_body_scope(
+        access,
+        body,
+        user=user,
+        fallback_visibility="all" if body.shared else ("all" if row.shared else "owner"),
+    )
     name = _required(body.name, "name") if body.name is not None else None
     description = body.description.strip() if body.description is not None else None
     icon_name = body.icon_name.strip() if body.icon_name is not None else None
     icon_url = (
         _icon_url(body.icon_url, package_id=package_id) if body.icon_url is not None else None
     )
-    if body.visibility is not None:
-        _package_access(server).validate_visibility(body.visibility, body.group_ids)
-    shared_value = None if body.shared is None else int(body.shared)
-    if body.visibility == "owner":
-        shared_value = 0
-    elif body.visibility in {"all", "groups"}:
-        shared_value = 1
+    eff_vis = normalized_scope.visibility if normalized_scope is not None else body.visibility
+    shared_flag = scope_shared_flag(eff_vis, body.shared)
+    shared_value = None if shared_flag is None else int(shared_flag)
     try:
         store.repo.update(
             package_id,
@@ -589,12 +617,14 @@ async def update_skill_package(
         from octop.infra.users.profile_avatar import delete_profile_avatar  # noqa: PLC0415
 
         delete_profile_avatar(_package_avatars(server), package_id)
-    if body.visibility is not None:
-        _package_access(server).set_visibility(
-            RESOURCE_SKILL_PACKAGE,
-            package_id,
-            body.visibility,
-            body.group_ids,
+    if body.visibility is not None or normalized_scope is not None:
+        apply_body_scope(
+            access,
+            resource_type=RESOURCE_SKILL_PACKAGE,
+            resource_key=package_id,
+            body=body,
+            normalized=normalized_scope,
+            user=user,
         )
     updated = _package_or_404(store, package_id, locale=locale)
     return {
@@ -604,7 +634,7 @@ async def update_skill_package(
             updated,
             locale=locale,
         ),
-        **_package_access(server).visibility(
+        **access.scope_payload(
             RESOURCE_SKILL_PACKAGE, package_id, shared=bool(updated.shared)
         ),
     }

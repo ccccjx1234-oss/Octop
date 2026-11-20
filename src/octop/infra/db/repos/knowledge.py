@@ -14,7 +14,7 @@ from octop.infra.knowledge.relpath import (
     path_is_direct_child,
     path_parent,
 )
-from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, group_visibility_sql
+from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, GroupAccess
 from octop.infra.utils.ulid import new_short_id, new_ulid
 
 _DIR_CONTENT_TYPE = "application/x-directory"
@@ -80,9 +80,12 @@ class KnowledgeDocumentRow:
     chunk_count: int
     created_at: int
     updated_at: int
+    feishu_source_id: str | None = None
+    feishu_origin: str | None = None
 
     @classmethod
     def from_row(cls, r: DbRow) -> KnowledgeDocumentRow:
+        keys = r.keys()
         return cls(
             id=str(r["document_id"]),
             pk=int(r["id"]),
@@ -98,6 +101,8 @@ class KnowledgeDocumentRow:
             chunk_count=r["chunk_count"],
             created_at=r["created_at"],
             updated_at=r["updated_at"],
+            feishu_source_id=r["feishu_source_id"] if "feishu_source_id" in keys else None,
+            feishu_origin=r["feishu_origin"] if "feishu_origin" in keys else None,
         )
 
 
@@ -182,15 +187,24 @@ class KnowledgeRepo:
 
     def list_visible(self, user_id: int) -> list[KnowledgeBaseRow]:
         with self._db.connect() as conn:
-            clause = group_visibility_sql(RESOURCE_KNOWLEDGE_BASE, "kb.knowledge_base_id")
-            rows = conn.execute(
-                "SELECT kb.* FROM knowledge_bases kb "
-                "WHERE (kb.owner_user_id = ? OR kb.shared = 1) "
-                f"AND (kb.owner_user_id = ? OR {clause}) "
-                "ORDER BY kb.name",
-                (user_id, user_id, user_id),
-            ).fetchall()
-        return map_rows(rows, KnowledgeBaseRow)
+            rows = map_rows(
+                conn.execute(
+                    "SELECT kb.* FROM knowledge_bases kb "
+                    "WHERE (kb.owner_user_id = ? OR kb.shared = 1) "
+                    "ORDER BY kb.name",
+                    (user_id,),
+                ).fetchall(),
+                KnowledgeBaseRow,
+            )
+        return GroupAccess.filter_rows_with_db(
+            self._db,
+            rows,
+            user_id=user_id,
+            is_admin=False,
+            resource_type=RESOURCE_KNOWLEDGE_BASE,
+            key_of=lambda r: r.id,
+            is_owner=lambda r: int(r.owner_user_id) == int(user_id),
+        )
 
     def list_all(self) -> list[KnowledgeBaseRow]:
         with self._db.connect() as conn:

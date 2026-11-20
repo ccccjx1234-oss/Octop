@@ -1892,6 +1892,9 @@ class GlobalProcessor:
             else self._knowledge_services.knowledge_repo.list_visible(user_id)
         )
         extra_ids = self._agent_manager.default_knowledge_base_ids(agent_id) if agent_id else None
+        from octop.infra.feishu_kb.private_index import catalog
+        from octop.infra.knowledge.private_authority import allows
+
         stamp_turn_knowledge_config(
             request,
             visible_bases=bases,
@@ -1900,6 +1903,13 @@ class GlobalProcessor:
             extra_ids=extra_ids,
             is_admin=is_admin,
             locale=locale,
+            private_catalog=[
+                item for item in catalog(self._agent_manager._repos, user_id)
+                if allows(user_id, item["id"])
+            ]
+            if getattr(getattr(self._agent_manager, "_repos", None), "db", None) is not None
+            and any(allows(user_id, item) for item in explicit_ids or ())
+            else (),
         )
 
     async def _resolve_turn_mcp_servers(

@@ -22,12 +22,14 @@ from octop.infra.db.repos.channels import ChannelRepo
 from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.control_files import ControlFileRepo
 from octop.infra.db.repos.cron import CronJobRepo
+from octop.infra.db.repos.erp_org import ErpOrgRepo
 from octop.infra.db.repos.invites import InviteRepo
 from octop.infra.db.repos.knowledge import KnowledgeRepo
 from octop.infra.db.repos.proactive_care_config import ProactiveCareConfigRepo
 from octop.infra.db.repos.profile_avatars import ProfileAvatarRepo
 from octop.infra.db.repos.providers import ProviderRepo
 from octop.infra.db.repos.published_experts import PublishedExpertRepo
+from octop.infra.db.repos.resource_grants import ResourceGrantRepo
 from octop.infra.db.repos.resource_group_grants import ResourceGroupGrantRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.sessions import SessionRepo
@@ -50,6 +52,7 @@ from octop.infra.db.repos.workbench import WorkbenchRepo
 from octop.infra.db.repos.youli import (
     YouliAgentBindingRepo,
     YouliBusinessTemplateRepo,
+    YouliIdentityBindingRepo,
     YouliLoginRequestRepo,
     YouliSessionRepo,
 )
@@ -88,6 +91,9 @@ class RepoBundle:
     user_group_repo: UserGroupRepo
     user_group_member_repo: UserGroupMemberRepo
     resource_group_grant_repo: ResourceGroupGrantRepo
+    erp_org_repo: ErpOrgRepo
+    resource_grant_repo: ResourceGrantRepo
+    youli_identity_binding_repo: YouliIdentityBindingRepo
     youli_login_request_repo: YouliLoginRequestRepo
     youli_session_repo: YouliSessionRepo
     youli_agent_binding_repo: YouliAgentBindingRepo
@@ -133,6 +139,9 @@ class RepoBundle:
             user_group_repo=UserGroupRepo(db),
             user_group_member_repo=UserGroupMemberRepo(db),
             resource_group_grant_repo=ResourceGroupGrantRepo(db),
+            erp_org_repo=ErpOrgRepo(db),
+            resource_grant_repo=ResourceGrantRepo(db),
+            youli_identity_binding_repo=YouliIdentityBindingRepo(db),
             youli_login_request_repo=YouliLoginRequestRepo(db),
             youli_session_repo=YouliSessionRepo(db),
             youli_agent_binding_repo=YouliAgentBindingRepo(db),
@@ -256,6 +265,10 @@ class SharedServices:
     @property
     def sso_repo(self) -> SsoRepo:
         return self.repos.sso_repo
+
+    @property
+    def youli_identity_binding_repo(self) -> YouliIdentityBindingRepo:
+        return self.repos.youli_identity_binding_repo
 
     @property
     def youli_login_request_repo(self) -> YouliLoginRequestRepo:

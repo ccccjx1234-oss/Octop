@@ -137,11 +137,13 @@ async def test_fork_dashboard_thread_copies_through_assistant_and_rebinds() -> N
         created["rebind"] = kwargs
 
     registry = MagicMock()
+    registry.get_thread.return_value.private_knowledge_protected = False
     registry.create_thread.return_value = "thr_fork"
     registry.get_thread.return_value = MagicMock(
         title="Original title",
         last_active=9,
         created_at=8,
+        private_knowledge_protected=False,
     )
     registry.rebind = rebind
 
@@ -191,8 +193,9 @@ async def test_fork_dashboard_thread_from_latest_assistant() -> None:
     harness = SimpleNamespace(graph=graph)
 
     registry = MagicMock()
+    registry.get_thread.return_value.private_knowledge_protected = False
     registry.create_thread.return_value = "thr_fork"
-    registry.get_thread.return_value = MagicMock(title="only", last_active=0, created_at=1)
+    registry.get_thread.return_value = MagicMock(title="only", last_active=0, created_at=1, private_knowledge_protected=False)
     registry.rebind = AsyncMock()
 
     out = await fork_dashboard_thread(
@@ -233,6 +236,7 @@ async def test_fork_dashboard_thread_deletes_row_when_write_fails() -> None:
     graph.aupdate_state = AsyncMock(side_effect=RuntimeError("checkpoint write failed"))
     harness = SimpleNamespace(graph=graph)
     registry = MagicMock()
+    registry.get_thread.return_value.private_knowledge_protected = False
     registry.create_thread.return_value = "thr_fork"
     registry.rebind = AsyncMock()
 

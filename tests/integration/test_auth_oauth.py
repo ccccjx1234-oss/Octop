@@ -90,6 +90,64 @@ async def test_oauth_bind_requires_auth_and_providers_are_not_public(client) -> 
         assert "client_secret" not in config.json()
 
 
+async def test_legacy_feishu_admin_recovery_requires_original_account_and_oauth(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    c, srv, home = client
+    await bootstrap_admin(c, home)
+    admin = await login(c)
+    saved = await c.put(
+        "/api/auth/oauth/providers/feishu",
+        headers=bearer(admin),
+        json={"enabled": True, "client_id": "feishu-client", "client_secret": "test-secret"},
+    )
+    assert saved.status_code == 200
+    provider = srv.services.sso_repo.get_by_kind("feishu")
+    owner = srv.services.user_repo.create(username="legacy-owner", role="user")
+    srv.services.user_repo.upsert_sso_identity(owner, provider_id=provider.id, subject="old-union")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth/v3/token"):
+            return httpx.Response(200, json={"code": 0, "access_token": "test-token"})
+        return httpx.Response(
+            200, json={"code": 0, "data": {"union_id": "old-union", "tenant_key": "tenant"}}
+        )
+
+    monkeypatch.setattr(
+        SsoService,
+        "_http_client",
+        lambda self: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    start = await c.post("/api/auth/oauth/start", json={"kind": "feishu"})
+    callback = await c.get(
+        "/api/auth/oauth/callback", params={"state": start.json()["state"], "code": "test-code"}
+    )
+    assert "oidc_error=legacy_feishu_recovery" in callback.headers["location"]
+    assert srv.services.user_repo.get_by_sso(provider.id, "old-union").id == owner
+
+    endpoint = f"/api/users/{owner}/reset-password"
+    assert (await c.post(endpoint, json={"new_password": "RecoveryPass12"})).status_code == 401
+    reset = await c.post(endpoint, headers=bearer(admin), json={"new_password": "RecoveryPass12"})
+    assert reset.status_code == 204
+    assert any(
+        event.target == "legacy-owner"
+        for event in srv.services.audit_repo.query(action="user.password_reset")
+    )
+    recovered = await login(c, username="legacy-owner", password="RecoveryPass12")
+    start = await c.post(
+        "/api/auth/oauth/bind/start", headers=bearer(recovered), json={"kind": "feishu"}
+    )
+    assert start.status_code == 200
+    callback = await c.get(
+        "/api/auth/oauth/callback", params={"state": start.json()["state"], "code": "test-code"}
+    )
+    assert "#code=" in callback.headers["location"]
+    identities = srv.services.user_repo.list_sso_identities(owner)
+    assert len(identities) == 1 and identities[0].subject.startswith("feishu-v1:")
+
+
 async def test_oauth_callback_accepts_dingtalk_auth_code(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -257,7 +315,7 @@ async def test_feishu_and_dingtalk_full_login_callback_exchange_flow(
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if url.endswith("/open-apis/authen/v2/oauth/token"):
+        if url.endswith("/oauth/v3/token"):
             return httpx.Response(200, json={"code": 0, "access_token": "fs-access"})
         if url.endswith("/open-apis/authen/v1/user_info"):
             return httpx.Response(
@@ -266,6 +324,7 @@ async def test_feishu_and_dingtalk_full_login_callback_exchange_flow(
                     "code": 0,
                     "data": {
                         "union_id": "on_feishu_union",
+                        "tenant_key": "tenant-one",
                         "name": "飞书员工",
                         "email": "feishu@example.com",
                         "mobile": "+8613800138000",

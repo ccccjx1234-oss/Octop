@@ -48,7 +48,10 @@ def me_payload(user: Any, server: Any) -> dict[str, Any]:
         payload["has_password"] = True
         payload["allowed_backend_types"] = None
         return payload
-    identities = [{"kind": item.kind} for item in server.user_manager.list_sso_identities(user.id)]
+    identities = [
+        {"kind": item.kind, "provider_id": item.provider_id}
+        for item in server.user_manager.list_sso_identities(user.id)
+    ]
     payload["sso_identities"] = identities
     payload["sso_linked"] = bool(identities)
     payload["sso_kind"] = identities[0]["kind"] if identities else None

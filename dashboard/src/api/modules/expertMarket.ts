@@ -1,5 +1,9 @@
 import { request } from "../request";
 import type { AgentRuntimeApiFields } from "../../utils/agentRuntimeConfig";
+import type {
+  ResourceScopeExtensions,
+  ScopedResourceVisibilityMode,
+} from "./erpOrg";
 
 export interface LocalizedText {
   zh?: string;
@@ -62,7 +66,9 @@ export interface CreateMarketExpertResponse {
   copy_skill_errors?: string[];
 }
 
-export interface CreateMarketExpertBody extends AgentRuntimeApiFields {
+export interface CreateMarketExpertBody
+  extends AgentRuntimeApiFields,
+    ResourceScopeExtensions {
   name?: string;
   description?: string;
   providers?: string[];
@@ -90,7 +96,7 @@ export interface CreateMarketExpertBody extends AgentRuntimeApiFields {
     summary?: { zh?: string; en?: string };
   }[];
   copy_skills?: { agent_id: string; slug: string }[];
-  visibility?: "owner" | "all" | "groups";
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   quick_prompts?: ExpertMarketQuickPrompt[];
 }

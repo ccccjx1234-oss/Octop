@@ -28,6 +28,8 @@ interface OauthFormValues {
   client_secret?: string;
   region?: "feishu" | "lark";
   agent_id?: string;
+  auto_link_mobile?: boolean;
+  allowed_tenants?: string;
 }
 
 interface OauthProviderCardProps {
@@ -101,6 +103,7 @@ function OauthProviderCardLive({
   const displayName = Form.useWatch("display_name", form) ?? "";
   const clientId = Form.useWatch("client_id", form) ?? "";
   const agentId = Form.useWatch("agent_id", form) ?? "";
+  const autoLinkMobile = Form.useWatch("auto_link_mobile", form) ?? false;
 
   const applyConfig = useCallback(
     (config: OauthAppConfig) => {
@@ -115,6 +118,12 @@ function OauthProviderCardLive({
           typeof config.extra?.agent_id === "string"
             ? config.extra.agent_id
             : "",
+        auto_link_mobile: Boolean(config.extra?.auto_link_mobile),
+        allowed_tenants: Array.isArray(config.extra?.allowed_tenants)
+          ? config.extra.allowed_tenants.join(", ")
+          : typeof config.extra?.allowed_tenants === "string"
+          ? config.extra.allowed_tenants
+          : "",
       });
       setRedirectUri(config.redirect_uri ?? "");
       setHasClientSecret(config.has_client_secret);
@@ -158,6 +167,21 @@ function OauthProviderCardLive({
         body.extra = {
           ...body.extra,
           agent_id: values.agent_id?.trim() || "",
+        };
+      }
+      if (provider.hasMobileLink) {
+        body.extra = {
+          ...body.extra,
+          auto_link_mobile: Boolean(values.auto_link_mobile),
+        };
+      }
+      if (provider.hasAllowedTenants) {
+        body.extra = {
+          ...body.extra,
+          allowed_tenants: (values.allowed_tenants ?? "")
+            .split(/[\s,;]+/)
+            .map((item) => item.trim())
+            .filter(Boolean),
         };
       }
       applyConfig(await ssoApi.putOauthProvider(provider.kind, body));
@@ -326,6 +350,47 @@ function OauthProviderCardLive({
           ]}
         >
           <Input autoComplete="off" />
+        </Form.Item>
+      ) : null}
+      {provider.hasMobileLink ? (
+        <Form.Item
+          name="auto_link_mobile"
+          valuePropName="checked"
+          label={t("adminSso.autoLinkMobile")}
+          extra={t("adminSso.autoLinkMobileHint")}
+        >
+          <Switch />
+        </Form.Item>
+      ) : null}
+      {provider.hasAllowedTenants ? (
+        <Form.Item
+          name="allowed_tenants"
+          dependencies={["auto_link_mobile"]}
+          label={t("adminSso.allowedTenants")}
+          rules={
+            autoLinkMobile
+              ? [
+                  {
+                    validator: (_, value: unknown) => {
+                      const tokens = String(value ?? "")
+                        .split(/[\s,;]+/)
+                        .map((item) => item.trim())
+                        .filter(Boolean);
+                      return tokens.length > 0
+                        ? Promise.resolve()
+                        : Promise.reject(
+                            new Error(t("adminSso.allowedTenantsRequired")),
+                          );
+                    },
+                  },
+                ]
+              : undefined
+          }
+        >
+          <Input
+            autoComplete="off"
+            placeholder={t("adminSso.allowedTenantsPlaceholder")}
+          />
         </Form.Item>
       ) : null}
     </>

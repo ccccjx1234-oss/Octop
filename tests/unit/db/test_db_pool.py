@@ -146,7 +146,11 @@ def test_run_migrations_idempotent(db: SqlitePool):
         sso_indexes = {
             r["name"] for r in conn.execute("PRAGMA index_list(sso_providers)").fetchall()
         }
-    assert v == 26
+        feishu_source_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(kb_feishu_sources)").fetchall()
+        }
+    assert v == 39
+    assert "interval_minutes" in feishu_source_cols
     assert "login_failed_count" in cols
     assert "login_locked_until" in cols
     assert {"mfa_version", "mfa_failed_count", "mfa_locked_until", "password_version"}.issubset(
@@ -282,7 +286,7 @@ def test_migration_002_idempotent_when_column_already_present(tmp_path: Path) ->
     with pool.connect() as conn:
         v = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
         cron_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cron_jobs)").fetchall()}
-    assert v == 26
+    assert v == 39
     assert "mcp_servers" in cron_cols
     assert "skill_packages" in {
         r["name"]
@@ -349,6 +353,7 @@ def test_migration_005_preserves_populated_users_and_constraints(tmp_path: Path)
             "mfa_locked_until": 0,
             "password_version": 0,
             "last_login_at": None,
+            "mobile": None,
         }
         assert dict(agent) == {
             "agent_id": "legacy-agent",
@@ -426,7 +431,7 @@ def test_stuck_version_6_without_permissions_column_is_repaired(tmp_path: Path) 
     with pool.connect() as conn:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         version = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
-    assert version == 26
+    assert version == 39
     assert "permissions" in cols
 
 
@@ -451,7 +456,7 @@ def test_schema_v10_without_projection_tables_is_repaired(tmp_path: Path) -> Non
         }
         kb_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge_bases)").fetchall()}
         cron_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cron_jobs)").fetchall()}
-    assert version == 26
+    assert version == 39
     assert {"thread_messages", "thread_history_projection", "trajectory_events"}.issubset(
         table_names
     )
@@ -486,7 +491,7 @@ def test_ahead_of_max_schema_version_clamps_to_max(tmp_path: Path) -> None:
             r["name"]
             for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
-    assert version == 26
+    assert version == 39
     assert "skill_package_id" in pkg_cols
     assert "published_expert_id" in pub_cols
     assert "user_invites" in invite_tables
@@ -580,7 +585,7 @@ def test_pre_squash_schema_version_clamped_and_knowledge_tables_filled(
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-    assert version == 26
+    assert version == 39
     assert "permissions" in user_cols
     assert {
         "published_experts",
@@ -760,6 +765,36 @@ def test_v14_to_v15_adds_sso_provider_kind_without_rebuilding(tmp_path: Path) ->
     pool = SqlitePool(tmp_path / "octop.db")
     run_migrations(pool)
     with pool.connect() as conn:
+        # Reconstruct the tables and columns absent before the later migrations.
+        conn.execute("DROP INDEX IF EXISTS idx_kb_feishu_document_identity")
+        conn.execute("ALTER TABLE knowledge_documents DROP COLUMN feishu_origin")
+        conn.execute("ALTER TABLE knowledge_documents DROP COLUMN feishu_document_id")
+        conn.execute("ALTER TABLE knowledge_documents DROP COLUMN feishu_source_id")
+        for table in (
+            "resource_subject_grant",
+            "resource_scope_policy",
+            "erp_employee_departments",
+            "erp_directory_employees",
+            "erp_department_closure",
+            "erp_departments",
+            "kb_feishu_blob_cleanup",
+            "kb_feishu_sources",
+            "kb_feishu_connection_states",
+            "kb_feishu_connections",
+            "feishu_kb_private_index_versions",
+            "feishu_kb_private_index",
+            "feishu_erp_reauth_state",
+            "feishu_erp_reauth_proof",
+            "feishu_kb_source",
+            "feishu_kb_grant",
+            "feishu_kb_state",
+            "youli_identity_binding",
+            "youli_binding_generation",
+        ):
+            conn.execute(f"DROP TABLE {table}")
+        conn.execute("DROP INDEX IF EXISTS idx_users_mobile_unique")
+        conn.execute("ALTER TABLE users DROP COLUMN mobile")
+        conn.execute("ALTER TABLE threads DROP COLUMN private_knowledge_protected")
         conn.execute("DROP INDEX IF EXISTS idx_sso_providers_kind")
         conn.execute("ALTER TABLE sso_providers DROP COLUMN extra")
         conn.execute("ALTER TABLE sso_providers DROP COLUMN kind")
@@ -788,7 +823,7 @@ def test_v14_to_v15_adds_sso_provider_kind_without_rebuilding(tmp_path: Path) ->
         bound = conn.execute(
             "SELECT sso_provider_id FROM users WHERE username = 'sso-admin'"
         ).fetchone()[0]
-    assert version == 26
+    assert version == 39
     assert int(row["id"]) == int(provider_id)
     assert row["kind"] == "oidc"
     assert row["extra"] == "{}"

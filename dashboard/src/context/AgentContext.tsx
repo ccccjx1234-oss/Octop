@@ -9,6 +9,10 @@ import {
 import type { ReactNode } from "react";
 import { setActiveAgentId } from "../api/request";
 import { agentApi as legacyAgentApi } from "../api/modules/agent";
+import type {
+  ResourceScopeExtensions,
+  ScopedResourceVisibilityMode,
+} from "../api/modules/erpOrg";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import type { AgentRuntimeApiFields } from "../utils/agentRuntimeConfig";
 import { userCan } from "../utils/permissions";
@@ -27,7 +31,9 @@ import {
  * ``X-Octop-Agent-Id`` header.
  */
 
-export interface OctopAgent extends AgentRuntimeApiFields {
+export interface OctopAgent
+  extends AgentRuntimeApiFields,
+    ResourceScopeExtensions {
   /** Surrogate integer primary key from the database. */
   id: number;
   /** Public agent id used in API paths and ``X-Octop-Agent-Id``. */
@@ -38,8 +44,8 @@ export interface OctopAgent extends AgentRuntimeApiFields {
   owner_username?: string | null;
   /** Whether the owner has shared this expert with other users. */
   is_shared?: boolean;
-  /** Who may use a shared expert: owner, all logged-in users, or user groups. */
-  visibility?: "owner" | "all" | "groups";
+  /** Who may use a shared expert. */
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   /** Whether the current user owns this expert. */
   is_owner?: boolean;

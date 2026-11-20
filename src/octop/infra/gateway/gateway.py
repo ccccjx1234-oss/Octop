@@ -132,7 +132,8 @@ class Gateway:
         self._processor: GlobalProcessor | None = None
         self._dispatcher = build_default_dispatcher()
         self._slash_meta: SlashRuntimeMeta | None = None
-        self._ws_hub = WebSocketHub()
+
+        self._ws_hub = WebSocketHub(get_thread=self._thread_registry.get_thread)
         self._cli_hub = CliHub()
         self._steer = SteerCoordinator()
         self._ws_channel: WebSocketChannel | None = None

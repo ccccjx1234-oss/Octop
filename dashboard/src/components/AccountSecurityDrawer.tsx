@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Alert, Button, Drawer, Form, Input, Modal, Space, Spin } from "antd";
 import {
   Fingerprint,
@@ -12,6 +18,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import cx from "classnames";
 import { message } from "@/utils/antdMessage";
+import { getAuthToken } from "../api/request";
 import {
   authApi,
   type MfaPasskeyInfo,
@@ -79,6 +86,246 @@ const PASSWORD_FIELD_ICON_PROPS = {
   size: 14 as const,
   style: { color: "var(--fn-text-tertiary)" },
 };
+
+export function YouliBindingCard({ providerId }: { providerId: number }) {
+  const { t } = useTranslation();
+  const [form] = Form.useForm<{ mobile: string; password: string }>();
+  const [status, setStatus] = useState<{
+    bound: boolean;
+    delegation_active: boolean;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [proof, setProof] = useState("");
+  const pending = useRef<{
+    popup: Window;
+    session: string;
+    timer: number;
+  } | null>(null);
+  const proofSession = useRef("");
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const current = pending.current;
+      if (
+        !current ||
+        event.origin !== window.location.origin ||
+        event.source !== current.popup ||
+        event.data?.type !== "octop-youli-reauth"
+      )
+        return;
+      pending.current = null;
+      window.clearInterval(current.timer);
+      current.popup.close();
+      if (
+        typeof event.data.proof !== "string" ||
+        !event.data.proof ||
+        current.session !== getAuthToken()
+      ) {
+        proofSession.current = "";
+        setProof("");
+        message.error(t("account.youliVerifyFailed"));
+        return;
+      }
+      proofSession.current = current.session;
+      setProof(event.data.proof);
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      const current = pending.current;
+      pending.current = null;
+      if (current) {
+        window.clearInterval(current.timer);
+        current.popup.close();
+      }
+    };
+  }, [t]);
+
+  useEffect(() => {
+    if (!proof) {
+      form.resetFields();
+      return;
+    }
+    const clearProof = () => {
+      proofSession.current = "";
+      setProof("");
+    };
+    const timer = window.setTimeout(clearProof, 115000);
+    const sessionCheck = window.setInterval(() => {
+      if (getAuthToken() !== proofSession.current) clearProof();
+    }, 1000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(sessionCheck);
+    };
+  }, [proof, form]);
+
+  const startVerification = async () => {
+    if (pending.current) return;
+    proofSession.current = "";
+    setProof("");
+    const session = getAuthToken();
+    const popup = window.open("", "_blank", "popup,width=600,height=720");
+    if (!popup || !session) {
+      popup?.close();
+      message.error(t("account.youliVerifyFailed"));
+      return;
+    }
+    const current = { popup, session, timer: 0 };
+    pending.current = current;
+    const cancel = () => {
+      window.clearInterval(current.timer);
+      current.popup.close();
+      if (pending.current !== current) return;
+      pending.current = null;
+      proofSession.current = "";
+      setProof("");
+      message.error(t("account.youliVerifyFailed"));
+    };
+    current.timer = window.setInterval(() => {
+      if (popup.closed || session !== getAuthToken()) cancel();
+    }, 500);
+    try {
+      const { authorization_url } = await authApi.startYouliReauth(providerId);
+      if (pending.current !== current) return;
+      const url = new URL(authorization_url);
+      if (
+        ![
+          "https://accounts.feishu.cn",
+          "https://accounts.larksuite.com",
+        ].includes(url.origin) ||
+        url.pathname !== "/oauth/v3/authorize" ||
+        session !== getAuthToken()
+      )
+        throw new Error("invalid authorization");
+      popup.location.href = url.href;
+    } catch {
+      cancel();
+    }
+  };
+
+  useEffect(() => {
+    authApi
+      .youliBinding()
+      .then(setStatus)
+      .catch(() => message.error(t("account.youliLoadFailed")));
+  }, [t]);
+
+  const bind = async (values: { mobile: string; password: string }) => {
+    setBusy(true);
+    try {
+      if (!proof || proofSession.current !== getAuthToken())
+        throw new Error("session changed");
+      setProof("");
+      setStatus(await authApi.bindYouli(values.mobile, values.password, proof));
+      form.resetFields();
+      message.success(t("account.youliSaved"));
+    } catch (err) {
+      setProof("");
+      message.error(apiErrorMessage(err, t("account.youliFailed"), t));
+    } finally {
+      form.resetFields(["password"]);
+      setBusy(false);
+    }
+  };
+  const unlink = async () => {
+    setProof("");
+    setBusy(true);
+    try {
+      await authApi.unlinkYouli();
+      setStatus({ bound: false, delegation_active: false });
+      form.resetFields();
+    } catch (err) {
+      message.error(apiErrorMessage(err, t("account.youliFailed"), t));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className={styles.card}>
+      <div className={styles.cardLead}>
+        <span className={styles.iconWrap} aria-hidden>
+          <KeyRound size={18} />
+        </span>
+        <h3 className={styles.cardTitle}>{t("account.youliTitle")}</h3>
+      </div>
+      <p className={styles.cardDesc}>{t("account.youliHint")}</p>
+      {status && (
+        <p>
+          {t(
+            status.bound
+              ? status.delegation_active
+                ? "account.youliActive"
+                : "account.youliExpired"
+              : "account.youliUnbound",
+          )}
+        </p>
+      )}
+      {!proof && (
+        <Button
+          type="primary"
+          loading={busy}
+          disabled={!status}
+          onClick={startVerification}
+        >
+          {t("account.youliVerify")}
+        </Button>
+      )}
+      {proof && (
+        <Form
+          form={form}
+          onFinish={bind}
+          layout="vertical"
+          requiredMark={false}
+          className={styles.passwordForm}
+        >
+          <Form.Item
+            name="mobile"
+            label={t("account.youliMobile")}
+            rules={[{ required: true }]}
+          >
+            <Input autoComplete="off" maxLength={32} />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label={t("account.youliPassword")}
+            rules={[{ required: true }]}
+          >
+            <Input.Password autoComplete="new-password" maxLength={128} />
+          </Form.Item>
+          <Space>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={busy}
+              disabled={!status}
+            >
+              {t(
+                status?.bound
+                  ? "account.youliReauthorize"
+                  : "account.youliBind",
+              )}
+            </Button>
+          </Space>
+        </Form>
+      )}
+      {status?.bound && (
+        <Button
+          danger
+          loading={busy}
+          onClick={() =>
+            Modal.confirm({
+              title: t("account.youliUnlinkConfirm"),
+              onOk: unlink,
+            })
+          }
+        >
+          {t("account.youliUnlink")}
+        </Button>
+      )}
+    </section>
+  );
+}
 
 function ChangePasswordCard() {
   const { t } = useTranslation();
@@ -423,6 +670,17 @@ export default function AccountSecurityDrawer({
       ) : (
         <>
           {hasPassword ? <ChangePasswordCard /> : null}
+          {profile?.sso_identities?.find(
+            (identity) => identity.kind === "feishu",
+          )?.provider_id ? (
+            <YouliBindingCard
+              providerId={
+                profile.sso_identities.find(
+                  (identity) => identity.kind === "feishu",
+                )!.provider_id
+              }
+            />
+          ) : null}
           {unavailable ? (
             <Alert
               type="info"

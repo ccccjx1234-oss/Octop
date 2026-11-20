@@ -1,4 +1,9 @@
-export interface SkillPackage {
+import type {
+  ResourceScopeExtensions,
+  ScopedResourceVisibilityMode,
+} from "../modules/erpOrg";
+
+export interface SkillPackage extends ResourceScopeExtensions {
   id: string;
   name: string;
   description: string;
@@ -10,7 +15,7 @@ export interface SkillPackage {
   can_download?: boolean;
   shared?: boolean;
   allow_download?: boolean;
-  visibility?: "all" | "groups" | "owner";
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   copy_policy?: "snapshot" | "lock" | "deny";
   skill_count: number;
@@ -48,25 +53,25 @@ export interface SkillPackageDetail extends SkillPackage {
   skipped_skills?: string[];
 }
 
-export interface CreateSkillPackageBody {
+export interface CreateSkillPackageBody extends ResourceScopeExtensions {
   name: string;
   description?: string;
   icon_name?: string;
   icon_url?: string;
   shared?: boolean;
-  visibility?: "all" | "groups" | "owner";
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   copy_policy?: "snapshot" | "lock" | "deny";
   allow_download?: boolean;
 }
 
-export interface UpdateSkillPackageBody {
+export interface UpdateSkillPackageBody extends ResourceScopeExtensions {
   name?: string;
   description?: string;
   icon_name?: string;
   icon_url?: string;
   shared?: boolean;
-  visibility?: "all" | "groups" | "owner";
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   copy_policy?: "snapshot" | "lock" | "deny";
   allow_download?: boolean;

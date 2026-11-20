@@ -83,6 +83,9 @@ class CronDeliveryService:
                 raise ValueError(
                     f"session {command.session_key!r} does not belong to user {command.user_id!r}"
                 )
+            thread = self._gateway.thread_registry.get_thread(session.thread_id)
+            if thread is not None and thread.private_knowledge_protected:
+                raise ValueError("private knowledge protected")
             if command.task_type == "text":
                 await self._deliver_text(command, session)
             else:
@@ -285,6 +288,8 @@ class CronDeliveryService:
             user_id=session.user_id,
             channel_type=session.channel_type,
         )
+        from octop.infra.feishu_kb.private_index import catalog
+
         stamp_turn_knowledge_config(
             request,
             visible_bases=bases,
@@ -293,6 +298,9 @@ class CronDeliveryService:
             extra_ids=self._agent_manager.default_knowledge_base_ids(command.agent_id),
             is_admin=is_admin,
             locale=locale,
+            private_catalog=catalog(self._repos, session.user_id)
+            if getattr(self._repos, "db", None) is not None
+            else (),
         )
 
     def _target_session(self, command: CronDeliveryCommand) -> tuple[str, str | None]:
@@ -305,6 +313,7 @@ class CronDeliveryService:
             not isinstance(row, ThreadRow)
             or row.agent_id != command.agent_id
             or row.user_id != command.user_id
+            or row.private_knowledge_protected
         ):
             raise ValueError(f"thread {pinned!r} is not available for this job")
         return row.session_key, pinned
@@ -335,6 +344,8 @@ class CronDeliveryService:
         latest = registry.latest_active_thread(session_key=session_key)
         if not isinstance(latest, ThreadRow):
             return
+        if latest.private_knowledge_protected:
+            raise ValueError("private knowledge protected")
         if registry.get_bound_thread_id(session_key) == latest.thread_id:
             return
         session = registry.get_session(session_key)

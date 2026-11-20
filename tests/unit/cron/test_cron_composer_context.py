@@ -9,6 +9,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from octop.infra.cron.delivery import CronDeliveryCommand, CronDeliveryService
+from octop.infra.db.repos.threads import ThreadRow
 from octop.infra.gateway.process.message_keys import (
     COMPOSER_CTX_KEY,
     build_composer_context,
@@ -39,6 +40,21 @@ def _dashboard_session() -> MagicMock:
     session.session_key = "a1:dashboard:1:dm"
     session.channel_id = None
     return session
+
+
+def _dashboard_thread() -> ThreadRow:
+    return ThreadRow(
+        id=1,
+        thread_id="thr1",
+        agent_id="a1",
+        user_id=1,
+        channel_type=ThreadRegistry.CHANNEL_DASHBOARD,
+        session_key="a1:dashboard:1:dm",
+        title=None,
+        last_active=0,
+        created_at=0,
+        private_knowledge_protected=False,
+    )
 
 
 async def _run_locked(_agent_id: str, _session_key: str, operation) -> None:
@@ -92,6 +108,7 @@ async def test_deliver_agent_stamps_composer_on_human_message() -> None:
     gateway = MagicMock()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
+    gateway.thread_registry.get_thread.return_value = _dashboard_thread()
     gateway.push_session_text = AsyncMock()
     gateway.notify_dashboard_push = AsyncMock()
 
@@ -132,6 +149,7 @@ async def test_deliver_agent_merges_default_open_when_empty() -> None:
     gateway = MagicMock()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
+    gateway.thread_registry.get_thread.return_value = _dashboard_thread()
     gateway.push_session_text = AsyncMock()
     gateway.notify_dashboard_push = AsyncMock()
 
@@ -170,6 +188,7 @@ async def test_deliver_agent_skips_default_open_mcp_for_team_host() -> None:
     gateway = MagicMock()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
+    gateway.thread_registry.get_thread.return_value = _dashboard_thread()
     gateway.push_session_text = AsyncMock()
     gateway.notify_dashboard_push = AsyncMock()
 
@@ -205,6 +224,7 @@ async def test_deliver_agent_explicit_mcp_overrides_defaults() -> None:
     gateway = MagicMock()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
+    gateway.thread_registry.get_thread.return_value = _dashboard_thread()
     gateway.push_session_text = AsyncMock()
     gateway.notify_dashboard_push = AsyncMock()
 
@@ -267,6 +287,7 @@ async def test_deliver_agent_attaches_expert_knowledge_bases() -> None:
     gateway = MagicMock()
     gateway.run_in_session = _run_locked
     gateway.require_session = MagicMock(return_value=session)
+    gateway.thread_registry.get_thread.return_value = _dashboard_thread()
     gateway.push_session_text = AsyncMock()
     gateway.notify_dashboard_push = AsyncMock()
 

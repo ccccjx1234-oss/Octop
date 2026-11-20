@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from unittest.mock import patch
 
 import httpx
@@ -77,27 +78,47 @@ def test_feishu_is_configured_without_issuer(service: SsoService) -> None:
     assert feishu["enabled"] is True
 
 
-def test_feishu_complete_login_reads_v2_token_without_data_wrapper(
-    service: SsoService,
+@pytest.mark.parametrize(
+    ("region", "accounts_host", "open_host"),
+    [
+        ("feishu", "accounts.feishu.cn", "open.feishu.cn"),
+        ("lark", "accounts.larksuite.com", "open.larksuite.com"),
+    ],
+)
+def test_feishu_complete_login_reads_v3_token_without_data_wrapper(
+    service: SsoService, region: str, accounts_host: str, open_host: str
 ) -> None:
-    """authen/v2/oauth/token returns access_token at the top level, not in data."""
+    """The v3 token endpoint can return the token at the top level."""
     adapter = FeishuAdapter(service)
-    row = _feishu_row(service)
+    row = _feishu_row(service, region=region)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/oauth/token"):
+        if request.url.path == "/oauth/v3/token":
+            assert request.url.host == accounts_host
+            body = json.loads(request.content)
+            assert body["grant_type"] == "authorization_code"
+            assert body["client_id"] == "cli_xxx"
+            assert body["client_secret"] == "app-secret"
+            assert body["code"] == "auth-code"
+            assert body["code_verifier"] == "pkce"
+            assert body["redirect_uri"] == "https://octop.example/api/auth/oauth/callback"
             return httpx.Response(
                 200,
                 json={
-                    "code": 0,
                     "access_token": "user-token",
                     "expires_in": 7200,
                     "token_type": "Bearer",
                 },
             )
+        assert request.url.host == open_host
+        assert request.url.path == "/open-apis/authen/v1/user_info"
         return httpx.Response(
             200,
-            json={"code": 0, "msg": "ok", "data": {"union_id": "on_union", "name": "Ada"}},
+            json={
+                "code": 0,
+                "msg": "ok",
+                "data": {"union_id": "on_union", "tenant_key": "tenant-a", "name": "Ada"},
+            },
         )
 
     login_state = type("State", (), {"code_verifier": "pkce"})()
@@ -115,7 +136,12 @@ def test_feishu_complete_login_reads_v2_token_without_data_wrapper(
             redirect_uri="https://octop.example/api/auth/oauth/callback",
         )
 
-    assert subject == "on_union"
+    assert json.loads(subject.removeprefix("feishu-v1:")) == [
+        region,
+        "cli_xxx",
+        "tenant-a",
+        "on_union",
+    ]
     assert claims["name"] == "Ada"
 
 
@@ -128,7 +154,8 @@ def test_feishu_complete_login_unwraps_envelope_and_falls_back_to_open_id(
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.path.endswith("/oauth/token"):
+        if request.url.path == "/oauth/v3/token":
+            assert request.url.host == "accounts.feishu.cn"
             body = json.loads(request.content)
             assert body["grant_type"] == "authorization_code"
             assert body["code_verifier"] == "pkce"
@@ -146,6 +173,7 @@ def test_feishu_complete_login_unwraps_envelope_and_falls_back_to_open_id(
                 "msg": "ok",
                 "data": {
                     "open_id": "ou_open",
+                    "tenant_key": "tenant-a",
                     "name": "Ada",
                     "enterprise_email": "ada@example.com",
                 },
@@ -171,7 +199,12 @@ def test_feishu_complete_login_unwraps_envelope_and_falls_back_to_open_id(
             redirect_uri="https://octop.example/api/auth/oauth/callback",
         )
 
-    assert subject == "ou_open"
+    assert json.loads(subject.removeprefix("feishu-v1:")) == [
+        "feishu",
+        "cli_xxx",
+        "tenant-a",
+        "ou_open",
+    ]
     assert claims["name"] == "Ada"
     assert claims["email"] == "ada@example.com"
     assert requests[0].method == "POST"
@@ -208,7 +241,7 @@ def test_feishu_missing_subject_is_invalid_token(service: SsoService) -> None:
     row = _feishu_row(service)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/oauth/token"):
+        if request.url.path == "/oauth/v3/token":
             return httpx.Response(200, json={"code": 0, "msg": "ok", "data": {"access_token": "t"}})
         return httpx.Response(200, json={"code": 0, "msg": "ok", "data": {"name": "Ada"}})
 
@@ -262,3 +295,76 @@ def test_feishu_authorize_url_requests_phone_scope_when_youli_enabled(tmp_path) 
     )
     query = httpx.QueryParams(url.split("?", 1)[1])
     assert query["scope"] == "contact:user.phone:readonly"
+
+
+@pytest.mark.asyncio
+async def test_legacy_feishu_identity_requires_authenticated_rebinding(service, monkeypatch):
+    row = _feishu_row(service)
+    users = service._services.user_repo
+    owner = users.create(username="owner", password_hash=None, role="user")
+    other = users.create(username="other", password_hash=None, role="user")
+    users.upsert_sso_identity(owner, provider_id=row.id, subject="old-union")
+    subject = 'feishu-v1:["feishu","cli_xxx","tenant-a","old-union"]'
+    monkeypatch.setattr(FeishuAdapter, "complete_login", lambda *args, **kwargs: (subject, {}))
+
+    async def callback(user_id):
+        start = service.start_login_for_kind(
+            "feishu", redirect_after=None, public_base="https://octop.example", bind_user_id=user_id
+        )
+        return await service.handle_callback(
+            code="code", state=start["state"], error=None, public_base="https://octop.example"
+        )
+
+    assert "legacy_feishu_recovery" in (await callback(None)).url
+    assert "identity_taken" in (await callback(other)).url
+    assert users.get_by_sso(row.id, "old-union").id == owner
+    assert "#code=" in (await callback(owner)).url
+    assert users.get_by_sso(row.id, subject).id == owner
+    assert users.get_by_sso(row.id, "old-union") is None
+
+
+@pytest.mark.asyncio
+async def test_existing_scoped_feishu_identity_cannot_be_replaced(service, monkeypatch):
+    row = _feishu_row(service)
+    users = service._services.user_repo
+    owner = users.create(username="owner", password_hash=None, role="user")
+    original = 'feishu-v1:["feishu","cli_xxx","tenant-a","subject"]'
+    users.upsert_sso_identity(owner, provider_id=row.id, subject=original)
+    new_tenant = 'feishu-v1:["feishu","cli_xxx","tenant-b","subject"]'
+    monkeypatch.setattr(FeishuAdapter, "complete_login", lambda *args, **kwargs: (new_tenant, {}))
+    start = service.start_login_for_kind(
+        "feishu", redirect_after=None, public_base="https://octop.example", bind_user_id=owner
+    )
+    result = await service.handle_callback(
+        code="code", state=start["state"], error=None, public_base="https://octop.example"
+    )
+    assert "identity_taken" in result.url
+    assert users.get_by_sso(row.id, original).id == owner
+    assert users.get_by_sso(row.id, new_tenant) is None
+
+
+@pytest.mark.asyncio
+async def test_erp_deployment_requires_existing_account_for_first_feishu_login(service, monkeypatch):
+    row = _feishu_row(service)
+    config = service._services.config
+    services = replace(
+        service._services, config=replace(config, youli=replace(config.youli, enabled=True))
+    )
+    service = SsoService(services, UserManager(services))
+    owner = services.user_repo.create(username="erp-user", password_hash=None, role="user")
+    subject = 'feishu-v1:["feishu","cli_xxx","tenant-a","subject"]'
+    monkeypatch.setattr(FeishuAdapter, "complete_login", lambda *_args, **_kwargs: (subject, {}))
+
+    async def callback(user_id=None):
+        start = service.start_login_for_kind(
+            "feishu", redirect_after=None, public_base="https://octop.example", bind_user_id=user_id
+        )
+        return await service.handle_callback(
+            code="code", state=start["state"], error=None, public_base="https://octop.example"
+        )
+
+    assert "binding_required" in (await callback()).url
+    assert services.user_repo.count() == 1
+    assert "#code=" in (await callback(owner)).url
+    assert "#code=" in (await callback()).url
+    assert services.user_repo.get_by_sso(row.id, subject).id == owner

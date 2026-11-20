@@ -2098,6 +2098,16 @@ class AgentManager:
         async for chunk in self._stream_with_identity(agent_id, request):
             yield chunk
 
+    def _guard_runtime_memory(self, agent_id: str) -> None:
+        from octop.infra.agents.middleware.private_memory import guard_memory_service
+
+        assert self._harness_manager is not None
+        if not callable(getattr(self._harness_manager, "get_agent", None)):
+            return
+        agent = self._octop_harness_or_none(agent_id)
+        runtime = getattr(agent, "_memory_runtime", None)
+        guard_memory_service(getattr(runtime, "service", None))
+
     async def _stream_with_identity(
         self, agent_id: str, request: dict[str, Any]
     ) -> AsyncIterator[Any]:
@@ -2114,7 +2124,11 @@ class AgentManager:
         ):
             self._apply_pending_bootstrap_graph_refresh(runtime_id)
             req = self._prepare_stream_request(agent_id, request)
+            self._guard_runtime_memory(runtime_id)
+            from octop.infra.agents.middleware.private_memory import private_memory_scope
+
             with (
+                private_memory_scope(self._repos.thread_repo, thread_id_from_request(req)),
                 hitl_thread_scope(thread_id_from_request(req)),
                 turn_model_scope(self._stream_model_label(agent_id, req, thread_id)),
                 self._turn_model_access_from_request(req),
@@ -2169,11 +2183,19 @@ class AgentManager:
         if self._harness_manager is None:
             raise self._unavailable_error(agent_id)
         runtime_id = agent_id
-        async with self._track_invocation(agent_id):
+        thread_id = str(request.get("thread_id") or thread_id_from_request(request) or "")
+        async with (
+            self._thread_execution_lock(agent_id, thread_id),
+            self._track_invocation(agent_id),
+        ):
             self._apply_pending_bootstrap_graph_refresh(runtime_id)
             req = self._prepare_stream_request(agent_id, request)
             thread_id = str(req.get("thread_id") or thread_id_from_request(req) or "")
+            self._guard_runtime_memory(runtime_id)
+            from octop.infra.agents.middleware.private_memory import private_memory_scope
+
             with (
+                private_memory_scope(self._repos.thread_repo, thread_id_from_request(req)),
                 hitl_thread_scope(thread_id_from_request(req)),
                 turn_model_scope(self._stream_model_label(agent_id, req, thread_id)),
                 self._turn_model_access_from_request(req),
@@ -2205,7 +2227,18 @@ class AgentManager:
             self._track_invocation(agent_id),
         ):
             self._apply_pending_bootstrap_graph_refresh(runtime_id)
+            row = self._repos.thread_repo.get(thread_id)
+            if row is not None and row.private_knowledge_protected:
+                harness = self._octop_harness_or_none(agent_id)
+                if harness is not None:
+                    configs = harness._hitl_resume_configs
+                    resume_config = configs.setdefault(thread_id, {"configurable": {"thread_id": thread_id}})
+                    resume_config.setdefault("configurable", {})["octop_memory_capture_exclude"] = True
+            self._guard_runtime_memory(runtime_id)
+            from octop.infra.agents.middleware.private_memory import private_memory_scope
+
             with (
+                private_memory_scope(self._repos.thread_repo, thread_id),
                 hitl_thread_scope(thread_id),
                 turn_model_scope(self._stream_model_label(agent_id, {}, thread_id)),
                 self._turn_model_access_for_thread(thread_id),
@@ -3833,6 +3866,10 @@ class AgentManager:
                     tags=tags,
                     init_workspace=seed_workspace,
                 )
+                from octop.infra.agents.middleware.private_memory import guard_memory_service
+
+                runtime = getattr(entry.agent, "_memory_runtime", None)
+                guard_memory_service(getattr(runtime, "service", None))
                 await self._post_start_agent(row, entry.agent, cfg, user_display=user_display)
                 self._repos.agent_repo.set_state(row.agent_id, "running", error=None)
                 logger.info("Agent %s (%s) started", row.agent_id, row.name)
@@ -4328,6 +4365,13 @@ class AgentManager:
         req = dict(request)
         if req.get("agent_id") is None:
             req["agent_id"] = agent_id
+        thread_id = str(req.get("thread_id") or "")
+        if thread_id:
+            row = self._repos.thread_repo.get(thread_id)
+            if row is not None and row.private_knowledge_protected:
+                configurable = dict(req.get("configurable") or {})
+                configurable["octop_memory_capture_exclude"] = True
+                req["configurable"] = configurable
         agent_cfg = self.get_config(agent_id)
         plugins_cfg = agent_cfg.get("plugins")
         tool_configs = collect_plugin_tool_configs(
@@ -4589,6 +4633,7 @@ class AgentManager:
             harness_handles_mcp_tool_errors,
         )
         from octop.infra.agents.middleware.octop_ui_offload import OctopUiOffloadMiddleware
+        from octop.infra.agents.middleware.private_memory import PrivateMemoryGuardMiddleware
         from octop.infra.agents.middleware.reasoning import ReasoningRequestMiddleware
         from octop.infra.agents.middleware.team_dispatch import TeamDispatchBriefingMiddleware
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
@@ -4616,6 +4661,7 @@ class AgentManager:
             ReasoningRequestMiddleware(),
             TeamDispatchBriefingMiddleware(),
             KnowledgeSearchHintMiddleware(),
+            PrivateMemoryGuardMiddleware(self._repos.thread_repo),
             BrowserProfileMiddleware(),
             BinaryReadGuardMiddleware(),
             *(() if harness_handles_mcp_tool_errors() else (McpOutputSchemaMiddleware(),)),
@@ -4864,18 +4910,23 @@ class AgentManager:
         proc = self._team_processor
         room = getattr(proc, "teams", proc)
         installer = getattr(room, "install_host_dispatch", None)
+        if getattr(team, "_octop_private_peer_guard", False) is True:
+            return
         if callable(installer):
             installer(team)
-            return
-        wire_host_dispatch(
-            team,
-            is_team=lambda agent_id: is_team_agent(self.get_row(agent_id)),
-            stream_peer=getattr(room, "stream_peer_to_room", None)
-            or getattr(proc, "stream_team_peer_to_room", None),
-            stream_host=getattr(room, "stream_host_followup_to_room", None),
-            take_prompt=getattr(room, "take_peer_prompt", None)
-            or getattr(proc, "take_team_peer_prompt", None),
-        )
+        else:
+            wire_host_dispatch(
+                team,
+                is_team=lambda agent_id: is_team_agent(self.get_row(agent_id)),
+                stream_peer=getattr(room, "stream_peer_to_room", None)
+                or getattr(proc, "stream_team_peer_to_room", None),
+                stream_host=getattr(room, "stream_host_followup_to_room", None),
+                take_prompt=getattr(room, "take_peer_prompt", None)
+                or getattr(proc, "take_team_peer_prompt", None),
+            )
+        from octop.infra.agents.teams.private_peer import wire_private_peer_guard
+
+        wire_private_peer_guard(team, lambda: self._repos.thread_repo, self._team_jobs)
 
     def _connector_write_interrupts(self, user_id: int | None) -> dict[str, Any]:
         from octop.infra.connectors.gateway.adapters.agently_cli import (

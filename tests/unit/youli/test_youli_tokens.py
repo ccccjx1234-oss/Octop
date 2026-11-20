@@ -70,6 +70,20 @@ def test_concurrent_session_replacement_keeps_one_active(server):
     from octop.infra.db.repos.youli import YouliSessionRepo
 
     user = _make_user(server)
+    provider = server.services.sso_repo.upsert_by_kind(
+        "youli",
+        enabled=True,
+        display_name="Youli",
+        issuer="youli",
+        client_id="test",
+        client_secret_enc=None,
+        scopes="",
+        dashboard_origin=None,
+        extra={},
+    )
+    server.services.user_repo.upsert_sso_identity(
+        user.id, provider_id=provider.id, subject="youli:2001:3001"
+    )
     repo = server.services.youli_session_repo
     other_pool = SqlitePool(repo._db.path)  # noqa: SLF001
     other_repo = YouliSessionRepo(other_pool)
@@ -97,6 +111,25 @@ def test_concurrent_session_replacement_keeps_one_active(server):
     assert active[0].sid in {"sid-a", "sid-b"}
     assert sum(len(replaced) for _, replaced in results) == 1
     other_pool.close()
+
+
+def test_session_replacement_rejects_user_without_independent_mapping(server):
+    user = _make_user(server)
+    now = int(time.time())
+    with pytest.raises(ValueError, match="no independent mapping"):
+        server.services.youli_session_repo.create_replacing(
+            sid="sid-unmapped",
+            user_id=user.id,
+            account_user_id=1001,
+            account_username="dave",
+            company_id=2001,
+            employee_id=3001,
+            industry=7,
+            token_blob=None,
+            token_expires_at=now + 600,
+            abs_expires_at=now + 600,
+        )
+    assert server.services.youli_session_repo.list_active_for_user(user.id) == []
 
 
 @pytest.mark.asyncio

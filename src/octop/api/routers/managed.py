@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from octop.api.common.agent import apply_agent_audience
+from octop.api.common.scope import ResourceScopeFields, scope_shared_flag, validate_body_scope
 from octop.api.deps import current_user, get_server
 from octop.api.routers.agents import _row_dict
 from octop.infra.agents.experts.composer_files import (
@@ -48,7 +49,7 @@ class _FileOverrideBody(BaseModel):
     content: str = ""
 
 
-class ManagedCreateBody(BaseModel):
+class ManagedCreateBody(ResourceScopeFields):
     name: str
     runner: str = Field(description="Enabled ACP runner id")
     workspace_dir: str = Field(description="Working directory passed to the ACP session")
@@ -62,8 +63,6 @@ class ManagedCreateBody(BaseModel):
     color: str | None = None
     icon_url: str | None = None
     enable_trajectory: bool = True
-    visibility: Literal["owner", "all", "groups"] | None = None
-    group_ids: list[str] | None = None
     quick_prompts: list[_QuickPromptBody] | None = None
     file_overrides: list[_FileOverrideBody] | None = None
 
@@ -143,8 +142,12 @@ async def create_managed_agent(
     apply_managed_backend(config)
     pin_managed_runtime(config)
     apply_explicit_workspace_dir(config, body.workspace_dir)
-    if body.visibility is not None:
-        GroupAccess(server.services.repos).validate_visibility(body.visibility, body.group_ids)
+    scope_dict, _ = validate_body_scope(
+        GroupAccess(server.services.repos),
+        body,
+        user=user,
+        fallback_visibility="owner",
+    )
     spec = AgentCreateSpec(
         name=body.name.strip(),
         agent_id=(body.agent_id or "").strip() or None,
@@ -162,12 +165,15 @@ async def create_managed_agent(
         spec,
         workspace_initializer=_workspace_initializer(body),
     )
-    if body.visibility is not None:
+    if body.visibility is not None or scope_dict is not None:
         row = await apply_agent_audience(
             server,
             row.agent_id,
             visibility=body.visibility,
             group_ids=body.group_ids,
-            shared=body.visibility != "owner",
+            shared=scope_shared_flag(body.visibility, None),
+            scope=scope_dict,
+            actor_user_id=user.id,
+            actor_is_admin=bool(user.is_admin),
         )
     return _row_dict(row, viewer_user_id=user.id, server=server)

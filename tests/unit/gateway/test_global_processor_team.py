@@ -6,6 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -76,6 +77,24 @@ def processor_env(tmp_path: Path) -> dict[str, object]:
         gateway=gw,
     )
     return {"processor": processor, "gateway": gw, "parent_sk": parent_sk}
+
+
+async def _prepare_public_member(processor: Any) -> None:
+    from octop_harness.teams.util import PeerCall
+
+    prepared = await processor.prepare_peer_session(
+        PeerCall(
+            from_agent_id="parent",
+            to_agent_id="child",
+            user_id=1,
+            message="task",
+            source_thread_id="thr_parent",
+            source_session_key=None,
+        )
+    )
+    assert prepared is not None
+    assert prepared.thread_id == "thr_parent~child"
+    assert prepared.session_key == "child:dashboard:1:peer:thr_parent"
 
 
 def test_compose_followup_uses_peer_display_name(processor_env: dict) -> None:
@@ -1142,6 +1161,7 @@ async def test_stream_team_peer_relays_tokens_to_member_and_room(
 
     processor = processor_env["processor"]
     gateway = processor_env["gateway"]
+    await _prepare_public_member(processor)
     room_frames: list[dict[str, object]] = []
     member_frames: list[dict[str, object]] = []
 
@@ -1268,6 +1288,7 @@ async def test_member_tokens_stay_off_the_room_until_the_host_is_idle(
     monkeypatch.setattr(team_mod, "_HOST_IDLE_WAIT_SEC", 0)
     processor = processor_env["processor"]
     gateway = processor_env["gateway"]
+    await _prepare_public_member(processor)
     room_frames: list[dict[str, object]] = []
     member_frames: list[dict[str, object]] = []
 

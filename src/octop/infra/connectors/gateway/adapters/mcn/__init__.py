@@ -1,8 +1,7 @@
 """MCN (经贝) connector — business tools backed by the employee's own token.
 
-Each connector instance stores the MCN gateway URL and the business token of
-the employee who installed it.  MCN keeps enforcing company/employee/role
-permissions; the connector never falls back to a shared service account.
+Each connector resolves a live, verified employee session at use time. MCN
+continues enforcing company, employee and role permissions.
 """
 
 from __future__ import annotations

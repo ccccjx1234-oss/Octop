@@ -55,6 +55,7 @@ export interface AuthStatus {
 
 export interface SsoIdentity {
   kind: string;
+  provider_id: number;
 }
 
 export interface OctopUser {
@@ -693,6 +694,30 @@ export const authApi = {
    */
   adminResetMfa: (userId: number) =>
     request<void>(`/users/${userId}/mfa`, { method: "DELETE" }),
+
+  youliBinding: () =>
+    request<{ bound: boolean; delegation_active: boolean }>(
+      "/auth/youli/binding",
+    ),
+  startYouliReauth: (provider_id: number) =>
+    request<{ authorization_url: string }>("/auth/youli/binding/reauth/start", {
+      method: "POST",
+      body: JSON.stringify({ provider_id }),
+    }),
+  completeYouliReauth: (state: string, code: string) =>
+    request<{ proof: string }>("/auth/youli/binding/reauth/callback", {
+      method: "POST",
+      body: JSON.stringify({ state, code }),
+    }),
+  bindYouli: (mobile: string, password: string, proof: string) =>
+    request<{ bound: boolean; delegation_active: boolean }>(
+      "/auth/youli/binding",
+      {
+        method: "POST",
+        body: JSON.stringify({ mobile, password, proof }),
+      },
+    ),
+  unlinkYouli: () => request<void>("/auth/youli/binding", { method: "DELETE" }),
 
   /** Server-side logout (best-effort; client clears token regardless). */
   logout: () =>

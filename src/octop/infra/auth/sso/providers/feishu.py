@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
@@ -63,17 +64,29 @@ def _unwrap(payload: object) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Feishu response is not an object")
     code = payload.get("code")
-    if code not in (0, "0"):
-        msg = payload.get("msg")
-        detail = msg if isinstance(msg, str) and msg else f"Feishu error {code}"
+    if code not in (0, "0") and not (code is None and "access_token" in payload):
+        err = payload.get("error_description") or payload.get("error") or payload.get("msg")
+        detail = err if isinstance(err, str) and err else f"Feishu error {code}"
         raise ValueError(detail)
     data = payload.get("data")
     if isinstance(data, dict):
         return data
     if data is None:
-        # authen/v2/oauth/token puts access_token at the top level.
+        # OAuth token responses may put access_token at the top level.
         return payload
     raise ValueError("Feishu response has no data object")
+
+
+def _parse_response(response: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError:
+        response.raise_for_status()
+        raise
+    if response.is_error:
+        _unwrap(payload)
+        response.raise_for_status()
+    return _unwrap(payload)
 
 
 class FeishuAdapter:
@@ -115,7 +128,7 @@ class FeishuAdapter:
         scopes = " ".join(scope_tokens)
         if scopes:
             params["scope"] = scopes
-        return f"{_FEISHU_ACCOUNTS[region]}/open-apis/authen/v1/authorize?{urlencode(params)}"
+        return f"{_FEISHU_ACCOUNTS[region]}/oauth/v3/authorize?{urlencode(params)}"
 
     def complete_login(
         self,
@@ -129,9 +142,10 @@ class FeishuAdapter:
             raise ValueError("Feishu app secret is not configured")
         secret = decrypt_secret(self._service._services.secret_repo, row.client_secret_enc)
         open_base = _FEISHU_OPEN[feishu_region(row)]
+        accounts_base = _FEISHU_ACCOUNTS[feishu_region(row)]
         with self._service._http_client() as client:
             token_response = client.post(
-                f"{open_base}/open-apis/authen/v2/oauth/token",
+                f"{accounts_base}/oauth/v3/token",
                 json={
                     "grant_type": "authorization_code",
                     "client_id": row.client_id,
@@ -142,8 +156,7 @@ class FeishuAdapter:
                 },
             )
             try:
-                token_response.raise_for_status()
-                token_data = _unwrap(token_response.json())
+                token_data = _parse_response(token_response)
             except (httpx.HTTPError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
             access_token = token_data.get("access_token")
@@ -154,14 +167,21 @@ class FeishuAdapter:
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             try:
-                user_response.raise_for_status()
-                identity = _unwrap(user_response.json())
+                identity = _parse_response(user_response)
             except (httpx.HTTPError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
         subject = identity.get("union_id") or identity.get("open_id")
         if not isinstance(subject, str) or not subject:
             raise jwt.InvalidTokenError("Feishu user info has no union_id or open_id")
-        return subject, self.to_claims(identity)
+        tenant = identity.get("tenant_key")
+        if not isinstance(tenant, str) or not tenant.strip():
+            raise jwt.InvalidTokenError("Feishu user info has no tenant_key")
+        scoped = "feishu-v1:" + json.dumps(
+            [feishu_region(row), row.client_id, tenant, subject],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        return scoped, self.to_claims(identity)
 
     def test_connection(self, row: SsoProviderRow) -> dict[str, bool | str]:
         if row.client_secret_enc is None:

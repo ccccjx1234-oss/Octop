@@ -123,6 +123,9 @@ class WebSocketChannel(BaseChannel):
             await self._hub.push(conn_id, {"type": "done"})
             return
 
+        if not await self._hub.thread_allowed(thread_id, conn_id):
+            return
+
         self._track_subject(message)
         # Per-turn routing copy: do not write thread_id onto the shared
         # ChannelSubject (keyed by user), or concurrent threads 串流 via _send_*.
@@ -172,6 +175,9 @@ class WebSocketChannel(BaseChannel):
         self._hub.mark_turn_active(thread_id)
         failed = False
         stream = None
+        from octop.infra.knowledge.private_authority import install, reset  # noqa: PLC0415
+
+        authority_token = install(msg_meta.pop("_private_knowledge_authority", None))
         try:
             await self._hub.push_to_thread(
                 thread_id,
@@ -326,6 +332,7 @@ class WebSocketChannel(BaseChannel):
             except Exception:
                 logger.exception("websocket failed to deliver error frame thread=%s", thread_id)
         finally:
+            reset(authority_token)
             discarded = self._steer.end_turn(thread_id, failed=failed)
             self._hub.mark_turn_idle(thread_id)
             if stream is not None:

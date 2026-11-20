@@ -120,3 +120,38 @@ async def test_search_knowledge_empty_hits_message() -> None:
     ):
         out = await tool.ainvoke({"query": "nothing"})
     assert "No relevant passages found" in out
+
+
+def test_private_source_requires_request_authority() -> None:
+    from langgraph.config import var_child_runnable_config
+
+    from octop.infra.knowledge.private_authority import dashboard_authority, install, reset
+    from octop.infra.knowledge.tools import _tool_ctx
+
+    source = "private-feishu:source"
+    config = {
+        "configurable": {
+            "user": "1",
+            "octop_user_id": "1",
+            "actor": "authenticated_web",
+            "knowledge_base_ids": [source],
+        }
+    }
+    token = var_child_runnable_config.set(config)
+    try:
+        for executor in ("group_member", "private_im", "cron", "autonomous", "unknown"):
+            config["configurable"]["executor"] = executor
+            assert _tool_ctx()[2] == []
+        authority = install(dashboard_authority(2, [source]))
+        try:
+            assert _tool_ctx()[2] == []
+        finally:
+            reset(authority)
+        authority = install(dashboard_authority(1, [source]))
+        try:
+            assert _tool_ctx()[2] == [source]
+        finally:
+            reset(authority)
+        assert _tool_ctx()[2] == []
+    finally:
+        var_child_runnable_config.reset(token)

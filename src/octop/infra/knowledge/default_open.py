@@ -44,6 +44,7 @@ def stamp_turn_knowledge_config(
     extra_ids: Sequence[str] | None = None,
     is_admin: bool = False,
     locale: str,
+    private_catalog: Sequence[dict[str, str]] = (),
 ) -> list[str]:
     """Write this turn's knowledge-base selection onto the harness request."""
     from octop.infra.knowledge.hint import catalog_for_selected_bases  # noqa: PLC0415
@@ -56,7 +57,9 @@ def stamp_turn_knowledge_config(
     )
     configurable = dict(request.get("configurable") or {})
     configurable["knowledge_base_ids"] = selected_ids
-    configurable["knowledge_base_catalog"] = catalog_for_selected_bases(visible_bases, selected_ids)
+    configurable["knowledge_base_catalog"] = catalog_for_selected_bases(
+        visible_bases, selected_ids
+    ) + [item for item in private_catalog if item["id"] in selected_ids]
     configurable["user_is_admin"] = is_admin
     configurable["locale"] = locale
     request["configurable"] = configurable

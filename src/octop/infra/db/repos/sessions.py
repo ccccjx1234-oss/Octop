@@ -9,7 +9,9 @@ from typing import Any
 from octop_gateway.models import ChannelSubject
 
 from octop.infra.db.pool import DatabasePool
-from octop.infra.db.repos._base import DbRow, now_ts, sql_in_placeholders
+from octop.infra.db.repos._base import (
+    DbRow, PrivateThreadBindingError, lock_thread, now_ts, sql_in_placeholders,
+)
 from octop.infra.utils.weixin_context import (
     merge_weixin_context_token,
     selected_weixin_token,
@@ -113,6 +115,17 @@ class SessionRow:
         )
 
 
+def _check_thread_binding(
+    conn: Any, dialect: str, thread_id: str, session_key: str, channel_type: str, user_id: int
+) -> None:
+    thread = lock_thread(conn, dialect, thread_id)
+    if thread is None or not thread["private_knowledge_protected"]:
+        return
+    expected = f"{thread['agent_id']}:dashboard:{thread['user_id']}:dm"
+    if session_key != expected or channel_type != "dashboard" or user_id != thread["user_id"]:
+        raise PrivateThreadBindingError("private knowledge protected")
+
+
 class SessionRepo:
     def __init__(self, db: DatabasePool) -> None:
         self._db = db
@@ -150,9 +163,14 @@ class SessionRepo:
         ts = now_ts()
         with self._db.transaction() as conn:
             current = conn.execute(
-                "SELECT channel_metadata FROM sessions WHERE session_key = ?",
+                "SELECT channel_metadata, channel_type, user_id FROM sessions WHERE session_key = ?",
                 (session_key,),
             ).fetchone()
+            _check_thread_binding(
+                conn, self._db.dialect, thread_id, session_key,
+                current["channel_type"] if current is not None else channel_type,
+                current["user_id"] if current is not None else user_id,
+            )
             if current is not None:
                 metadata = merge_weixin_context_token(
                     _decode_metadata(current["channel_metadata"]),
@@ -220,6 +238,14 @@ class SessionRepo:
 
     def set_thread(self, session_key: str, thread_id: str) -> None:
         with self._db.transaction() as conn:
+            session = conn.execute(
+                "SELECT channel_type, user_id FROM sessions WHERE session_key = ?", (session_key,)
+            ).fetchone()
+            if session is not None:
+                _check_thread_binding(
+                    conn, self._db.dialect, thread_id, session_key,
+                    session["channel_type"], session["user_id"],
+                )
             conn.execute(
                 "UPDATE sessions SET thread_id = ?, updated_at = ? WHERE session_key = ?",
                 (thread_id, now_ts(), session_key),

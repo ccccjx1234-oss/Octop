@@ -35,9 +35,12 @@ VALUES
 
 - `/api/crm/sso/youli/register`
 - `/api/crm/sso/youli/redeem`
+- `/api/crm/sso/youli/delegation`
 - `/api/crm/sso/youli/revoke`
 
 `issue` 不放白名单，必须携带业务登录态。修改后同步到 Nacos 并重启网关。
+
+先发布支持 `delegation` 的 CRM 和网关配置，再发布 Octop。该接口校验应用密钥和 audience，每次从 CRM 与 MDM 共用的 Redis 分配独立终端号。备份和恢复时，将 `youli:sso:delegation:terminal-sequence` 与 MDM 凭证缓存一起处理，避免序列回退到仍在使用的槽位。
 
 ## 4. Octop 环境变量
 
@@ -73,13 +76,14 @@ Octop 必须与 `youli-crm`、`youli-mdm` 处于同一 Compose 网络，或使�
 | 应用记录启用 | `SELECT client_id, audience, callback_uri, enabled FROM youli_oauth_client` |
 | 网关白名单生效 | Nacos 配置回读 + 网关重启日志 |
 | Octop 配置生效 | `GET /api/auth/youli/status` 返回 enabled=true |
-| 专用终端 | Redis 中出现 `用户名-10-行业`，原 PC 槽位仍存在 |
+| 独立终端 | 员工登录使用终端 10。ERP 绑定使用大于 1000000000 的终端号，校验失败或绑定冲突时，已有员工会话仍可通过 MDM 校验 |
+| 绑定迁移 | SQLite 和 PostgreSQL 的 Octop 控制库运行到 036，核对凭证失效时仍可解绑 |
 | 回调 cookie | 浏览器仅持有 Host-only、HttpOnly、Secure、SameSite=Lax 的 `youli_sso_<request_id>` |
 
 ## 6. 回滚
 
 1. Octop 设置 `OCTOP_YOULI_ENABLED=false` 并重启。
-2. 网关移除三条白名单并重启。
+2. 从网关移除本功能的白名单项并重启。
 3. 需要彻底回滚时执行 SQL 文件头部的 DROP 语句；会话表与绑定表可保留，不影响本地登录。
 
 ## 7. 前端静态资源
@@ -139,3 +143,11 @@ cd dashboard && VITE_BASE_PATH=/aiwork/ npm run build
 静态目录 403 跳回登录页，以及原回调和只读状态接口保持原响应。回滚时恢复配置
 备份，再校验并热加载。
 
+
+### 历史员工绑定的来源隔离
+
+迁移 031 将旧绑定的 `had_independent_identity` 留为 NULL，表示无法判断其 ERP 登录映射是否在绑定前独立存在。此类员工身份在解绑后仍保持隔离，普通 ERP 登录和重新分配均会被拒绝；管理员须核实映射来源和归属，处理冲突后才能解除隔离。新绑定会记录来源：纯委托解绑后可凭新的 ERP 验证重新绑定；已有独立映射的用户保留原登录身份。
+
+启用 ERP 接入时，员工首次使用飞书前，先用员工登录进入原 Octop 账号，再从账号安全绑定飞书。已绑定飞书的账号可继续飞书登录。手机号匹配仅提示用户登录原账号并主动绑定。
+
+如果已经形成两套 Octop 账号，管理员应先核验两套账号的归属，再协助用户在重复账号中解绑飞书。重复账号仅有飞书登录时，先通过用户管理重置其密码以保留访问。随后用户登录原 ERP 对应的 Octop 账号并绑定飞书。两套账号的会话和文件按各自账号保留。

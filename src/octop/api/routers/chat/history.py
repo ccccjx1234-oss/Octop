@@ -159,6 +159,8 @@ def _require_thread(
     if row is None or row.agent_id != agent_id:
         raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"thread {thread_id!r} not found")
     effective_uid = as_user if as_user is not None else user.id
+    if getattr(row, "private_knowledge_protected", False) and row.user_id != user.id:
+        raise OctopError(ErrorCode.FORBIDDEN, "thread not owned by user")
     if write:
         if row.user_id != effective_uid:
             raise OctopError(ErrorCode.FORBIDDEN, "thread not owned by user")
@@ -223,6 +225,7 @@ async def list_threads(
             "pinned": r.pinned,
             "unread_count": int(unread.get(r.thread_id, 0)),
             "contributed": bool(r.contributed),
+            "private_knowledge_protected": bool(r.private_knowledge_protected),
             "owned": r.user_id == effective_uid,
             "model_ref": r.model_ref,
             "reasoning_mode": r.reasoning_mode,
@@ -240,6 +243,7 @@ async def list_threads(
             ),
         }
         for r in rows
+        if not r.private_knowledge_protected or r.user_id == user.id
     ]
 
 
@@ -642,7 +646,8 @@ async def patch_thread(
                     ErrorCode.THREAD_CONTRIBUTE_REQUIRES_SHARE,
                     "only a shared expert can accept a contributed conversation",
                 )
-        registry.set_contributed(thread_id, bool(body.contributed))
+        if not registry.set_contributed(thread_id, bool(body.contributed)):
+            raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, "private knowledge protected")
     if body.title is not None:
         registry.update_title(thread_id, body.title)
     if body.pinned is not None:

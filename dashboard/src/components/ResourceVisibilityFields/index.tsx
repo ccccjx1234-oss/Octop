@@ -4,11 +4,20 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import cx from "classnames";
 import {
+  emptyScopeSelection,
+  type ResourceScopeSelection,
+  type ScopedResourceVisibilityMode,
+} from "../../api/modules/erpOrg";
+import {
   userGroupsApi,
   type ResourceVisibilityMode,
   type UserGroup,
 } from "../../api/modules/userGroups";
 import { ResourceAvatar, ROLE_AVATAR_PRESETS } from "../AvatarPicker";
+import {
+  ErpScopePanel,
+  resetErpCatalogCacheForTest,
+} from "./ErpScopePanel";
 import {
   isVisibilityControlVisible,
   needsGroupCatalog,
@@ -17,21 +26,43 @@ import {
 } from "./visibilityChrome";
 import styles from "./ResourceVisibilityFields.module.less";
 
-export type { ResourceVisibilityMode };
+export type { ResourceVisibilityMode, ScopedResourceVisibilityMode };
 
-export type ResourceVisibilityValue = {
-  visibility: ResourceVisibilityMode;
+export type ResourceVisibilityValue<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+> = {
+  visibility: T;
   groupIds: string[];
 };
 
-type FieldsProps = {
+export function resetResourceVisibilityCachesForTest() {
+  audienceState = {
+    status: "loading",
+    userCount: null,
+    groupCount: null,
+    groupsLoaded: false,
+    groupCountFromList: 0,
+    groups: [],
+    loadedAt: 0,
+  };
+  audienceInflight = null;
+  resetErpCatalogCacheForTest();
+}
+
+type FieldsProps<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+> = {
   /** User-owned resources can stay private (`owner`). Admin resources omit it. */
   allowOwner: boolean;
-  visibility: ResourceVisibilityMode;
+  visibility: T;
   groupIds: string[];
-  onChange: (next: ResourceVisibilityValue) => void;
+  onChange: (next: ResourceVisibilityValue<T>) => void;
   disabled?: boolean;
   className?: string;
+  enableErpScope?: boolean;
+  isAdmin?: boolean;
+  scope?: ResourceScopeSelection;
+  onScopeChange?: (next: ResourceScopeSelection) => void;
 };
 
 type AudienceState = AudienceSnapshot & {
@@ -139,14 +170,20 @@ function GroupLabel({
 }
 
 /** Radio + optional multi-select for who may use a resource. */
-export function ResourceVisibilityFields({
+export function ResourceVisibilityFields<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+>({
   allowOwner,
   visibility,
   groupIds,
   onChange,
   disabled = false,
   className,
-}: FieldsProps) {
+  enableErpScope = false,
+  isAdmin = false,
+  scope,
+  onScopeChange,
+}: FieldsProps<T>) {
   const { t } = useTranslation();
   const audience = useResourceAudience();
   const groups = audience.groups;
@@ -155,26 +192,89 @@ export function ResourceVisibilityFields({
     [groups],
   );
   const disabledLabel = t("adminUsers.statusDisabled");
+  const erpEnabled = Boolean(enableErpScope && isAdmin);
   const showGroups = showGroupVisibilityOption(audience, visibility);
 
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, {
+      allowOwner,
+      visibility,
+      enableErpScope,
+      isAdmin,
+    })
+  ) {
     return null;
   }
 
-  const radioOptions = [
-    ...(allowOwner
-      ? [{ value: "owner" as const, label: t("resourceVisibility.owner") }]
-      : []),
-    { value: "all" as const, label: t("resourceVisibility.all") },
-    ...(showGroups
-      ? [{ value: "groups" as const, label: t("resourceVisibility.groups") }]
-      : []),
-  ];
+  const radioOptions = erpEnabled
+    ? [
+        ...(allowOwner
+          ? [{ value: "owner" as const, label: t("resourceVisibility.owner") }]
+          : []),
+        { value: "all" as const, label: t("resourceVisibility.all") },
+        { value: "company" as const, label: t("resourceVisibility.company") },
+        { value: "scoped" as const, label: t("resourceVisibility.scoped") },
+        ...(visibility === "groups"
+          ? [{ value: "groups" as const, label: t("resourceVisibility.groups") }]
+          : []),
+      ]
+    : [
+        ...(allowOwner
+          ? [{ value: "owner" as const, label: t("resourceVisibility.owner") }]
+          : []),
+        { value: "all" as const, label: t("resourceVisibility.all") },
+        ...(showGroups
+          ? [{ value: "groups" as const, label: t("resourceVisibility.groups") }]
+          : []),
+      ];
 
   const options = groups.map((group) => ({
     value: group.user_group_id,
     label: <GroupLabel group={group} disabledLabel={disabledLabel} />,
   }));
+
+  const groupSelectNode = (
+    <Select
+      className={styles.groups}
+      mode="multiple"
+      disabled={disabled}
+      value={groupIds}
+      placeholder={t("resourceVisibility.groupPlaceholder")}
+      options={options}
+      optionLabelProp="label"
+      optionFilterProp="value"
+      filterOption={(input, option) => {
+        const group = byId.get(String(option?.value ?? ""));
+        if (!group) return false;
+        const q = input.trim().toLowerCase();
+        return (
+          group.name.toLowerCase().includes(q) ||
+          group.user_group_id.toLowerCase().includes(q)
+        );
+      }}
+      tagRender={(props) => {
+        const group = byId.get(props.value);
+        return (
+          <Tag
+            className={styles.groupTag}
+            closable={props.closable}
+            onClose={props.onClose}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            {group ? (
+              <GroupLabel group={group} disabledLabel={disabledLabel} />
+            ) : (
+              props.label
+            )}
+          </Tag>
+        );
+      }}
+      onChange={(ids) => onChange({ visibility, groupIds: ids })}
+    />
+  );
 
   return (
     <div className={cx(styles.fields, className)}>
@@ -183,74 +283,52 @@ export function ResourceVisibilityFields({
         disabled={disabled}
         value={visibility}
         options={radioOptions}
-        onChange={(event) =>
+        onChange={(event) => {
+          const nextVis = event.target.value as T;
           onChange({
-            visibility: event.target.value as ResourceVisibilityMode,
-            groupIds: event.target.value === "groups" ? groupIds : [],
-          })
-        }
+            visibility: nextVis,
+            groupIds:
+              nextVis === "groups" || nextVis === "scoped" ? groupIds : [],
+          });
+        }}
       />
-      {visibility === "groups" ? (
-        <Select
-          className={styles.groups}
-          mode="multiple"
+      {visibility === "groups" ? groupSelectNode : null}
+      {erpEnabled && onScopeChange ? (
+        <ErpScopePanel
+          visibility={visibility}
+          scope={scope ?? emptyScopeSelection()}
+          onScopeChange={onScopeChange}
           disabled={disabled}
-          value={groupIds}
-          placeholder={t("resourceVisibility.groupPlaceholder")}
-          options={options}
-          optionLabelProp="label"
-          optionFilterProp="value"
-          filterOption={(input, option) => {
-            const group = byId.get(String(option?.value ?? ""));
-            if (!group) return false;
-            const q = input.trim().toLowerCase();
-            return (
-              group.name.toLowerCase().includes(q) ||
-              group.user_group_id.toLowerCase().includes(q)
-            );
-          }}
-          tagRender={(props) => {
-            const group = byId.get(props.value);
-            return (
-              <Tag
-                className={styles.groupTag}
-                closable={props.closable}
-                onClose={props.onClose}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-              >
-                {group ? (
-                  <GroupLabel group={group} disabledLabel={disabledLabel} />
-                ) : (
-                  props.label
-                )}
-              </Tag>
-            );
-          }}
-          onChange={(ids) => onChange({ visibility, groupIds: ids })}
+          groupSelectNode={showGroups ? groupSelectNode : undefined}
         />
       ) : null}
     </div>
   );
 }
 
-type FormItemProps = {
+type FormItemProps<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+> = {
   allowOwner: boolean;
-  visibility: ResourceVisibilityMode;
+  visibility: T;
   groupIds: string[];
-  onChange: (next: ResourceVisibilityValue) => void;
+  onChange: (next: ResourceVisibilityValue<T>) => void;
   disabled?: boolean;
   /** Override default ``resourceVisibility.label``. */
   label?: string;
   /** Hint under the control (e.g. skill package / connector copy). */
   extra?: string;
   className?: string;
+  enableErpScope?: boolean;
+  isAdmin?: boolean;
+  scope?: ResourceScopeSelection;
+  onScopeChange?: (next: ResourceScopeSelection) => void;
 };
 
 /** Drawer-friendly Form.Item wrapping ``ResourceVisibilityFields``. */
-export function ResourceVisibilityFormItem({
+export function ResourceVisibilityFormItem<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+>({
   allowOwner,
   visibility,
   groupIds,
@@ -259,10 +337,21 @@ export function ResourceVisibilityFormItem({
   label,
   extra,
   className,
-}: FormItemProps) {
+  enableErpScope = false,
+  isAdmin = false,
+  scope,
+  onScopeChange,
+}: FormItemProps<T>) {
   const { t } = useTranslation();
   const audience = useResourceAudience();
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, {
+      allowOwner,
+      visibility,
+      enableErpScope,
+      isAdmin,
+    })
+  ) {
     return null;
   }
   return (
@@ -278,16 +367,22 @@ export function ResourceVisibilityFormItem({
         groupIds={groupIds}
         onChange={onChange}
         disabled={disabled}
+        enableErpScope={enableErpScope}
+        isAdmin={isAdmin}
+        scope={scope}
+        onScopeChange={onScopeChange}
       />
     </Form.Item>
   );
 }
 
-type CollapseProps = {
+type CollapseProps<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+> = {
   allowOwner?: boolean;
-  visibility: ResourceVisibilityMode;
+  visibility: T;
   groupIds: string[];
-  onChange: (next: ResourceVisibilityValue) => void;
+  onChange: (next: ResourceVisibilityValue<T>) => void;
   disabled?: boolean;
   /** Toggle label when collapsed (default: group access title). */
   title?: string;
@@ -302,7 +397,9 @@ type CollapseProps = {
  * Admin-style collapsible block (same interaction as model 「兼容性」).
  * Use inside provider/model forms for 「分组使用」.
  */
-export function ResourceVisibilityCollapse({
+export function ResourceVisibilityCollapse<
+  T extends ScopedResourceVisibilityMode = ResourceVisibilityMode,
+>({
   allowOwner = false,
   visibility,
   groupIds,
@@ -313,7 +410,7 @@ export function ResourceVisibilityCollapse({
   hint,
   defaultOpen = false,
   className,
-}: CollapseProps) {
+}: CollapseProps<T>) {
   const { t } = useTranslation();
   const audience = useResourceAudience();
   const [open, setOpen] = useState(defaultOpen || visibility === "groups");
@@ -358,14 +455,25 @@ export function ResourceVisibilityCollapse({
 export function ResourceVisibilityGate({
   allowOwner,
   visibility,
+  enableErpScope = false,
+  isAdmin = false,
   children,
 }: {
   allowOwner: boolean;
-  visibility: ResourceVisibilityMode;
+  visibility: ScopedResourceVisibilityMode;
+  enableErpScope?: boolean;
+  isAdmin?: boolean;
   children: ReactNode;
 }) {
   const audience = useResourceAudience();
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, {
+      allowOwner,
+      visibility,
+      enableErpScope,
+      isAdmin,
+    })
+  ) {
     return null;
   }
   return children;

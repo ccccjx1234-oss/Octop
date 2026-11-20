@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from octop.infra.db.repos._base import PrivateThreadBindingError, PrivateThreadForkError
 from octop.infra.db.repos.sessions import SessionRepo, SessionRow
 from octop.infra.db.repos.threads import ThreadRepo, ThreadRow
+from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.utils.ulid import new_ulid
 
 
@@ -252,8 +254,17 @@ class ThreadRegistry:
         back to the create path instead of writing turns to a dead thread.
         """
         row = self._sessions.get(session_key)
-        if row is None or self._threads.get(row.thread_id) is None:
+        if row is None:
             return None
+        thread = self._threads.get(row.thread_id)
+        if thread is None:
+            return None
+        if thread.private_knowledge_protected and (
+            row.channel_type != self.CHANNEL_DASHBOARD
+            or row.user_id != thread.user_id
+            or session_key != self.dashboard_key(agent_id=thread.agent_id, user_id=thread.user_id)
+        ):
+            raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, "private knowledge protected")
         return row.thread_id
 
     def get_session(self, session_key: str) -> SessionRow | None:
@@ -307,22 +318,28 @@ class ThreadRegistry:
                 if acting_user_id is not None:
                     subject_id = str(acting_user_id)
                     metadata = {"channel_type": channel_type, "user_id": acting_user_id}
-                self._sessions.upsert(
-                    session_key=session_key,
-                    agent_id=agent_id,
-                    user_id=session_user_id,
-                    channel_type=channel_type,
-                    chat_type=chat_type,
-                    thread_id=thread_id,
-                    channel_subject_id=subject_id,
-                    channel_chat_type=channel_chat_type,
-                    channel_metadata=metadata,
-                    channel_id=channel_id,
-                )
+                try:
+                    self._sessions.upsert(
+                        session_key=session_key,
+                        agent_id=agent_id,
+                        user_id=session_user_id,
+                        channel_type=channel_type,
+                        chat_type=chat_type,
+                        thread_id=thread_id,
+                        channel_subject_id=subject_id,
+                        channel_chat_type=channel_chat_type,
+                        channel_metadata=metadata,
+                        channel_id=channel_id,
+                    )
+                except PrivateThreadBindingError as exc:
+                    raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, str(exc)) from exc
             else:
                 if session.agent_id != agent_id:
                     self._sessions.set_agent_id(session_key, agent_id)
-                self._sessions.set_thread(session_key, thread_id)
+                try:
+                    self._sessions.set_thread(session_key, thread_id)
+                except PrivateThreadBindingError as exc:
+                    raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, str(exc)) from exc
 
     async def reset(
         self,
@@ -453,8 +470,11 @@ class ThreadRegistry:
         """Threads this user owns, plus ones contributed on the same expert."""
         return self._threads.list_visible(agent_id=agent_id, user_id=user_id, limit=limit)
 
-    def set_contributed(self, thread_id: str, contributed: bool) -> None:
-        self._threads.set_contributed(thread_id, contributed)
+    def protect_private_knowledge(self, thread_id: str, user_id: int) -> bool:
+        return self._threads.protect_private_knowledge(thread_id, user_id)
+
+    def set_contributed(self, thread_id: str, contributed: bool) -> bool:
+        return self._threads.set_contributed(thread_id, contributed)
 
     def list_threads_for_session(self, *, session_key: str, limit: int = 50) -> list[ThreadRow]:
         return self._threads.list_by_session(session_key=session_key, limit=limit)
@@ -473,18 +493,23 @@ class ThreadRegistry:
         title: str | None = None,
         last_active: int = 0,
         thread_id: str | None = None,
+        fork_source_id: str | None = None,
     ) -> str:
         """Insert a thread row without rebinding the active session."""
         tid = thread_id or _new_thread_id()
-        self._threads.insert(
-            thread_id=tid,
-            agent_id=agent_id,
-            user_id=user_id,
-            channel_type=channel_type,
-            session_key=session_key,
-            title=title,
-            last_active=last_active,
-        )
+        try:
+            self._threads.insert(
+                thread_id=tid,
+                agent_id=agent_id,
+                user_id=user_id,
+                channel_type=channel_type,
+                session_key=session_key,
+                title=title,
+                last_active=last_active,
+                fork_source_id=fork_source_id,
+            )
+        except PrivateThreadForkError as exc:
+            raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, str(exc)) from exc
         return tid
 
     def ensure_thread(
@@ -542,7 +567,10 @@ def thread_visible_to(row: ThreadRow, user_id: int) -> bool:
     Rows that predate the column, and test fakes, have no ``contributed`` flag.
     Those stay private to the owner.
     """
-    return row.user_id == user_id or bool(getattr(row, "contributed", False))
+    return row.user_id == user_id or (
+        not getattr(row, "private_knowledge_protected", False)
+        and bool(getattr(row, "contributed", False))
+    )
 
 
 def thread_row_has_messages(row: ThreadRow) -> bool:

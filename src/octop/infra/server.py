@@ -53,6 +53,18 @@ DEFAULT_LOG_MAX_BYTES = 100 * 1024 * 1024
 DEFAULT_LOG_RETENTION_DAYS = 14
 
 
+class _FeishuKbAccessFilter(logging.Filter):
+    """Remove callback query strings before any access-log handler sees them."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
+            path, separator, _query = args[2].partition("?")
+            if separator and path == "/feishu-kb/callback":
+                record.args = (*args[:2], path + "?[redacted]", *args[3:])
+        return True
+
+
 class SizeTimedRotatingFileHandler(TimedRotatingFileHandler):
     """Daily rotation with an optional per-file byte cap (whichever triggers first)."""
 
@@ -461,6 +473,9 @@ class OctopServer:
         db = open_database(config, self.paths)
         run_migrations(db)
         self.services = build_shared_services(db=db, paths=self.paths, config=config)
+        from octop.infra.feishu_kb.private_index import cleanup
+
+        await asyncio.get_running_loop().run_in_executor(None, cleanup, self.services)
         from octop.infra.auth.captcha import boot_from_services  # noqa: PLC0415
 
         boot_from_services(self.services.settings_repo, self.services.secret_repo)
@@ -605,6 +620,10 @@ class OctopServer:
             from octop.infra.backup.auto import install_auto_backup_job
 
             install_auto_backup_job(cron_mgr, server=self)
+
+            from octop.infra.feishu_kb.scheduler import install_feishu_kb_job
+
+            install_feishu_kb_job(cron_mgr, server=self)
 
             if self._telemetry_task is None or self._telemetry_task.done():
                 stop_ev = asyncio.Event()
@@ -874,6 +893,9 @@ class OctopServer:
 
         root = logging.getLogger()
         _attach_log_handler(root, handler)
+        access_logger = logging.getLogger("uvicorn.access")
+        if not any(isinstance(f, _FeishuKbAccessFilter) for f in access_logger.filters):
+            access_logger.addFilter(_FeishuKbAccessFilter())
         # Persist framework (uvicorn) request/error logs into the same file too.
         for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
             _attach_log_handler(logging.getLogger(name), handler)

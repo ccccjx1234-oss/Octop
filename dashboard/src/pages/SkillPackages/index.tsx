@@ -93,7 +93,15 @@ import {
   SharedAvatarMark,
   SharedResourceBadge,
 } from "../../components/SharedResourceBadge";
-import type { ResourceVisibilityMode } from "../../api/modules/userGroups";
+import {
+  buildScopeRequestPayload,
+  emptyScopeSelection,
+  hasScopeAllowTarget,
+  scopeSelectionFromPayload,
+  type ResourceScopeSelection,
+  type ScopedResourceVisibilityMode,
+} from "../../api/modules/erpOrg";
+import { useUserRole } from "../../hooks/useUserRole";
 import { PackageSkillCard } from "./PackageSkillCard";
 import PackageSkillsTable from "./PackageSkillsTable";
 import { SkillsetFromHubDrawer } from "./SkillsetFromHubDrawer";
@@ -150,6 +158,7 @@ function formatPackageCreator(
 
 export default function SkillPackagesPage() {
   const { t } = useTranslation();
+  const isAdmin = useUserRole() === "admin";
   const isMobile = useIsMobile();
   const { viewMode, setViewMode, showCardView } = useCardTableView("card");
   const [packages, setPackages] = useState<SkillPackage[]>([]);
@@ -162,8 +171,10 @@ export default function SkillPackagesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [packageDrawerOpen, setPackageDrawerOpen] = useState(false);
   const [packageVisibility, setPackageVisibility] =
-    useState<ResourceVisibilityMode>("all");
+    useState<ScopedResourceVisibilityMode>("all");
   const [packageGroupIds, setPackageGroupIds] = useState<string[]>([]);
+  const [packageScope, setPackageScope] =
+    useState<ResourceScopeSelection>(emptyScopeSelection);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [hubOpen, setHubOpen] = useState(false);
@@ -326,6 +337,7 @@ export default function SkillPackagesPage() {
     });
     setPackageVisibility("owner");
     setPackageGroupIds([]);
+    setPackageScope(emptyScopeSelection());
     setPackageDrawerOpen(true);
   };
 
@@ -340,16 +352,21 @@ export default function SkillPackagesPage() {
       copy_policy: item.copy_policy ?? "snapshot",
       allow_download: item.allow_download !== false,
     });
-    setPackageVisibility(
+    const nextVis: ScopedResourceVisibilityMode =
       !item.shared || item.visibility === "owner"
         ? "owner"
-        : item.visibility === "groups"
-        ? "groups"
-        : "all",
-    );
+        : item.visibility === "groups" ||
+          item.visibility === "company" ||
+          item.visibility === "scoped"
+        ? item.visibility
+        : "all";
+    setPackageVisibility(nextVis);
     setPackageGroupIds(
-      item.shared && item.visibility === "groups" ? item.group_ids ?? [] : [],
+      item.shared && (nextVis === "groups" || nextVis === "scoped")
+        ? item.group_ids ?? []
+        : [],
     );
+    setPackageScope(scopeSelectionFromPayload(item));
     setPackageDrawerOpen(true);
   };
 
@@ -357,6 +374,13 @@ export default function SkillPackagesPage() {
     const values = await packageForm.validateFields();
     if (packageVisibility === "groups" && packageGroupIds.length === 0) {
       message.error(t("resourceVisibility.needGroup"));
+      return;
+    }
+    if (
+      packageVisibility === "scoped" &&
+      !hasScopeAllowTarget(packageVisibility, packageGroupIds, packageScope)
+    ) {
+      message.error(t("resourceVisibility.needScopeTarget"));
       return;
     }
     const payload = {
@@ -368,8 +392,12 @@ export default function SkillPackagesPage() {
         ? ""
         : values.icon_url?.trim() || "",
       shared: packageVisibility !== "owner",
-      visibility: packageVisibility,
-      group_ids: packageVisibility === "groups" ? packageGroupIds : [],
+      ...buildScopeRequestPayload({
+        visibility: packageVisibility,
+        groupIds: packageGroupIds,
+        scope: packageScope,
+        isAdmin,
+      }),
     };
     try {
       let next = editingPackageId
@@ -1287,7 +1315,12 @@ export default function SkillPackagesPage() {
           >
             <Switch />
           </Form.Item>
-          <ResourceVisibilityGate allowOwner visibility={packageVisibility}>
+          <ResourceVisibilityGate
+            allowOwner
+            visibility={packageVisibility}
+            enableErpScope
+            isAdmin={isAdmin}
+          >
             <div className={styles.formOptions}>
               <div className={styles.formOptionRowVisibility}>
                 <div className={styles.formOptionCopy}>
@@ -1302,10 +1335,16 @@ export default function SkillPackagesPage() {
                   allowOwner
                   visibility={packageVisibility}
                   groupIds={packageGroupIds}
+                  enableErpScope
+                  isAdmin={isAdmin}
+                  scope={packageScope}
+                  onScopeChange={setPackageScope}
                   onChange={(next) => {
                     setPackageVisibility(next.visibility);
                     setPackageGroupIds(
-                      next.visibility === "groups" ? next.groupIds : [],
+                      next.visibility === "groups" || next.visibility === "scoped"
+                        ? next.groupIds
+                        : [],
                     );
                   }}
                 />

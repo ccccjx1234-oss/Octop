@@ -170,6 +170,7 @@ class TeamManager:
 
     async def prepare_peer_session(self, call: PeerCall) -> PeerSession | None:
         """Open the member thread and stash the host's rewritten assignment."""
+        self._require_public_peer_source(call.source_thread_id)
         thread_id = (
             derive_peer_thread_id(call.source_thread_id, call.to_agent_id)
             if call.source_thread_id
@@ -183,7 +184,9 @@ class TeamManager:
         dispatch_message = None
         if group:
             question = await self._assignment_text(call)
+            self._require_public_peer_source(call.source_thread_id)
             dispatch_message = await self._dispatch_message(call, uid)
+            self._require_public_peer_source(call.source_thread_id)
             if thread_id and (question or dispatch_message):
                 self.stash_peer_prompt(
                     call.to_agent_id,
@@ -193,17 +196,21 @@ class TeamManager:
                 )
         # Expert-to-expert sync ask_agent also uses peer:{room} so it does not
         # reuse the callee's 1:1 DM. Existing DM peer history will not follow.
-        if call.source_session_key:
+        source_row = self._thread_registry.get_thread(call.source_thread_id)
+        if source_row is None or source_row.private_knowledge_protected:
+            raise PermissionError("Peer delegation is unavailable for this conversation.")
+        source_session_key = call.source_session_key or source_row.session_key
+        if source_session_key:
             if call.source_thread_id:
                 session_key = self._thread_registry.peer_room_session_key(
-                    call.source_session_key,
+                    source_session_key,
                     call.to_agent_id,
                     room_thread_id=call.source_thread_id,
                     group=group,
                 )
             else:
                 session_key = self._thread_registry.peer_session_key(
-                    call.source_session_key, call.to_agent_id
+                    source_session_key, call.to_agent_id
                 )
         self._track_job(call, begin=True)
         if group and call.source_thread_id:
@@ -212,6 +219,7 @@ class TeamManager:
                 call.to_agent_id,
                 uid,
             )
+        self._require_public_peer_source(call.source_thread_id)
         if thread_id and session_key and uid is not None:
             parts = session_key.split(":", 3)
             channel_type = parts[1] if len(parts) >= 2 else "dashboard"
@@ -244,6 +252,7 @@ class TeamManager:
     ) -> None:
         """Write the callee page, then copy the final answer onto the room if async."""
         try:
+            self._require_public_peer_source(call.source_thread_id)
             if not thread_id:
                 return
             self._touch_thread(thread_id, call.message)
@@ -256,6 +265,7 @@ class TeamManager:
             visible = [msg for msg in visible if _message_role(msg) not in {"human", "user"}]
             visible, _ = _apply_edited_files_stamp(visible, edited)
             prompt = await self._assignment_text(call)
+            self._require_public_peer_source(call.source_thread_id)
             if prompt:
                 visible = [
                     HumanMessage(
@@ -326,9 +336,15 @@ class TeamManager:
         self._end_job_from_reply(event)
         room = str(event.source_thread_id or "").strip()
         try:
+            self._require_public_peer_source(room)
             await self._publish_reply(event, room)
         finally:
             self._finish_room_turn(room)
+
+    def _require_public_peer_source(self, thread_id: str | None) -> None:
+        row = self._thread_registry.get_thread(thread_id) if thread_id else None
+        if row is None or row.private_knowledge_protected:
+            raise PermissionError("Peer delegation is unavailable for this conversation.")
 
     async def _publish_reply(self, event: ReplyEvent, room: str) -> None:
         speaker = event.source_agent_id
@@ -477,6 +493,7 @@ class TeamManager:
             room_turn_id = self._pin_room_turn(room_thread_id)
             if hold_room and self._host_turn_busy(host_id, room_thread_id):
                 room_open = await self._wait_host_dispatch_idle(host_id, room_thread_id)
+            self._require_public_peer_source(room_thread_id)
             agen = self._agent_manager.stream(speaker_id, payload)
             while True:
                 pause: dict[str, Any] | None = None
@@ -552,6 +569,7 @@ class TeamManager:
                             fut.cancel()
                         self._expire_hitl(pending_id)
                 resume_pending = pending_id
+                self._require_public_peer_source(room_thread_id)
                 agen = self._agent_manager.resume_hitl(speaker_id, member_tid, decisions)
             completed = True
         except Exception:
@@ -681,6 +699,7 @@ class TeamManager:
     ) -> dict[str, Any]:
         """Stream the host wrap-up onto the team page (inbox wakeup)."""
         await self._wait_host_dispatch_idle(speaker_id, room_thread_id)
+        self._require_public_peer_source(room_thread_id)
         payload = _chat_request_payload(request, speaker_id)
         payload["thread_id"] = room_thread_id
         result = await self.stream_peer_to_room(

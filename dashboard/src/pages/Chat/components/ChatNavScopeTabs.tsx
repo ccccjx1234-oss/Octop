@@ -37,7 +37,7 @@ const NAV_SCOPE_LABELS: Record<
     emptyKey: "chat.navScopeEmptyCloud",
     emptyFallback: "还没有云端协同",
     hintKey: "chat.navScopeEmptyCloudHint",
-    hintFallback: "连上一台云端 Octop，这里会列出那边的专家和团队。",
+    hintFallback: "连上一台云端会火，这里会列出那边的专家和团队。",
   },
 };
 

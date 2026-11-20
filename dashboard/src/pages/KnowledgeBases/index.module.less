@@ -683,6 +683,167 @@
   overflow: hidden;
 }
 
+.detailBody > [hidden] {
+  display: none;
+}
+
+.libraryHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.libraryHeading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+
+  h5 {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.libraryTabs {
+  align-self: flex-start;
+  max-width: 100%;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.sharedFeishuWorkspace {
+  min-height: 0;
+  overflow: auto;
+  padding: 3px 4px 16px 0;
+}
+
+.feishuSourcesTabLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feishuPendingTabBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--fn-color-warning-text);
+  background: color-mix(in srgb, var(--fn-color-warning) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fn-color-warning) 42%, transparent);
+}
+
+.feishuSourceCard {
+  padding: 14px 16px !important;
+  margin-bottom: 10px;
+  border: 1px solid var(--fn-border-secondary) !important;
+  border-radius: var(--fn-radius-lg);
+  background: var(--fn-bg-primary);
+}
+
+.feishuSourceCardPending {
+  border-color: color-mix(
+    in srgb,
+    var(--fn-color-warning) 42%,
+    var(--fn-border-secondary)
+  ) !important;
+  border-left: 3px solid var(--fn-color-warning) !important;
+  background: color-mix(
+    in srgb,
+    var(--fn-color-warning) 6%,
+    var(--fn-bg-primary)
+  );
+}
+
+.feishuPendingCallout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--fn-radius-md);
+  border: 1px solid color-mix(in srgb, var(--fn-color-warning) 38%, transparent);
+  background: color-mix(in srgb, var(--fn-color-warning) 12%, transparent);
+  color: var(--fn-color-warning-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.feishuPendingCalloutText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.feishuPendingBusyHint {
+  font-size: 12px;
+  color: var(--fn-text-secondary);
+}
+
+.feishuPendingButton {
+  background: var(--fn-color-warning) !important;
+  border-color: var(--fn-color-warning) !important;
+  color: #141414 !important;
+  font-weight: 600 !important;
+
+  &:hover:not(:disabled) {
+    background: color-mix(
+      in srgb,
+      var(--fn-color-warning) 86%,
+      #ffffff
+    ) !important;
+    border-color: color-mix(
+      in srgb,
+      var(--fn-color-warning) 86%,
+      #ffffff
+    ) !important;
+    color: #141414 !important;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+.feishuScheduleBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--fn-border-secondary);
+  border-radius: var(--fn-radius-md);
+  background: var(--fn-bg-secondary);
+}
+
+.feishuIntervalRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fn-text-primary);
+}
+
+.feishuIntervalPresets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feishuReviewRowNew {
+  background: color-mix(in srgb, var(--fn-color-warning) 8%, transparent);
+  border-radius: var(--fn-radius-sm);
+  padding-inline: 8px !important;
+}
+
 .detailBodyDropActive {
   outline: 2px dashed var(--fn-color-brand, #1677ff);
   outline-offset: -8px;

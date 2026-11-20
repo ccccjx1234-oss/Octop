@@ -88,24 +88,54 @@ async def apply_agent_audience(
     visibility: str | None,
     group_ids: list[str] | None,
     shared: bool | None,
+    scope: dict[str, Any] | None = None,
+    actor_user_id: int | None = None,
+    actor_is_admin: bool = False,
 ) -> Any:
-    """Persist who may use an expert. ``visibility`` overrides ``shared``.
+    """Persist who may use an expert. ``visibility`` / ``scope`` overrides ``shared``.
 
     Callers must validate ``visibility`` before creating the row when a failed
-    group choice should not leave a new expert behind.
+    scope choice should not leave a new expert behind.
     """
-    from octop.infra.users.groups import RESOURCE_EXPERT, GroupAccess  # noqa: PLC0415
+    from octop.infra.users.groups import (  # noqa: PLC0415
+        RESOURCE_EXPERT,
+        VISIBILITY_OWNER,
+        GroupAccess,
+    )
 
     access = GroupAccess(server.services.repos)
     registry = server.app_runtime.agent_registry
+    if scope is not None:
+        eff_vis = scope.get("visibility") or visibility or ("all" if shared else VISIBILITY_OWNER)
+        normalized = access.validate_scope(
+            visibility=eff_vis,
+            group_ids=scope.get("group_ids") if scope.get("group_ids") is not None else group_ids,
+            company_id=scope.get("company_id"),
+            department_grants=scope.get("department_grants"),
+            user_ids=scope.get("user_ids"),
+            erp_employees=scope.get("erp_employees"),
+            deny_department_grants=scope.get("deny_department_grants"),
+            deny_user_ids=scope.get("deny_user_ids"),
+            deny_erp_employees=scope.get("deny_erp_employees"),
+            actor_user_id=actor_user_id,
+            actor_is_admin=actor_is_admin,
+        )
+        row = await registry.set_shared(agent_id, normalized.visibility != VISIBILITY_OWNER)
+        access.set_scope(
+            RESOURCE_EXPERT,
+            agent_id,
+            normalized,
+            actor_user_id=actor_user_id,
+        )
+        return row
     if visibility is not None:
         access.validate_visibility(visibility, group_ids)
-        row = await registry.set_shared(agent_id, visibility != "owner")
+        row = await registry.set_shared(agent_id, visibility != VISIBILITY_OWNER)
         access.set_visibility(RESOURCE_EXPERT, agent_id, visibility, group_ids)
         return row
     flag = bool(shared)
     row = await registry.set_shared(agent_id, flag)
-    access.set_visibility(RESOURCE_EXPERT, agent_id, "all" if flag else "owner", [])
+    access.set_visibility(RESOURCE_EXPERT, agent_id, "all" if flag else VISIBILITY_OWNER, [])
     return row
 
 

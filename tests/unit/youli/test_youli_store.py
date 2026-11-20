@@ -7,6 +7,7 @@ import time
 import pytest
 
 from octop.config import OctopConfig
+from octop.infra.db import migrate
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.services import build_shared_services
@@ -145,3 +146,35 @@ def test_business_template_whitelist(services):
     assert repo.is_business_template(101) is True
     assert repo.is_business_template(102) is False
     assert [row.published_expert_id for row in repo.list()] == [101]
+
+
+def test_binding_schema_upgrades_from_workbench_schema_and_is_idempotent(tmp_path, monkeypatch):
+    db = SqlitePool(tmp_path / "octop.db")
+    discover = migrate._discover
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            migrate,
+            "_discover",
+            lambda dialect="sqlite": [item for item in discover(dialect) if item[0] <= 27],
+        )
+        run_migrations(db)
+    # 027 installs the workbench tables without advancing the watermark.
+    assert migrate._current_version(db) == 26
+    assert migrate._table_exists(db, "workbench_tasks")
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO users(username, role, created_at) VALUES ('old-user', 'user', 0)")
+    run_migrations(db)
+    run_migrations(db)
+    with db.connect() as conn:
+        version = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'youli_%'"
+            ).fetchall()
+        }
+        user = conn.execute("SELECT mobile FROM users WHERE username = 'old-user'").fetchone()
+    assert version == 36
+    assert {"youli_identity_binding", "youli_binding_generation"} <= names
+    assert "unlinked" in migrate._table_columns(db, "youli_identity_binding")
+    assert user is not None and user["mobile"] is None

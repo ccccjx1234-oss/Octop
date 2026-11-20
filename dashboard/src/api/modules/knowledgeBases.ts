@@ -4,6 +4,10 @@ import {
   requestBlob,
   requestUpload,
 } from "../request";
+import type {
+  ResourceScopeExtensions,
+  ScopedResourceVisibilityMode,
+} from "./erpOrg";
 
 export interface KnowledgeLimits {
   max_bases_per_owner: number;
@@ -55,7 +59,7 @@ export interface KnowledgeCapability {
   limits?: KnowledgeLimits;
 }
 
-export interface KnowledgeBase {
+export interface KnowledgeBase extends ResourceScopeExtensions {
   id: string;
   knowledge_base_id?: string;
   pk?: number;
@@ -66,7 +70,7 @@ export interface KnowledgeBase {
   description: string;
   default_open: boolean;
   shared: boolean;
-  visibility?: "all" | "groups" | "owner";
+  visibility?: ScopedResourceVisibilityMode;
   group_ids?: string[];
   icon_name: string;
   icon_url?: string;
@@ -95,6 +99,13 @@ export interface KnowledgeDocument {
   updated_at: number;
   /** True when the uploaded original still exists on disk. */
   has_original?: boolean;
+  feishu_source_id?: string | null;
+  feishu_origin?: {
+    connection: string;
+    scope: string;
+    path: string[];
+    title: string;
+  } | null;
 }
 
 export interface KnowledgeOnnxModel {
@@ -319,17 +330,19 @@ export const knowledgeBasesApi = {
 
   get: (id: string) => request<KnowledgeBase>(`/knowledge-bases/${id}`),
 
-  create: (body: {
-    name: string;
-    description?: string;
-    default_open?: boolean;
-    shared?: boolean;
-    visibility?: "all" | "groups" | "owner";
-    group_ids?: string[];
-    icon_name?: string;
-    icon_url?: string;
-    max_documents?: number;
-  }) =>
+  create: (
+    body: {
+      name: string;
+      description?: string;
+      default_open?: boolean;
+      shared?: boolean;
+      visibility?: ScopedResourceVisibilityMode;
+      group_ids?: string[];
+      icon_name?: string;
+      icon_url?: string;
+      max_documents?: number;
+    } & ResourceScopeExtensions,
+  ) =>
     request<KnowledgeBase>("/knowledge-bases", {
       method: "POST",
       body: JSON.stringify(body),
@@ -342,12 +355,12 @@ export const knowledgeBasesApi = {
       description?: string;
       default_open?: boolean;
       shared?: boolean;
-      visibility?: "all" | "groups" | "owner";
+      visibility?: ScopedResourceVisibilityMode;
       group_ids?: string[];
       icon_name?: string;
       icon_url?: string;
       max_documents?: number;
-    },
+    } & ResourceScopeExtensions,
   ) =>
     request<KnowledgeBase>(`/knowledge-bases/${id}`, {
       method: "PATCH",

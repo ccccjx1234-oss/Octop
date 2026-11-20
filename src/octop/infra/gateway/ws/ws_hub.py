@@ -6,7 +6,12 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from octop.infra.gateway.threads import thread_visible_to
+
+if TYPE_CHECKING:
+    from octop.infra.db.repos.threads import ThreadRow
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +37,14 @@ class WebSocketHub:
     thread at a time.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, get_thread: Callable[[str], ThreadRow | None] | None = None) -> None:
+        self._get_thread = get_thread
         self._connections: dict[str, SendFn] = {}
         self._thread_subscribers: dict[str, set[str]] = {}
         self._conn_thread: dict[str, str] = {}
         self._user_conns: dict[int, set[str]] = {}
         self._conn_user: dict[str, int] = {}
+        self._conn_agent: dict[str, str] = {}
         self._sid_conns: dict[str, set[str]] = {}
         self._conn_sid: dict[str, str] = {}
         self._active_turns: set[str] = set()
@@ -49,10 +56,14 @@ class WebSocketHub:
         *,
         user_id: int | None = None,
         sid: str | None = None,
+        agent_id: str | None = None,
     ) -> None:
         self._unbind_user(connection_id)
         self._unbind_sid(connection_id)
         self._connections[connection_id] = send_fn
+        self._conn_agent.pop(connection_id, None)
+        if agent_id is not None:
+            self._conn_agent[connection_id] = agent_id
         if user_id is not None:
             self._conn_user[connection_id] = user_id
             self._user_conns.setdefault(user_id, set()).add(connection_id)
@@ -66,6 +77,7 @@ class WebSocketHub:
         self._unbind_user(connection_id)
         self._unbind_sid(connection_id)
         self._connections.pop(connection_id, None)
+        self._conn_agent.pop(connection_id, None)
 
     def _unbind_user(self, connection_id: str) -> None:
         user_id = self._conn_user.pop(connection_id, None)
@@ -136,6 +148,12 @@ class WebSocketHub:
         return bool(tid and self._thread_subscribers.get(tid))
 
     async def push(self, connection_id: str, frame: dict[str, Any]) -> None:
+        tid = frame.get("thread_id")
+        if isinstance(tid, str) and tid and not await self.thread_allowed(tid, connection_id):
+            return
+        await self._send(connection_id, frame)
+
+    async def _send(self, connection_id: str, frame: dict[str, Any]) -> None:
         send_fn = self._connections.get(connection_id)
         if send_fn is None:
             logger.debug("ws hub: connection %s not found", connection_id)
@@ -145,6 +163,25 @@ class WebSocketHub:
         except Exception:
             logger.exception("ws hub: push failed for %s", connection_id)
 
+    async def thread_allowed(self, thread_id: str, connection_id: str) -> bool:
+        if self._get_thread is None:
+            return True
+        row = await asyncio.to_thread(self._get_thread, thread_id)
+        return self._thread_visible(row, connection_id)
+
+    def _thread_visible(self, row: ThreadRow | None, connection_id: str) -> bool:
+        if row is None:
+            return False
+        user_id = self._conn_user.get(connection_id)
+        agent_id = self._conn_agent.get(connection_id)
+        if agent_id is not None:
+            return (
+                user_id is not None
+                and row.agent_id == agent_id
+                and thread_visible_to(row, user_id)
+            )
+        return not row.private_knowledge_protected or row.user_id == user_id
+
     async def push_to_thread(self, thread_id: str, frame: dict[str, Any]) -> None:
         tid = thread_id.strip()
         conns = self._thread_subscribers.get(tid)
@@ -152,11 +189,19 @@ class WebSocketHub:
             logger.debug("ws hub: no subscriber for thread %s", thread_id)
             return
         outbound = stamp_thread_id(frame, tid)
-        targets = list(conns)
+        if self._get_thread is None:
+            targets = list(conns)
+        else:
+            row = await asyncio.to_thread(self._get_thread, tid)
+            targets = [
+                conn_id
+                for conn_id in self._thread_subscribers.get(tid, ())
+                if self._thread_visible(row, conn_id)
+            ]
         if len(targets) == 1:
-            await self.push(targets[0], outbound)
+            await self._send(targets[0], outbound)
             return
-        await asyncio.gather(*(self.push(conn_id, outbound) for conn_id in targets))
+        await asyncio.gather(*(self._send(conn_id, outbound) for conn_id in targets))
 
     async def push_to_user(self, user_id: int, frame: dict[str, Any]) -> None:
         conns = self._user_conns.get(user_id)

@@ -9,7 +9,7 @@ import pytest
 from octop.config import YouliConfig
 from octop.infra.auth.youli import tools as youli_tools
 from octop.infra.auth.youli.context import set_current_youli_sid
-from octop.infra.auth.youli.mcn_client import McnClient
+from octop.infra.auth.youli.mcn_client import McnClient, McnClientError
 from octop.infra.connectors.gateway.adapters import mcn as mcn_adapter
 
 
@@ -22,7 +22,13 @@ class _SessionRepo:
 
 
 def _tools(row: object | None):
-    repos = SimpleNamespace(youli_session_repo=_SessionRepo(row), secret_repo=object())
+    if row is not None and not hasattr(row, "user_id"):
+        row.user_id = 1
+    repos = SimpleNamespace(
+        youli_session_repo=_SessionRepo(row),
+        secret_repo=object(),
+        youli_identity_binding_repo=SimpleNamespace(get=lambda user_id: None),
+    )
     return {
         tool.name: tool
         for tool in youli_tools.build_youli_tools(
@@ -74,7 +80,7 @@ async def test_tools_refuse_without_sid() -> None:
     result = await _tools(SimpleNamespace(token_blob=b"blob"))["youli_list_quotes"].ainvoke({})
 
     assert result.startswith("查询报价单失败")
-    assert "没有经贝员工授权" in result
+    assert "没有会火员工授权" in result
 
 
 @pytest.mark.asyncio
@@ -390,11 +396,15 @@ async def test_create_contract_requires_enable_type(monkeypatch) -> None:
 
 def test_mcn_adapter_prefers_env_url_over_stored_base_url(monkeypatch) -> None:
     monkeypatch.setenv("OCTOP_YOULI_MCN_URL", "http://172.18.0.1:18443/")
-    client = mcn_adapter._client({"token": "tok", "base_url": "https://8.163.15.131"})
+    with pytest.raises(McnClientError, match="未授权"):
+        mcn_adapter._client({"token": "tok", "base_url": "https://8.163.15.131"})
+
+    creds = {"token": "tok", "_token_resolver": lambda: "live-tok"}
+    client = mcn_adapter._client({**creds, "base_url": "https://8.163.15.131"})
     assert client._base_url == "http://172.18.0.1:18443"
 
     monkeypatch.delenv("OCTOP_YOULI_MCN_URL", raising=False)
-    fallback = mcn_adapter._client({"token": "tok", "base_url": "https://fallback.example"})
+    fallback = mcn_adapter._client({**creds, "base_url": "https://fallback.example"})
     assert fallback._base_url == "https://fallback.example"
 
 

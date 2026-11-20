@@ -157,6 +157,11 @@ async def test_resume_hitl_binds_thread_scope() -> None:
 
     manager = AgentManager.__new__(AgentManager)
     manager._harness_manager = SimpleNamespace(resume_hitl=fake_resume)
+    manager._repos = SimpleNamespace(
+        thread_repo=SimpleNamespace(
+            get=lambda _: SimpleNamespace(private_knowledge_protected=False, user_id=0)
+        )
+    )
     manager._history_backfills = {}
     manager._reclaim_pending = set()
     manager._reclaim_holds = {}

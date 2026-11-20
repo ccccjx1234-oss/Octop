@@ -12,7 +12,14 @@ import {
   type ManagedWorkspaceFile,
 } from "../../../api/modules/managedAgents";
 import { octopAgentsApi } from "../../../api/modules/octopAgents";
-import type { ResourceVisibilityMode } from "../../../api/modules/userGroups";
+import {
+  buildScopeRequestPayload,
+  emptyScopeSelection,
+  hasScopeAllowTarget,
+  type ResourceScopeSelection,
+  type ScopedResourceVisibilityMode,
+} from "../../../api/modules/erpOrg";
+import { useUserRole } from "../../../hooks/useUserRole";
 import {
   avatarPickerStyles,
   expertPresetSrc,
@@ -95,12 +102,16 @@ export default function ManagedDrawer({
   onCreated,
 }: ManagedDrawerProps) {
   const { t } = useTranslation();
+  const isAdmin = useUserRole() === "admin";
   const [form] = Form.useForm<FormValues>();
   const [runners, setRunners] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [colorPalette, setColorPalette] = useState<string>(DEFAULT_PALETTE);
-  const [visibility, setVisibility] = useState<ResourceVisibilityMode>("owner");
+  const [visibility, setVisibility] =
+    useState<ScopedResourceVisibilityMode>("owner");
   const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [scope, setScope] =
+    useState<ResourceScopeSelection>(emptyScopeSelection);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarPresetId, setAvatarPresetId] = useState<string | null>(null);
@@ -127,6 +138,7 @@ export default function ManagedDrawer({
     setColorPalette(DEFAULT_PALETTE);
     setVisibility("owner");
     setGroupIds([]);
+    setScope(emptyScopeSelection());
     setAvatarFile(null);
     setAvatarPresetId(null);
     setAvatarPresetTouched(false);
@@ -195,6 +207,17 @@ export default function ManagedDrawer({
     } catch {
       return;
     }
+    if (visibility === "groups" && groupIds.length === 0) {
+      message.error(t("resourceVisibility.needGroup"));
+      return;
+    }
+    if (
+      visibility === "scoped" &&
+      !hasScopeAllowTarget(visibility, groupIds, scope)
+    ) {
+      message.error(t("resourceVisibility.needScopeTarget"));
+      return;
+    }
     const customId = values.agent_id?.trim() || "";
     const agentId = customId || previewId || undefined;
     const workspace =
@@ -225,8 +248,12 @@ export default function ManagedDrawer({
           ? undefined
           : expertPresetSrc(avatarPresetId ?? "default"),
         enable_trajectory: values.enable_trajectory === true,
-        visibility,
-        group_ids: visibility === "groups" ? groupIds : [],
+        ...buildScopeRequestPayload({
+          visibility,
+          groupIds,
+          scope,
+          isAdmin,
+        }),
         ...(prompts ? { quick_prompts: prompts } : {}),
         ...(fileOverrides.length ? { file_overrides: fileOverrides } : {}),
       });
@@ -393,10 +420,18 @@ export default function ManagedDrawer({
           allowOwner
           visibility={visibility}
           groupIds={groupIds}
+          enableErpScope
+          isAdmin={isAdmin}
+          scope={scope}
+          onScopeChange={setScope}
           extra={t("experts.visibilityHint")}
           onChange={(next) => {
             setVisibility(next.visibility);
-            setGroupIds(next.visibility === "groups" ? next.groupIds : []);
+            setGroupIds(
+              next.visibility === "groups" || next.visibility === "scoped"
+                ? next.groupIds
+                : [],
+            );
           }}
         />
         <MoreConfigCollapse>

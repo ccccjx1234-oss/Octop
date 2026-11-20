@@ -64,6 +64,13 @@ def _tool_ctx() -> tuple[int, bool, list[str], str]:
     ids: list[str] = []
     if isinstance(raw_ids, list):
         ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+    from octop.infra.knowledge.private_authority import allows
+
+    ids = [
+        item
+        for item in ids
+        if not item.startswith("private-feishu:") or allows(user_id, item)
+    ]
     locale = str(cfg.get("locale") or "en")
     return user_id, is_admin, ids, locale
 
@@ -93,6 +100,18 @@ class KnowledgeToolServices:
     @property
     def provider_repo(self) -> Any:
         return self._manager._repos.provider_repo
+
+    @property
+    def db(self) -> Any:
+        return self._manager._repos.db
+
+    @property
+    def sso_repo(self) -> Any:
+        return self._manager._repos.sso_repo
+
+    @property
+    def secret_repo(self) -> Any:
+        return self._manager._repos.secret_repo
 
 
 def build_knowledge_tools(services: Any) -> list[StructuredTool]:

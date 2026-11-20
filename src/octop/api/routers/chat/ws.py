@@ -105,8 +105,6 @@ async def dashboard_chat_ws(
     try:
         assert_agent_access(server, agent_id, user)
     except OctopError as exc:
-        from octop.infra.errors import ErrorCode  # noqa: PLC0415
-
         code = 4003 if exc.code == ErrorCode.FORBIDDEN else 4404
         await websocket.close(code=code, reason=str(exc.code.value))
         return
@@ -114,7 +112,7 @@ async def dashboard_chat_ws(
     connection_id = uuid.uuid4().hex
     await websocket.accept()
 
-    async def send_frame(frame: dict[str, Any]) -> None:
+    async def send_socket_frame(frame: dict[str, Any]) -> None:
         if websocket.application_state != WebSocketState.CONNECTED:
             return
         if frame.get("type") == "session_revoked":
@@ -125,7 +123,10 @@ async def dashboard_chat_ws(
             json.dumps(frame, ensure_ascii=False, default=json_chunk_default),
         )
 
-    hub.register(connection_id, send_frame, sid=sid)
+    hub.register(connection_id, send_socket_frame, user_id=user.id, sid=sid, agent_id=agent_id)
+
+    async def send_frame(frame: dict[str, Any]) -> None:
+        await hub.push(connection_id, frame)
 
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
@@ -145,6 +146,14 @@ async def dashboard_chat_ws(
                 await send_frame({"type": "pong"})
                 continue
 
+            try:
+                assert_agent_access(server, agent_id, user)
+            except OctopError as exc:
+                await send_frame(_prepare_error_frame(exc))
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=4403, reason=str(exc.code.value))
+                break
+
             if msg_type == "subscribe":
                 thread_id = str(payload.get("thread_id") or "").strip()
                 if not thread_id:
@@ -160,11 +169,14 @@ async def dashboard_chat_ws(
                 def _subscribe(tid: str = thread_id, cid: str = connection_id) -> None:
                     hub.subscribe(tid, cid)
 
+                async def _send_catchup(frame: dict[str, Any], tid: str = thread_id) -> None:
+                    await send_frame({**frame, "thread_id": tid})
+
                 await subscribe_with_member_catchup(
                     gateway,
                     thread_id,
                     subscribe=_subscribe,
-                    send=send_frame,
+                    send=_send_catchup,
                 )
                 await send_frame(
                     {
@@ -255,6 +267,33 @@ async def dashboard_chat_ws(
                 await send_frame({"type": "done"})
                 continue
 
+            if not _ws_thread_visible(
+                gateway.thread_registry.get_thread(prepared_early.thread_id), agent_id, user.id
+            ):
+                await send_frame(
+                    _prepare_error_frame(
+                        OctopError(ErrorCode.FORBIDDEN, "thread not owned by user")
+                    )
+                )
+                await send_frame({"type": "done"})
+                continue
+
+            if any(
+                item.startswith("private-feishu:") for item in turn.knowledge_base_ids or []
+            ) and not gateway.thread_registry.protect_private_knowledge(
+                prepared_early.thread_id, user.id
+            ):
+                await send_frame(
+                    _prepare_error_frame(
+                        OctopError(
+                            ErrorCode.THREAD_PRIVATE_KNOWLEDGE,
+                            "Private sources require an unshared conversation owned by you.",
+                        )
+                    )
+                )
+                await send_frame({"type": "done"})
+                continue
+
             # Subscribe before any further await: steer admission (and any
             # concurrently running turn on this thread) pushes frames the
             # moment control yields, and push_to_thread drops frames for
@@ -308,6 +347,11 @@ async def dashboard_chat_ws(
                 await send_frame({"type": "done"})
                 continue
 
+            delegated_sid = None
+            if not sid and server.services.config.youli.enabled:
+                delegated_sid = await asyncio.to_thread(
+                    server.services.youli_session_repo.delegated_sid_for_user, user.id
+                )
             inbound = build_dashboard_inbound(
                 agent_id=agent_id,
                 user_id=user.id,
@@ -315,6 +359,12 @@ async def dashboard_chat_ws(
                 turn=turn,
                 ws_connection_id=connection_id,
                 user_is_admin=bool(getattr(user, "is_admin", False)),
+                delegated_sid=delegated_sid,
+            )
+            from octop.infra.knowledge.private_authority import dashboard_authority  # noqa: PLC0415
+
+            inbound.metadata["_private_knowledge_authority"] = dashboard_authority(
+                user.id, turn.knowledge_base_ids
             )
             channel_manager.enqueue(WS_CHANNEL_ID, inbound)
 
@@ -506,6 +556,7 @@ async def _bridge_chat_ws(
             if msg_type == "ping":
                 await send_frame({"type": "pong"})
                 continue
+
             if msg_type == "subscribe":
                 thread_id = str(payload.get("thread_id") or "").strip()
                 last_thread_id = thread_id or last_thread_id

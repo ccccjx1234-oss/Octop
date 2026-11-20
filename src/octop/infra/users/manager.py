@@ -257,15 +257,24 @@ class UserManager:
         provider_id: int,
         subject: str,
         claims: dict[str, Any],
+        allow_mobile_link: bool = False,
+        allow_create: bool = True,
         role_assignment: tuple[str, str | None, builtins.list[str], builtins.list[tuple[str, str]]]
         | None = None,
     ) -> User:
+        from octop.infra.auth.sso.mobile_linking import normalize_mobile
+
         async with self._lock:
             row = self._services.user_repo.get_by_sso(provider_id, subject)
             email = _normalized_claim_email(claims)
             display_name = _claim_display_name(claims)
+            mobile = normalize_mobile(claims.get("mobile")) if allow_mobile_link else None
 
             if row is None:
+                if not allow_create or (
+                    mobile is not None and self._services.user_repo.get_by_mobile(mobile) is not None
+                ):
+                    raise OctopError(ErrorCode.SSO_BINDING_REQUIRED, "authenticated binding required")
                 from octop.infra.db.repos.user_roles import seeded_user_role_assignment
 
                 assignment = role_assignment or seeded_user_role_assignment(self._services.db)
@@ -280,6 +289,7 @@ class UserManager:
                     ):
                         email = None
                     username = allocate_username(self._services.user_repo, claims, subject)
+                    uid = None
                     try:
                         uid = self._services.user_repo.create(
                             username=username,
@@ -291,6 +301,7 @@ class UserManager:
                             sso_subject=subject,
                             permissions=sso_permissions,
                             role_name=sso_role_name,
+                            mobile=mobile,
                         )
                         if sso_policies:
                             self._services.user_policy_repo.merge(uid, dict(sso_policies))
@@ -300,9 +311,17 @@ class UserManager:
                     except Exception as exc:
                         if not _is_unique_violation(exc):
                             raise
+                        if uid is not None:
+                            # This attempt created a user but lost the identity race.
+                            # Do not leave its legacy SSO pointer as a future takeover path.
+                            self._services.user_repo.delete(uid)
                         row = self._services.user_repo.get_by_sso(provider_id, subject)
                         if row is not None:
                             break
+                        if mobile is not None and self._services.user_repo.get_by_mobile(mobile):
+                            raise OctopError(
+                                ErrorCode.SSO_BINDING_REQUIRED, "authenticated binding required"
+                            ) from exc
                         if attempt == 2:
                             raise
                         await asyncio.sleep(0.01 * (attempt + 1))
@@ -331,6 +350,8 @@ class UserManager:
                 row.id,
                 email=email,
             )
+            if mobile is not None and not row.mobile:
+                self._services.user_repo.set_mobile_if_empty(row.id, mobile)
             cached_user = self._users.get(row.username)
             if cached_user is None:
                 user = User(
@@ -352,7 +373,10 @@ class UserManager:
         provider_id: int,
         subject: str,
         claims: dict[str, Any],
+        allow_mobile_link: bool = False,
     ) -> User:
+        from octop.infra.auth.sso.mobile_linking import normalize_mobile
+
         async with self._lock:
             row = self._services.user_repo.get(user_id)
             if row is None:
@@ -370,6 +394,7 @@ class UserManager:
                 email_owner = self._services.user_repo.get_by_email(email)
                 if email_owner is not None and email_owner.id != row.id:
                     email = None
+            mobile = normalize_mobile(claims.get("mobile")) if allow_mobile_link else None
             try:
                 self._services.user_repo.upsert_sso_identity(
                     row.id, provider_id=provider_id, subject=subject
@@ -385,6 +410,8 @@ class UserManager:
                 row.id,
                 email=email,
             )
+            if mobile is not None and not row.mobile:
+                self._services.user_repo.set_mobile_if_empty(row.id, mobile)
             self._services.audit_repo.write(
                 actor=row.username, action="user.sso_bind", target=row.username
             )
@@ -420,6 +447,10 @@ class UserManager:
                     "set a password before unlinking single sign-on",
                 )
             self._services.user_repo.remove_sso_identity(row.id, provider_id=provider.id)
+            if kind == "feishu":
+                from octop.infra.feishu_kb.private_index import cleanup
+
+                await asyncio.get_running_loop().run_in_executor(None, cleanup, self._services)
             self._services.audit_repo.write(
                 actor=row.username, action="user.sso_unbind", target=row.username
             )

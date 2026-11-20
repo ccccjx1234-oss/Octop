@@ -1759,6 +1759,13 @@ def _ensure_youli_bigint_columns(db: DatabasePool) -> None:
                     conn.execute(f"ALTER TABLE {table} ALTER COLUMN {col} TYPE BIGINT")
 
 
+def _ensure_shared_feishu_sync_interval_schema(db: DatabasePool) -> None:
+    """``kb_feishu_sources.interval_minutes`` (v39). Idempotent additive column."""
+    if not _table_exists(db, "kb_feishu_sources"):
+        return
+    _ensure_column(db, "kb_feishu_sources", "interval_minutes", "INTEGER NOT NULL DEFAULT 0")
+
+
 _LOGIN_AUDIT_ACTIONS_SQL = (
     "'auth.login', 'auth.ldap_login', 'auth.oidc_login', 'auth.passkey_login'"
 )
@@ -2340,6 +2347,11 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
         with db.connect() as conn:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return
+    if version == 39:
+        _ensure_shared_feishu_sync_interval_schema(db)
+        with db.connect() as conn:
+            conn.execute("UPDATE _schema_version SET version = ?", (version,))
+        return
     sql = path.read_text(encoding="utf-8")
     with db.connect() as conn:
         conn.executescript(sql)
@@ -2599,6 +2611,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_thread_contributed_schema(db)
     _ensure_sso_pending_binds_schema(db)
     _ensure_youli_bigint_columns(db)
+    _ensure_shared_feishu_sync_interval_schema(db)
     _grant_default_nav_permissions(db)
     _grant_personalization_tab_permissions(db)
     _grant_bridge_permission(db)

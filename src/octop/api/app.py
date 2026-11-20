@@ -193,6 +193,7 @@ def build_app(server: OctopServer) -> FastAPI:
         cron,
         desktop,
         envs,
+        erp_org,
         experts,
         health,
         i18n,
@@ -232,6 +233,7 @@ def build_app(server: OctopServer) -> FastAPI:
         workspace,
     )
     from octop.api.routers.decision import router as decision_router
+    from octop.api.routers.feishu_kb import router as feishu_kb_router
     from octop.api.routers.filesystem import router as filesystem_router
     from octop.api.routers.observability import router as observability_router
     from octop.api.routers.providers import admin_router as admin_providers_router
@@ -260,6 +262,7 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(invites.admin_router, "/api/users/invites", ["users"]),
             _RouterMount(user_roles.router, "/api/users/roles", ["users"]),
             _RouterMount(user_groups.router, "/api/user-groups", ["users"]),
+            _RouterMount(erp_org.router, "/api/erp-org", ["users"]),
             _RouterMount(users.router, "/api/users", ["users"]),
             _RouterMount(agents.router, "/api/agents", ["agents"]),
             _RouterMount(agent_tools.router, "/api", ["agents"]),
@@ -270,6 +273,7 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(connectors.router, "/api", ["connectors"]),
             _RouterMount(bridge.router, "/api", ["bridge"]),
             _RouterMount(knowledge_bases.router, "/api", ["knowledge"]),
+            _RouterMount(feishu_kb_router, "/api/feishu-kb", ["knowledge"]),
             _RouterMount(internal_mcp.router, "/api", ["internal-mcp"]),
             _RouterMount(channels.router, "/api", ["channels"]),
             _RouterMount(cloud.router, "/api/cloud", ["cloud"]),

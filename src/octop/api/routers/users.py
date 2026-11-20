@@ -656,7 +656,16 @@ async def admin_reset_mfa(
     return Response(status_code=204)
 
 
-@router.post("/{user_id}/reset-password", status_code=204)
+@router.post(
+    "/{user_id}/reset-password",
+    status_code=204,
+    summary="Reset a user's password after identity verification",
+    description=(
+        "Requires user-management permission and records an audit event. "
+        "Verify the original account owner before resetting; for legacy Feishu recovery, "
+        "the user must then sign in and link Feishu through OAuth."
+    ),
+)
 async def reset_password(
     user_id: int,
     body: ResetPasswordBody,

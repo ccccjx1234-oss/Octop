@@ -7,7 +7,7 @@ from datetime import datetime
 
 from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos._base import UNSET, DbRow, bool_int, map_rows, now_ts, optional_updates
-from octop.infra.users.groups import RESOURCE_EXPERT, group_visibility_sql
+from octop.infra.users.groups import RESOURCE_EXPERT, GroupAccess
 
 
 def _unix_ts(value: object) -> int:
@@ -244,19 +244,26 @@ class AgentRepo:
         exclude_user_id: int | None = None,
         viewer_user_id: int | None = None,
     ) -> list[AgentRow]:
-        """Enabled shared agents. ``viewer_user_id`` applies the group layer."""
+        """Enabled shared agents. ``viewer_user_id`` applies unified resource scope."""
         sql = "SELECT a.* FROM agents a WHERE a.is_shared = 1 AND a.enabled = 1"
         params: list[object] = []
         if exclude_user_id is not None:
             sql += " AND a.user_id != ?"
             params.append(exclude_user_id)
-        if viewer_user_id is not None:
-            sql += f" AND {group_visibility_sql(RESOURCE_EXPERT, 'a.agent_id')}"
-            params.append(viewer_user_id)
         sql += " ORDER BY a.created_at ASC, a.id ASC"
         with self._db.connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        return map_rows(rows, AgentRow)
+            rows = map_rows(conn.execute(sql, params).fetchall(), AgentRow)
+        if viewer_user_id is None:
+            return rows
+        return GroupAccess.filter_rows_with_db(
+            self._db,
+            rows,
+            user_id=viewer_user_id,
+            is_admin=False,
+            resource_type=RESOURCE_EXPERT,
+            key_of=lambda r: r.agent_id,
+            is_owner=lambda r: r.user_id is not None and int(r.user_id) == int(viewer_user_id),
+        )
 
     def set_state(self, agent_id: str, state: str, *, error: str | None = None) -> None:
         with self._db.transaction() as conn:

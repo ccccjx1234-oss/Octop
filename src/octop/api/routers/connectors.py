@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field, model_validator
 from octop.api.common.public_base import resolve_public_base
 from octop.api.deps import current_user, get_server, require_permission
 from octop.i18n import tr
-from octop.infra.auth.sso.crypto import decrypt_secret
 from octop.infra.auth.sso.redirect_after import sanitize_redirect_after
 from octop.infra.connectors.builder import (
     mcp_server_name,
@@ -461,23 +460,8 @@ async def _prepare_credentials(
 
 
 def _active_youli_token(server: Any, user_id: int) -> str:
-    """Return the current employee's MCN token, if they completed SSO."""
-    try:
-        sessions = server.services.repos.youli_session_repo.list_active_for_user(user_id)
-    except Exception:
-        logger.exception("failed to read youli sessions for user %s", user_id)
-        return ""
-    for row in sessions:
-        if row.token_blob is None:
-            continue
-        try:
-            token = decrypt_secret(server.services.secret_repo, row.token_blob)
-        except Exception:
-            logger.exception("failed to decrypt youli token for user %s", user_id)
-            continue
-        if token:
-            return token
-    return ""
+    """Resolve and verify the current employee's credential at call time."""
+    return _connector_service(server).live_youli_token_for_user(user_id)
 
 
 def _merge_credentials(
@@ -914,8 +898,9 @@ async def create_instance(
     if repo.name_exists(user.id, display_name) or _custom_name_exists(svc, user.id, display_name):
         _raise_name_taken(display_name)
     cred_input = dict(body.credentials)
-    if body.kind == "mcn" and not str(cred_input.get("token") or "").strip():
-        token = _active_youli_token(server, user.id)
+    from_session = body.kind == "mcn" and not str(cred_input.get("token") or "").strip()
+    if from_session:
+        token = await asyncio.to_thread(_active_youli_token, server, user.id)
         if not token:
             raise OctopError(
                 ErrorCode.AUTH_FAILED,
@@ -935,6 +920,9 @@ async def create_instance(
             details={"reason": str(exc)},
         ) from exc
 
+    if from_session:
+        # The encrypted session is authoritative; never copy its token into connector storage.
+        cred_payload.pop("token", None)
     instance_id = new_ulid()
     shared, visibility, group_ids = _shared_and_visibility(
         visibility=body.visibility,
@@ -1231,6 +1219,10 @@ async def test_instance(
     creds = await svc.ensure_fresh_credentials(instance_id, inst.kind)
     if not creds:
         raise OctopError(ErrorCode.CONNECTOR_INVALID_CREDENTIALS, "missing credentials")
+    if inst.kind == "mcn":
+        creds["_token_resolver"] = lambda: (
+            svc.live_youli_token_for_user(user.id) if inst.user_id == user.id else ""
+        )
     if inst.kind in {"agently-cli", "ragflow"}:
         creds["_locale"] = resolve_request_locale(request)
 

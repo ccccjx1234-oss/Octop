@@ -27,10 +27,21 @@ async def prepare_cli_turn(
         row = thread_registry.get_thread(thread_id)
         if row is None or row.agent_id != agent_id:
             raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"thread {thread_id!r} not found")
-        await thread_registry.rebind(session_key=sk, thread_id=thread_id, agent_id=agent_id)
+        if row.private_knowledge_protected:
+            raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, "private knowledge protected")
+        if row.user_id != user_id and not row.contributed:
+            raise OctopError(ErrorCode.FORBIDDEN, "thread not owned by user")
+        await thread_registry.rebind(session_key=sk, thread_id=thread_id, agent_id=agent_id, acting_user_id=user_id)
         return thread_id, sk
     bound = thread_registry.get_bound_thread_id(sk)
     if bound:
+        row = thread_registry.get_thread(bound)
+        if row is None or row.agent_id != agent_id:
+            raise OctopError(ErrorCode.AGENT_NOT_FOUND, "thread not found")
+        if row.private_knowledge_protected:
+            raise OctopError(ErrorCode.THREAD_PRIVATE_KNOWLEDGE, "private knowledge protected")
+        if row.user_id != user_id and not row.contributed:
+            raise OctopError(ErrorCode.FORBIDDEN, "thread not owned by user")
         return bound, sk
     tid = await thread_registry.get_or_create_by_key(
         session_key=sk,

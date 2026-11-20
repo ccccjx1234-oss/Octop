@@ -205,6 +205,9 @@ def resolve_user_from_token(server: OctopServer, token: str) -> User:
 
 
 async def async_resolve_user_from_token(server: OctopServer, token: str) -> User:
+    from octop.infra.auth.youli.context import set_current_youli_sid
+
+    set_current_youli_sid(None)
     payload = await asyncio.to_thread(_decode, server, token)
     await _async_require_active_session(server, payload)
     return await asyncio.to_thread(_resolve_user_from_payload, server, payload)

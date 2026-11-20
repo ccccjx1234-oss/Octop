@@ -18,6 +18,7 @@ import {
   Input,
   InputNumber,
   List,
+  Space,
   Modal,
   Popconfirm,
   Progress,
@@ -50,6 +51,7 @@ import {
   FolderInput,
   FolderPlus,
   LayoutGrid,
+  Link2,
   List as ListIcon,
   ListTree,
   Maximize2,
@@ -102,7 +104,15 @@ import {
   ResourceVisibilityGate,
 } from "../../components/ResourceVisibilityFields";
 import { TextAssistBar } from "../../components/TextAssistBar";
-import type { ResourceVisibilityMode } from "../../api/modules/userGroups";
+import {
+  buildScopeRequestPayload,
+  emptyScopeSelection,
+  hasScopeAllowTarget,
+  scopeSelectionFromPayload,
+  type ResourceScopeSelection,
+  type ScopedResourceVisibilityMode,
+} from "../../api/modules/erpOrg";
+import { useUserRole } from "../../hooks/useUserRole";
 import { useCardTableView } from "../../hooks/useCardTableView";
 import { useHorizontalResize } from "../../hooks/useHorizontalResize";
 import { useIsMobile } from "../../hooks/useIsMobile";
@@ -156,6 +166,10 @@ import TextDocumentEditorModal, {
   type TextDocumentFormat,
 } from "./TextDocumentEditorModal";
 import KnowledgeGraphModal from "./KnowledgeGraphModal";
+import FeishuKbPanel from "./FeishuKbPanel";
+import SharedFeishuSources, {
+  type FeishuSourceView,
+} from "./SharedFeishuSources";
 import styles from "./index.module.less";
 
 type BaseFormValues = {
@@ -210,7 +224,9 @@ function canManageKnowledgeBase(
   user: OctopUser | null,
 ): boolean {
   return Boolean(
-    user && (user.role === "admin" || base.owner_user_id === user.id),
+    user &&
+      userCan(user, "knowledge_bases") &&
+      (user.role === "admin" || base.owner_user_id === user.id),
   );
 }
 
@@ -298,14 +314,21 @@ export default function KnowledgeBasesPage() {
   const timeZone = useServerTimezone();
   const user = useCurrentUser();
   const canConfigureKb = userCan(user, "knowledge_settings");
+  const canCreateBase = userCan(user, "knowledge_bases");
+  const [legacyFeishuOpen, setLegacyFeishuOpen] = useState(false);
+  const [sourceView, setSourceView] = useState<FeishuSourceView>("content");
+  const [feishuSourceCount, setFeishuSourceCount] = useState<number>();
+  const [feishuPendingCount, setFeishuPendingCount] = useState(0);
   const { viewMode, setViewMode, showCardView } = useCardTableView(
     loadDocsViewMode(),
   );
   const [bases, setBases] = useState<KnowledgeBase[]>([]);
+  const [basesLoadFailed, setBasesLoadFailed] = useState(false);
   const [selected, setSelected] = useState<KnowledgeBase | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selected?.id ?? null;
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<string>();
   const [currentFolder, setCurrentFolder] = useState("");
   const [docTreeExpanded, setDocTreeExpanded] = useState<string[]>([
     KNOWLEDGE_DOC_TREE_ROOT,
@@ -352,6 +375,7 @@ export default function KnowledgeBasesPage() {
   const [baseDrawerOpen, setBaseDrawerOpen] = useState(false);
   const [editingBaseId, setEditingBaseId] = useState<string | null>(null);
   const [featureModalOpen, setFeatureModalOpen] = useState(false);
+  const [settingsStatusOpen, setSettingsStatusOpen] = useState(false);
   const [onnxProbe, setOnnxProbe] = useState<{
     ok: boolean;
     latency_ms?: number | null;
@@ -714,10 +738,13 @@ export default function KnowledgeBasesPage() {
   const iconUrl = Form.useWatch("icon_url", baseForm);
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const isAdmin = useUserRole() === "admin";
   const [defaultOpenChecked, setDefaultOpenChecked] = useState(false);
   const [baseVisibility, setBaseVisibility] =
-    useState<ResourceVisibilityMode>("owner");
+    useState<ScopedResourceVisibilityMode>("owner");
   const [baseGroupIds, setBaseGroupIds] = useState<string[]>([]);
+  const [baseScope, setBaseScope] =
+    useState<ResourceScopeSelection>(emptyScopeSelection);
   const [uploadState, setUploadState] = useState<{
     baseId: string;
     filename: string;
@@ -759,6 +786,7 @@ export default function KnowledgeBasesPage() {
   );
   const canWriteSelected = canManageSelected;
   const usable = Boolean(capability?.usable);
+  const canIndexSelected = canWriteSelected && usable;
   const supportedDocumentTypes = capability?.ocr?.usable
     ? `${BASE_DOCUMENT_TYPES},${OCR_DOCUMENT_TYPES}`
     : BASE_DOCUMENT_TYPES;
@@ -776,9 +804,29 @@ export default function KnowledgeBasesPage() {
     fileCount,
     documentCap,
   );
+  const importedSources = new Map<string, string>();
+  for (const document of documents) {
+    if (document.feishu_source_id && document.feishu_origin) {
+      importedSources.set(
+        document.feishu_source_id,
+        `${document.feishu_origin.connection} · ${document.feishu_origin.scope}`,
+      );
+    }
+  }
+  const documentSource =
+    sourceFilter === "local" || importedSources.has(sourceFilter ?? "")
+      ? sourceFilter
+      : undefined;
   const folderEntries = documents
-    .filter((document) =>
-      isDirectKnowledgeChild(document.path || document.filename, currentFolder),
+    .filter(
+      (document) =>
+        isDirectKnowledgeChild(
+          document.path || document.filename,
+          currentFolder,
+        ) &&
+        (document.is_dir ||
+          !documentSource ||
+          (document.feishu_source_id ?? "local") === documentSource),
     )
     .sort((a, b) => {
       const dirDelta = Number(Boolean(b.is_dir)) - Number(Boolean(a.is_dir));
@@ -827,8 +875,13 @@ export default function KnowledgeBasesPage() {
 
   /** Bases the user can write to, in list order: the places an entry can move to. */
   const moveBases = useMemo(
-    () => bases.filter((base) => canManageKnowledgeBase(base, user)),
-    [bases, user],
+    () =>
+      bases.filter(
+        (base) =>
+          (usable || base.id === selected?.id) &&
+          canManageKnowledgeBase(base, user),
+      ),
+    [bases, selected?.id, usable, user],
   );
 
   /** Every writable base with its folders; where `moveTarget` cannot go is greyed out. */
@@ -890,10 +943,12 @@ export default function KnowledgeBasesPage() {
     try {
       const rows = await knowledgeBasesApi.list();
       setBases(rows);
+      setBasesLoadFailed(false);
       setSelected((current) =>
         current && !rows.some((row) => row.id === current.id) ? null : current,
       );
     } catch (error) {
+      setBasesLoadFailed(true);
       message.error(apiErrorMessage(error, t("knowledgeBases.loadFailed"), t));
     }
   }, [t]);
@@ -1115,6 +1170,10 @@ export default function KnowledgeBasesPage() {
 
   useEffect(() => {
     setCurrentFolder("");
+    setSourceFilter(undefined);
+    setSourceView("content");
+    setFeishuSourceCount(undefined);
+    setFeishuPendingCount(0);
     setDocTreeExpanded([KNOWLEDGE_DOC_TREE_ROOT]);
   }, [selected?.id]);
 
@@ -1199,6 +1258,7 @@ export default function KnowledgeBasesPage() {
     setDefaultOpenChecked(false);
     setBaseVisibility("owner");
     setBaseGroupIds([]);
+    setBaseScope(emptyScopeSelection());
     setEditingBaseId(null);
     setBaseDrawerOpen(true);
   };
@@ -1215,6 +1275,7 @@ export default function KnowledgeBasesPage() {
     setDefaultOpenChecked(base.default_open);
     setBaseVisibility(base.visibility ?? (base.shared ? "all" : "owner"));
     setBaseGroupIds(base.group_ids ?? []);
+    setBaseScope(scopeSelectionFromPayload(base));
     setEditingBaseId(base.id);
     setBaseDrawerOpen(true);
   };
@@ -1223,6 +1284,13 @@ export default function KnowledgeBasesPage() {
     const values = await baseForm.validateFields();
     if (baseVisibility === "groups" && baseGroupIds.length === 0) {
       message.error(t("resourceVisibility.needGroup"));
+      return;
+    }
+    if (
+      baseVisibility === "scoped" &&
+      !hasScopeAllowTarget(baseVisibility, baseGroupIds, baseScope)
+    ) {
+      message.error(t("resourceVisibility.needScopeTarget"));
       return;
     }
     const payload = {
@@ -1235,8 +1303,12 @@ export default function KnowledgeBasesPage() {
         : values.icon_url?.trim() || "",
       default_open: defaultOpenChecked,
       shared: baseVisibility !== "owner",
-      visibility: baseVisibility,
-      group_ids: baseGroupIds,
+      ...buildScopeRequestPayload({
+        visibility: baseVisibility,
+        groupIds: baseGroupIds,
+        scope: baseScope,
+        isAdmin,
+      }),
     };
     try {
       let next = editingBaseId
@@ -1639,8 +1711,7 @@ export default function KnowledgeBasesPage() {
 
   const uploadingThisBase = uploadState?.baseId === selected?.id;
   const uploadBusy = uploadState !== null;
-  const canDropUpload =
-    canWriteSelected && usable && !isAtDocumentLimit && !uploadBusy;
+  const canDropUpload = canIndexSelected && !isAtDocumentLimit && !uploadBusy;
 
   const resetDragActive = () => {
     dragDepthRef.current = 0;
@@ -1783,6 +1854,7 @@ export default function KnowledgeBasesPage() {
 
   const moveEntry = async () => {
     if (!selected || !moveTarget || moveDestination === null) return;
+    if (!usable && moveDestination.kbId !== selected.id) return;
     setMoving(true);
     try {
       await knowledgeBasesApi.moveDocument(
@@ -1999,6 +2071,7 @@ export default function KnowledgeBasesPage() {
       return;
     }
 
+    setSourceView("content");
     if (selected?.id !== kb) {
       selectBase(base);
       return;
@@ -2177,7 +2250,9 @@ export default function KnowledgeBasesPage() {
         )}
         {canWriteSelected ? (
           <>
-            {!document.is_dir && isEditableKnowledgeDocument(document) ? (
+            {usable &&
+            !document.feishu_source_id &&
+            isEditableKnowledgeDocument(document) ? (
               <Tooltip title={t("knowledgeBases.editDocument")}>
                 <Button
                   type="text"
@@ -2188,7 +2263,7 @@ export default function KnowledgeBasesPage() {
                 />
               </Tooltip>
             ) : null}
-            {document.is_dir ? null : (
+            {!document.is_dir && usable ? (
               <Popconfirm
                 title={t("knowledgeBases.rebuildDocumentConfirm")}
                 onConfirm={() => void rebuildDocument(document.id)}
@@ -2202,7 +2277,7 @@ export default function KnowledgeBasesPage() {
                   />
                 </Tooltip>
               </Popconfirm>
-            )}
+            ) : null}
             {document.is_dir ? (
               <Tooltip title={t("knowledgeBases.renameFolder")}>
                 <Button
@@ -2252,18 +2327,29 @@ export default function KnowledgeBasesPage() {
   };
 
   const renderEntryName = (document: KnowledgeDocument, nameClass?: string) => {
-    const name = knowledgeBasename(document.path || document.filename);
+    const origin = document.feishu_origin;
+    const name =
+      origin?.title || knowledgeBasename(document.path || document.filename);
     const ext = !document.is_dir ? fileExtensionLabel(name) : "";
     return (
       <>
         <span className={styles.filenameHover}>
           <span
             className={cx(styles.filenameText, nameClass)}
-            title={document.path || name}
+            title={
+              origin
+                ? [
+                    origin.connection,
+                    origin.scope,
+                    ...origin.path,
+                    origin.title,
+                  ].join(" / ")
+                : document.path || name
+            }
           >
             {name}
           </span>
-          {canWriteSelected && !document.is_dir ? (
+          {canWriteSelected && !document.is_dir && !origin ? (
             <Tooltip title={t("knowledgeBases.renameFile")}>
               <button
                 type="button"
@@ -2280,7 +2366,11 @@ export default function KnowledgeBasesPage() {
             </Tooltip>
           ) : null}
         </span>
-        {ext ? <span className={styles.docExtBadge}>{ext}</span> : null}
+        {origin ? (
+          <Tag>{origin.connection}</Tag>
+        ) : ext ? (
+          <span className={styles.docExtBadge}>{ext}</span>
+        ) : null}
       </>
     );
   };
@@ -2288,8 +2378,18 @@ export default function KnowledgeBasesPage() {
   const showListPane = !isMobile || mobilePane === "list";
   const showDetailPane = !isMobile || mobilePane === "detail";
   const showListPanel = showListPane && (isMobile || !listPanelCollapsed);
-  const showEnableGuide = !loading && !usable;
-  const showEmptyGuide = !loading && usable && bases.length === 0;
+  const loadFailed = basesLoadFailed || capability === null;
+  const showEnableGuide = !loadFailed && !usable && bases.length === 0;
+  const showEmptyGuide = !loadFailed && usable && bases.length === 0;
+  const canConnectFeishu = Boolean(
+    canWriteSelected && selected && isKnowledgeOwner(selected, user),
+  );
+  const showDocuments = !canConnectFeishu || sourceView === "content";
+  const unavailableDescription = t(
+    canConfigureKb
+      ? "knowledgeBases.unavailableDescription"
+      : "knowledgeBases.unavailableDescriptionNonAdmin",
+  );
   const emptyLayoutClassName = styles.emptyLayout;
   const setupMascot = <OctopEmptyMascot />;
 
@@ -2305,13 +2405,52 @@ export default function KnowledgeBasesPage() {
       subtitle={t("knowledgeBases.subtitle")}
       fill
       actions={
-        canConfigureKb ? (
-          <Button icon={<Settings size={15} />} onClick={openSettings}>
+        <Space wrap>
+          <Button type="text" onClick={() => setLegacyFeishuOpen(true)}>
+            {t("feishuKb.legacyTitle")}
+          </Button>
+          <Button
+            icon={<Settings size={15} />}
+            onClick={
+              canConfigureKb ? openSettings : () => setSettingsStatusOpen(true)
+            }
+          >
             {t("knowledgeBases.settingsTitle")}
           </Button>
-        ) : undefined
+        </Space>
       }
     >
+      <Drawer
+        title={t("feishuKb.legacyTitle")}
+        width="min(720px, 100vw)"
+        open={legacyFeishuOpen}
+        onClose={() => setLegacyFeishuOpen(false)}
+        destroyOnHidden
+      >
+        <Alert type="info" showIcon message={t("feishuKb.legacyHint")} />
+        <FeishuKbPanel active={legacyFeishuOpen} />
+      </Drawer>
+      {!loading && (loadFailed || (!usable && bases.length > 0)) ? (
+        <Alert
+          style={{ marginBottom: 12, flexShrink: 0 }}
+          type={loadFailed ? "error" : "warning"}
+          showIcon
+          message={
+            loadFailed ? t("knowledgeBases.loadFailed") : unavailableDescription
+          }
+          action={
+            loadFailed ? (
+              <Button
+                size="small"
+                loading={refreshing}
+                onClick={() => void refresh()}
+              >
+                {t("common.retry")}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : null}
       {loading ? (
         <div className={emptyLayoutClassName}>
           <div className={styles.centered}>
@@ -2326,14 +2465,14 @@ export default function KnowledgeBasesPage() {
             plain
             icon={setupMascot}
             title={
-              canConfigureKb
+              canConfigureKb && !capability?.feature_enabled
                 ? t("knowledgeBases.enableGuideTitle")
                 : t("knowledgeBases.unavailableTitle")
             }
             description={
               canConfigureKb
                 ? t("knowledgeBases.enableGuideDesc")
-                : t("knowledgeBases.unavailableDescriptionNonAdmin")
+                : t("knowledgeBases.unavailableEmptyDescription")
             }
             steps={
               canConfigureKb
@@ -2362,6 +2501,15 @@ export default function KnowledgeBasesPage() {
                   }
                 : undefined
             }
+            secondaryAction={
+              canCreateBase
+                ? {
+                    label: t("knowledgeBases.create"),
+                    onClick: openCreate,
+                    disabled: true,
+                  }
+                : undefined
+            }
           />
         </div>
       ) : showEmptyGuide ? (
@@ -2387,12 +2535,16 @@ export default function KnowledgeBasesPage() {
                 detail: t("knowledgeBases.emptyGuideStepShareDetail"),
               },
             ]}
-            primaryAction={{
-              label: t("knowledgeBases.create"),
-              onClick: openCreate,
-              icon: <Plus size={14} />,
-              disabled: atBaseLimit,
-            }}
+            primaryAction={
+              canCreateBase
+                ? {
+                    label: t("knowledgeBases.create"),
+                    onClick: openCreate,
+                    icon: <Plus size={14} />,
+                    disabled: atBaseLimit,
+                  }
+                : undefined
+            }
           />
         </div>
       ) : (
@@ -2419,7 +2571,7 @@ export default function KnowledgeBasesPage() {
                 <Button
                   type="primary"
                   icon={<Plus size={15} />}
-                  disabled={!usable || atBaseLimit}
+                  disabled={!canCreateBase || !usable || atBaseLimit}
                   onClick={openCreate}
                 >
                   {t("knowledgeBases.create")}
@@ -2649,19 +2801,128 @@ export default function KnowledgeBasesPage() {
                     styles.detailBody,
                     dragActive && styles.detailBodyDropActive,
                   )}
-                  onDragEnter={handleDocsDragEnter}
-                  onDragLeave={handleDocsDragLeave}
-                  onDragOver={handleDocsDragOver}
-                  onDrop={handleDocsDrop}
+                  onDragEnter={showDocuments ? handleDocsDragEnter : undefined}
+                  onDragLeave={showDocuments ? handleDocsDragLeave : undefined}
+                  onDragOver={showDocuments ? handleDocsDragOver : undefined}
+                  onDrop={showDocuments ? handleDocsDrop : undefined}
                 >
-                  {dragActive && canDropUpload ? (
+                  {showDocuments && dragActive && canDropUpload ? (
                     <div className={styles.dropOverlay} aria-hidden>
                       <FileUp size={36} strokeWidth={1.75} />
                       <span>{t("knowledgeBases.dropToUpload")}</span>
                     </div>
                   ) : null}
+                  <div className={styles.libraryHeader}>
+                    <div className={styles.libraryHeading}>
+                      {isMobile && !showDocuments ? (
+                        <Button
+                          type="text"
+                          icon={<ChevronLeft size={17} />}
+                          aria-label={t("knowledgeBases.backToList")}
+                          onClick={() => setMobilePane("list")}
+                        />
+                      ) : null}
+                      <Typography.Title level={5}>
+                        {selected.name}
+                      </Typography.Title>
+                    </div>
+                    {canWriteSelected ? (
+                      <Space wrap>
+                        <Button
+                          icon={<FileUp size={14} />}
+                          loading={uploadingThisBase}
+                          disabled={!usable || isAtDocumentLimit || uploadBusy}
+                          onClick={() => {
+                            setSourceView("content");
+                            uploadRef.current?.click();
+                          }}
+                        >
+                          {t("sharedFeishu.localFiles")}
+                        </Button>
+                        {canConnectFeishu ? (
+                          <Button
+                            type="primary"
+                            icon={<Link2 size={14} />}
+                            onClick={() => setSourceView("connect")}
+                          >
+                            {t("sharedFeishu.connect")}
+                          </Button>
+                        ) : null}
+                      </Space>
+                    ) : null}
+                  </div>
+                  {canConnectFeishu ? (
+                    <>
+                      <Segmented
+                        className={styles.libraryTabs}
+                        value={
+                          sourceView === "connect" ? "sources" : sourceView
+                        }
+                        onChange={(value) =>
+                          setSourceView(
+                            value === "sources" ? "sources" : "content",
+                          )
+                        }
+                        options={[
+                          {
+                            value: "content",
+                            label: t("sharedFeishu.contents", {
+                              total: fileCount,
+                            }),
+                          },
+                          {
+                            value: "sources",
+                            label:
+                              feishuPendingCount > 0 ? (
+                                <span className={styles.feishuSourcesTabLabel}>
+                                  <span>
+                                    {feishuSourceCount === undefined
+                                      ? t("sharedFeishu.manage")
+                                      : t("sharedFeishu.sourcesTab", {
+                                          total: feishuSourceCount,
+                                        })}
+                                  </span>
+                                  <span
+                                    className={styles.feishuPendingTabBadge}
+                                  >
+                                    {t("sharedFeishu.pendingShort", {
+                                      count: feishuPendingCount,
+                                    })}
+                                  </span>
+                                </span>
+                              ) : feishuSourceCount === undefined ? (
+                                t("sharedFeishu.manage")
+                              ) : (
+                                t("sharedFeishu.sourcesTab", {
+                                  total: feishuSourceCount,
+                                })
+                              ),
+                          },
+                        ]}
+                      />
+                      <div
+                        className={styles.sharedFeishuWorkspace}
+                        hidden={showDocuments}
+                      >
+                        <SharedFeishuSources
+                          key={selected.id}
+                          kbId={selected.id}
+                          usable={usable}
+                          view={sourceView}
+                          onNavigate={setSourceView}
+                          onSourceCount={setFeishuSourceCount}
+                          onPendingCount={setFeishuPendingCount}
+                          onDocumentsChanged={() => {
+                            void loadDetail(selected.id, { silent: true });
+                            void loadBases();
+                          }}
+                        />
+                      </div>
+                    </>
+                  ) : null}
                   <div
                     className={cx(skillStyles.gridToolbar, styles.docsToolbar)}
+                    hidden={!showDocuments}
                   >
                     <div className={styles.toolbarStart}>
                       {isMobile ? (
@@ -2725,6 +2986,28 @@ export default function KnowledgeBasesPage() {
                       </nav>
                     </div>
                     <div className={skillStyles.gridToolbarRight}>
+                      {importedSources.size > 0 ? (
+                        <Select
+                          size="small"
+                          aria-label={t("sharedFeishu.sourceFilter")}
+                          value={documentSource ?? "all"}
+                          onChange={setSourceFilter}
+                          options={[
+                            {
+                              value: "all",
+                              label: t("sharedFeishu.allSources"),
+                            },
+                            {
+                              value: "local",
+                              label: t("sharedFeishu.localFiles"),
+                            },
+                            ...Array.from(
+                              importedSources,
+                              ([value, label]) => ({ value, label }),
+                            ),
+                          ]}
+                        />
+                      ) : null}
                       <Segmented
                         size="small"
                         value={viewMode}
@@ -2787,26 +3070,15 @@ export default function KnowledgeBasesPage() {
                       {canWriteSelected ? (
                         <Button
                           icon={<FilePlus size={14} />}
-                          disabled={isAtDocumentLimit}
+                          disabled={!usable || isAtDocumentLimit}
                           onClick={openCreateTextDocument}
                         >
                           {t("knowledgeBases.createFile")}
                         </Button>
                       ) : null}
-                      {canWriteSelected ? (
-                        <Button
-                          type="primary"
-                          icon={<FileUp size={14} />}
-                          loading={uploadingThisBase}
-                          disabled={isAtDocumentLimit || uploadBusy}
-                          onClick={() => uploadRef.current?.click()}
-                        >
-                          {t("knowledgeBases.upload")}
-                        </Button>
-                      ) : null}
                     </div>
                   </div>
-                  <div className={styles.docsPathRow}>
+                  <div className={styles.docsPathRow} hidden={!showDocuments}>
                     <span
                       className={cx(skillStyles.gridCount, styles.docsCount)}
                     >
@@ -2819,7 +3091,7 @@ export default function KnowledgeBasesPage() {
                             max: documentCap,
                           })}
                     </span>
-                    {canWriteSelected ? (
+                    {canIndexSelected ? (
                       <Typography.Text
                         type="secondary"
                         className={styles.uploadHint}
@@ -2843,6 +3115,7 @@ export default function KnowledgeBasesPage() {
                       styles.docsSplit,
                       !isMobile && styles.docsSplitFramed,
                     )}
+                    hidden={!showDocuments}
                   >
                     {!isMobile && !docTreeCollapsed ? (
                       <aside
@@ -2966,38 +3239,46 @@ export default function KnowledgeBasesPage() {
                             icon={<OctopEmptyMascot />}
                             title={t("knowledgeBases.emptyDocumentsTitle")}
                             description={
-                              canWriteSelected
-                                ? t("knowledgeBases.emptyDocumentsDesc")
-                                : t("knowledgeBases.emptyDocumentsReadonlyDesc")
+                              usable
+                                ? t(
+                                    canWriteSelected
+                                      ? "knowledgeBases.emptyDocumentsDesc"
+                                      : "knowledgeBases.emptyDocumentsReadonlyDesc",
+                                  )
+                                : undefined
                             }
-                            steps={[
-                              {
-                                label: t(
-                                  "knowledgeBases.emptyDocumentsStepUpload",
-                                ),
-                                detail: t(
-                                  "knowledgeBases.emptyDocumentsStepUploadDetail",
-                                ),
-                              },
-                              {
-                                label: t(
-                                  "knowledgeBases.emptyDocumentsStepWrite",
-                                ),
-                                detail: t(
-                                  "knowledgeBases.emptyDocumentsStepWriteDetail",
-                                ),
-                              },
-                              {
-                                label: t(
-                                  "knowledgeBases.emptyDocumentsStepUse",
-                                ),
-                                detail: t(
-                                  "knowledgeBases.emptyDocumentsStepUseDetail",
-                                ),
-                              },
-                            ]}
+                            steps={
+                              canIndexSelected
+                                ? [
+                                    {
+                                      label: t(
+                                        "knowledgeBases.emptyDocumentsStepUpload",
+                                      ),
+                                      detail: t(
+                                        "knowledgeBases.emptyDocumentsStepUploadDetail",
+                                      ),
+                                    },
+                                    {
+                                      label: t(
+                                        "knowledgeBases.emptyDocumentsStepWrite",
+                                      ),
+                                      detail: t(
+                                        "knowledgeBases.emptyDocumentsStepWriteDetail",
+                                      ),
+                                    },
+                                    {
+                                      label: t(
+                                        "knowledgeBases.emptyDocumentsStepUse",
+                                      ),
+                                      detail: t(
+                                        "knowledgeBases.emptyDocumentsStepUseDetail",
+                                      ),
+                                    },
+                                  ]
+                                : []
+                            }
                             primaryAction={
-                              canWriteSelected
+                              canIndexSelected
                                 ? {
                                     label: t("knowledgeBases.upload"),
                                     onClick: () => uploadRef.current?.click(),
@@ -3008,7 +3289,7 @@ export default function KnowledgeBasesPage() {
                                 : undefined
                             }
                             secondaryAction={
-                              canWriteSelected
+                              canIndexSelected
                                 ? {
                                     label: t("knowledgeBases.createFile"),
                                     onClick: openCreateTextDocument,
@@ -3260,6 +3541,26 @@ export default function KnowledgeBasesPage() {
           ) : null}
         </div>
       )}
+
+      <Modal
+        title={t("knowledgeBases.settingsTitle")}
+        open={settingsStatusOpen && !canConfigureKb}
+        footer={null}
+        onCancel={() => setSettingsStatusOpen(false)}
+      >
+        <Alert
+          type={usable ? "info" : "warning"}
+          showIcon
+          message={t(
+            capability === null
+              ? "knowledgeBases.loadFailed"
+              : usable
+              ? "knowledgeBases.featureEnabled"
+              : "knowledgeBases.unavailableTitle",
+          )}
+          description={t("knowledgeBases.settingsPermissionHint")}
+        />
+      </Modal>
 
       <Modal
         title={
@@ -3932,7 +4233,12 @@ export default function KnowledgeBasesPage() {
                 onChange={setDefaultOpenChecked}
               />
             </div>
-            <ResourceVisibilityGate allowOwner visibility={baseVisibility}>
+            <ResourceVisibilityGate
+              allowOwner
+              visibility={baseVisibility}
+              enableErpScope
+              isAdmin={isAdmin}
+            >
               <div className={styles.formOptionRowVisibility}>
                 <div className={styles.formOptionCopy}>
                   <span className={styles.switchLabel}>
@@ -3943,6 +4249,10 @@ export default function KnowledgeBasesPage() {
                   allowOwner
                   visibility={baseVisibility}
                   groupIds={baseGroupIds}
+                  enableErpScope
+                  isAdmin={isAdmin}
+                  scope={baseScope}
+                  onScopeChange={setBaseScope}
                   onChange={(next) => {
                     setBaseVisibility(next.visibility);
                     setBaseGroupIds(next.groupIds);
@@ -4453,7 +4763,7 @@ export default function KnowledgeBasesPage() {
         kbId={selected?.id ?? null}
         kbName={selected?.name ?? ""}
         canWrite={canWriteSelected}
-        canBuild={Boolean(capability?.graph?.usable)}
+        canBuild={usable && Boolean(capability?.graph?.usable)}
         onClose={() => setGraphOpen(false)}
       />
       <Modal

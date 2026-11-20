@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import suppress
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from octop.api.common.content_disposition import content_disposition
+from octop.api.common.scope import (
+    ResourceScopeFields,
+    apply_body_scope,
+    scope_shared_flag,
+    validate_body_scope,
+)
 from octop.api.common.upload_limit import read_upload_capped
 from octop.api.deps import current_user, get_server, require_permission
 from octop.config import DEFAULT_MAX_UPLOAD_MB, MAX_MAX_UPLOAD_MB, upload_mb_to_bytes
@@ -194,13 +201,11 @@ class OnnxDownloadBody(BaseModel):
     model: str = Field(min_length=1, description="Catalog ONNX embedding model id to download.")
 
 
-class CreateBaseBody(BaseModel):
+class CreateBaseBody(ResourceScopeFields):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
     default_open: bool = False
     shared: bool = False
-    visibility: Literal["all", "groups", "owner"] | None = None
-    group_ids: list[str] | None = None
     icon_name: str = Field(default="", max_length=64)
     icon_url: str = Field(default="", max_length=2048)
     max_documents: int | None = Field(
@@ -232,13 +237,11 @@ class UpdateTextDocumentBody(BaseModel):
     content: str = Field(max_length=_TEXT_DOC_MAX_LENGTH)
 
 
-class UpdateBaseBody(BaseModel):
+class UpdateBaseBody(ResourceScopeFields):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     default_open: bool | None = None
     shared: bool | None = None
-    visibility: Literal["all", "groups", "owner"] | None = None
-    group_ids: list[str] | None = None
     icon_name: str | None = Field(default=None, max_length=64)
     icon_url: str | None = Field(default=None, max_length=2048)
     max_documents: int | None = Field(
@@ -282,6 +285,9 @@ def _row_payload(
     server: OctopServer | None = None,
 ) -> dict[str, Any]:
     payload = asdict(row)
+    origin = payload.get("feishu_origin")
+    if isinstance(origin, str):
+        payload["feishu_origin"] = json.loads(origin)
     payload["document_id"] = row.id
     if has_original is None:
         if getattr(row, "is_dir", False):
@@ -342,7 +348,7 @@ def _base_payload(server: OctopServer, row: Any) -> dict[str, Any]:
     access = _group_access(server)
     if access is not None:
         payload.update(
-            access.visibility(
+            access.scope_payload(
                 RESOURCE_KNOWLEDGE_BASE,
                 row.id,
                 shared=bool(row.shared),
@@ -778,30 +784,32 @@ async def create_base(
     try:
         _require_usable(server, request)
         access = _group_access(server)
-        if body.visibility is not None and access is not None:
-            access.validate_visibility(body.visibility, body.group_ids)
+        _scope_dict, normalized_scope = validate_body_scope(
+            access,
+            body,
+            user=user,
+            fallback_visibility="all" if body.shared else "owner",
+        )
+        eff_vis = normalized_scope.visibility if normalized_scope is not None else body.visibility
+        shared = bool(scope_shared_flag(eff_vis, body.shared))
         base = _knowledge_service(server).create_base(
             owner_user_id=user.id,
             name=body.name.strip(),
             description=body.description.strip(),
             default_open=body.default_open,
-            shared=(
-                False
-                if body.visibility == "owner"
-                else True
-                if body.visibility in {"all", "groups"}
-                else body.shared
-            ),
+            shared=shared,
             icon_name=body.icon_name.strip(),
             icon_url=body.icon_url.strip(),
             max_documents=body.max_documents if body.max_documents is not None else MAX_DOCS_PER_KB,
         )
-        if body.visibility is not None and access is not None:
-            access.set_visibility(
-                RESOURCE_KNOWLEDGE_BASE,
-                base.id,
-                body.visibility,
-                body.group_ids,
+        if body.visibility is not None or normalized_scope is not None:
+            apply_body_scope(
+                access,
+                resource_type=RESOURCE_KNOWLEDGE_BASE,
+                resource_key=base.id,
+                body=body,
+                normalized=normalized_scope,
+                user=user,
             )
         return _base_payload(server, base)
     except Exception as exc:
@@ -855,13 +863,14 @@ async def update_base(
 ) -> dict[str, Any]:
     try:
         access = _group_access(server)
-        if body.visibility is not None and access is not None:
-            access.validate_visibility(body.visibility, body.group_ids)
-        shared = body.shared
-        if body.visibility == "owner":
-            shared = False
-        elif body.visibility in {"all", "groups"}:
-            shared = True
+        _scope_dict, normalized_scope = validate_body_scope(
+            access,
+            body,
+            user=user,
+            fallback_visibility="all" if body.shared else "owner",
+        )
+        eff_vis = normalized_scope.visibility if normalized_scope is not None else body.visibility
+        shared = scope_shared_flag(eff_vis, body.shared)
         updated = _knowledge_service(server).update_base(
             kb_id,
             actor_user_id=user.id,
@@ -874,12 +883,14 @@ async def update_base(
             max_documents=body.max_documents,
             is_admin=_is_admin(user),
         )
-        if body.visibility is not None and access is not None:
-            access.set_visibility(
-                RESOURCE_KNOWLEDGE_BASE,
-                kb_id,
-                body.visibility,
-                body.group_ids,
+        if body.visibility is not None or normalized_scope is not None:
+            apply_body_scope(
+                access,
+                resource_type=RESOURCE_KNOWLEDGE_BASE,
+                resource_key=kb_id,
+                body=body,
+                normalized=normalized_scope,
+                user=user,
             )
         return _base_payload(server, updated)
     except Exception as exc:
