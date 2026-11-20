@@ -9,8 +9,16 @@ import {
   parseWsAuthCloseNotice,
   triggerUnauthorizedRedirect,
 } from "../api/request";
-import { useAgent } from "../context/AgentContext";
+import { useAgent, type OctopAgent } from "../context/AgentContext";
 import { ExpertIcon } from "../pages/Experts/components/iconForName";
+import {
+  ManagedAvatarMark,
+  managedRunnerId,
+} from "../pages/Experts/components/ManagedAvatarMark";
+import {
+  incomingShareProps,
+  SharedAvatarMark,
+} from "../components/SharedResourceBadge";
 import {
   emitSessionEvent,
   invalidateHistory,
@@ -65,20 +73,24 @@ function systemNotifyOptions(
   };
 }
 
-function PushToastIcon({
-  iconUrl,
-  iconName,
-}: {
-  iconUrl?: string | null;
-  iconName?: string | null;
-}) {
+function PushToastIcon({ agent }: { agent?: OctopAgent }) {
+  const icon =
+    agent?.icon_url || agent?.icon_name ? (
+      <ExpertIcon
+        iconUrl={agent.icon_url}
+        iconName={agent.icon_name}
+        size={16}
+      />
+    ) : (
+      <Bell size={16} />
+    );
   return (
     <span className={styles.icon}>
-      {iconUrl || iconName ? (
-        <ExpertIcon iconUrl={iconUrl} iconName={iconName} size={16} />
-      ) : (
-        <Bell size={16} />
-      )}
+      <SharedAvatarMark {...incomingShareProps(agent)}>
+        <ManagedAvatarMark runner={managedRunnerId(agent)}>
+          {icon}
+        </ManagedAvatarMark>
+      </SharedAvatarMark>
     </span>
   );
 }
@@ -153,10 +165,7 @@ export function useDashboardPushToast(): void {
         },
         message: (
           <span className={styles.header}>
-            <PushToastIcon
-              iconUrl={agent?.icon_url}
-              iconName={agent?.icon_name}
-            />
+            <PushToastIcon agent={agent} />
             <span className={styles.title}>{pushTitle(parsed)}</span>
           </span>
         ),

@@ -45,6 +45,10 @@ export interface ManagedAgentCreate extends ResourceScopeExtensions {
   group_ids?: string[];
   quick_prompts?: ManagedQuickPrompt[];
   file_overrides?: ManagedWorkspaceFile[];
+  skill_package_ids?: string[];
+  knowledge_base_ids?: string[];
+  mcp_servers?: string[];
+  permission_mode?: "ask" | "yolo";
 }
 
 export const managedAgentsApi = {

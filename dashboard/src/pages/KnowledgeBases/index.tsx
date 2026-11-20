@@ -4385,12 +4385,9 @@ export default function KnowledgeBasesPage() {
                     (remoteProviders.find(
                       (provider) => provider.provider_id === featureProviderId,
                     )?.models.length ?? 0) === 0 ? (
-                      <Typography.Text
-                        type="secondary"
-                        className={styles.settingsHint}
-                      >
+                      <span className={styles.settingsHint}>
                         {t("knowledgeBases.noModels")}
-                      </Typography.Text>
+                      </span>
                     ) : null}
                   </div>
                 </div>
@@ -4454,12 +4451,9 @@ export default function KnowledgeBasesPage() {
                     );
                   })}
                   {catalog.length === 0 ? (
-                    <Typography.Text
-                      type="secondary"
-                      className={styles.settingsHint}
-                    >
+                    <span className={styles.settingsHint}>
                       {t("knowledgeBases.noModels")}
-                    </Typography.Text>
+                    </span>
                   ) : null}
                   {catalog.length > 0 && !onnxExpanded ? (
                     <Button
@@ -4521,9 +4515,9 @@ export default function KnowledgeBasesPage() {
                   </div>
                 </div>
               ) : null}
-              <Typography.Text type="secondary" className={styles.settingsHint}>
+              <span className={styles.settingsHint}>
                 {t("knowledgeBases.enableDescription")}
-              </Typography.Text>
+              </span>
               <Typography.Link onClick={() => navigate("/admin/models")}>
                 {t("knowledgeBases.manageModels")}
               </Typography.Link>
@@ -4738,12 +4732,9 @@ export default function KnowledgeBasesPage() {
                       (graphProviders.find(
                         (provider) => provider.provider_id === graphProviderId,
                       )?.models.length ?? 0) === 0 ? (
-                        <Typography.Text
-                          type="secondary"
-                          className={styles.settingsHint}
-                        >
+                        <span className={styles.settingsHint}>
                           {t("knowledgeBases.graphNoModels")}
-                        </Typography.Text>
+                        </span>
                       ) : null}
                     </div>
                     <Alert
@@ -4786,9 +4777,9 @@ export default function KnowledgeBasesPage() {
           {downloadProgressLabel || downloadProgressModel}
         </div>
         <Progress percent={downloadProgress} status="active" />
-        <Typography.Text type="secondary" className={styles.settingsHint}>
+        <span className={styles.settingsHint}>
           {t("models.localDownloadBackgroundHint")}
-        </Typography.Text>
+        </span>
       </Modal>
     </PageShell>
   );

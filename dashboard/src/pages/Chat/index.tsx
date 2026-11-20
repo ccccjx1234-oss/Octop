@@ -599,6 +599,9 @@ function ChatPageInner() {
     handleConversationModeChange,
     hitlPolicy,
     handleHitlPolicyChange,
+    sessionModes,
+    sessionMode,
+    handleSessionModeChange,
     handleConnectorsChange,
     handleKnowledgeBaseIdsChange,
   } = useChatComposerResources(
@@ -609,6 +612,7 @@ function ChatPageInner() {
     composerSession?.reasoningEffort,
     composerSession?.conversationMode,
     composerSession?.hitlPolicy,
+    composerSession?.sessionMode,
     composerSession?.owned !== false,
   );
 
@@ -744,6 +748,7 @@ function ChatPageInner() {
     reasoningMode,
     reasoningEffort,
     conversationMode,
+    sessionMode,
     hitlPolicy,
     defaultModel: activeAgent?.default_model ?? null,
     sendMessage,
@@ -1673,11 +1678,7 @@ function ChatPageInner() {
                       onOpenBrowser={
                         hasBrowserTool ? openBrowserTab : undefined
                       }
-                      onEditFile={
-                        !sharedExpertViewer && panelFilePaths.length > 0
-                          ? openFileList
-                          : undefined
-                      }
+                      onEditFile={sharedExpertViewer ? undefined : openFileList}
                     />
                   </ChatAgentProfileProvider>
                 </>
@@ -1982,9 +1983,14 @@ function ChatPageInner() {
               onReasoningChange={handleReasoningChange}
               conversationMode={conversationMode}
               onConversationModeChange={handleConversationModeChange}
+              sessionModes={sessionModes}
+              sessionMode={sessionMode}
+              onSessionModeChange={handleSessionModeChange}
               hitlPolicy={hitlPolicy}
               onHitlPolicyChange={
-                hitlEnabled ? handleComposerHitlPolicyChange : undefined
+                hitlEnabled || isManagedChat
+                  ? handleComposerHitlPolicyChange
+                  : undefined
               }
               lockThreadSettings={composerSession?.owned === false}
               availableConnectors={isTeamChat ? undefined : chatConnectors}

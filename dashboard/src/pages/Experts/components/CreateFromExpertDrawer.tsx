@@ -720,6 +720,8 @@ export default function CreateFromExpertDrawer({
       width={600}
       onClose={onClose}
       destroyOnHidden
+      className={styles.expertDrawer}
+      rootClassName={styles.expertDrawerRoot}
       footer={
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button className={styles.drawerCancelBtn} onClick={onClose}>
@@ -854,6 +856,36 @@ export default function CreateFromExpertDrawer({
           onRemovePathMapping={removePathMapping}
           onUpdatePathMapping={updatePathMapping}
         />
+        <Form.Item
+          name="conversation_mode"
+          label={t("experts.defaultModeLabel")}
+          tooltip={t("experts.defaultModeHint")}
+          initialValue={DEFAULT_CONVERSATION_MODE}
+        >
+          <Select
+            options={CONVERSATION_MODES.map((mode) => ({
+              value: mode,
+              label: t(`chat.conversationMode.${mode}`),
+            }))}
+          />
+        </Form.Item>
+        <Form.Item
+          name="default_model"
+          label={t("experts.defaultModelLabel")}
+          initialValue={MODEL_AUTO_VALUE}
+        >
+          <Select
+            loading={modelsLoading}
+            options={modelOptions}
+            placeholder={t("experts.defaultModelPlaceholder")}
+            showSearch
+            filterOption={(input, opt) =>
+              ((opt?.label as string) ?? "")
+                .toLowerCase()
+                .includes(input.toLowerCase())
+            }
+          />
+        </Form.Item>
         <ResourceVisibilityFormItem
           allowOwner
           visibility={expertVisibility}
@@ -872,6 +904,28 @@ export default function CreateFromExpertDrawer({
             );
           }}
         />
+        <Form.Item
+          name="skill_package_ids"
+          label={t("experts.skillPackagesLabel")}
+          extra={
+            skillPackagesSupported
+              ? t("experts.skillPackagesHint")
+              : t("experts.skillPackagesUnsupportedHint")
+          }
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            disabled={!skillPackagesSupported}
+            loading={skillPackagesLoading}
+            options={skillPackages.map((pack) => ({
+              value: pack.id,
+              label: pack.name,
+            }))}
+            placeholder={t("experts.skillPackagesPlaceholder")}
+          />
+        </Form.Item>
+        <ExpertComposerDefaultsFields />
 
         <MoreConfigCollapse>
           <Form.Item
@@ -904,62 +958,8 @@ export default function CreateFromExpertDrawer({
           >
             <Input placeholder={t("experts.customIdPlaceholder")} allowClear />
           </Form.Item>
-          <Form.Item
-            name="conversation_mode"
-            label={t("experts.defaultModeLabel")}
-            tooltip={t("experts.defaultModeHint")}
-            initialValue={DEFAULT_CONVERSATION_MODE}
-          >
-            <Select
-              options={CONVERSATION_MODES.map((mode) => ({
-                value: mode,
-                label: t(`chat.conversationMode.${mode}`),
-              }))}
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="default_model"
-            label={t("experts.defaultModelLabel")}
-            initialValue={MODEL_AUTO_VALUE}
-          >
-            <Select
-              loading={modelsLoading}
-              options={modelOptions}
-              placeholder={t("experts.defaultModelPlaceholder")}
-              showSearch
-              filterOption={(input, opt) =>
-                ((opt?.label as string) ?? "")
-                  .toLowerCase()
-                  .includes(input.toLowerCase())
-              }
-            />
-          </Form.Item>
 
           <AgentTrajectoryField />
-
-          <Form.Item
-            name="skill_package_ids"
-            label={t("experts.skillPackagesLabel")}
-            extra={
-              skillPackagesSupported
-                ? t("experts.skillPackagesHint")
-                : t("experts.skillPackagesUnsupportedHint")
-            }
-          >
-            <Select
-              mode="multiple"
-              allowClear
-              disabled={!skillPackagesSupported}
-              loading={skillPackagesLoading}
-              options={skillPackages.map((pack) => ({
-                value: pack.id,
-                label: pack.name,
-              }))}
-              placeholder={t("experts.skillPackagesPlaceholder")}
-            />
-          </Form.Item>
-          <ExpertComposerDefaultsFields />
 
           <Collapse
             ghost
