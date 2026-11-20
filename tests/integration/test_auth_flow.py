@@ -166,3 +166,84 @@ async def test_me_can_choose_icon_and_upload(client) -> None:
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["avatar_icon"] is None
     assert cleared.json()["avatar_url"] is None
+
+
+async def test_login_falls_back_to_youli_when_enabled(client, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from octop.api.routers import auth as auth_router
+    from octop.infra.users.identity import User
+
+    c, srv, home = client
+    await bootstrap_admin(c, home, username="admin", password="TestPass12")
+
+    srv.services.config.youli.enabled = True
+    srv.services.config.youli.base_url = "http://erp.example.test/_octop_internal/crm"
+    srv.services.config.youli.client_id = "octop-test"
+    srv.services.config.youli.client_secret = "secret"
+    srv.services.config.youli.callback_url = "http://octop.example.test/login/youli/complete"
+    srv.services.config.youli.business_entry_url = "https://erp.example.test/#/octop-login"
+
+    calls: list[dict[str, str]] = []
+
+    async def _fake_staff_login(self, *, mobile: str, password: str, public_base: str):
+        calls.append({"mobile": mobile, "password": password, "public_base": public_base})
+        return SimpleNamespace(
+            access_token="youli-jwt-token",
+            expires_in=3600,
+            user=User(
+                id=99,
+                username="emp_13311331133",
+                role="member",
+                display_name="ERP测试员工",
+                locale="zh",
+                permissions=[],
+            ),
+        )
+
+    monkeypatch.setattr(auth_router.YouliAuthService, "staff_login", _fake_staff_login)
+
+    r = await c.post(
+        "/api/auth/login",
+        json={"username": " 13311331133 ", "password": "erp-password"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("cache-control") == "no-store"
+    body = r.json()
+    assert body["access_token"] == "youli-jwt-token"
+    assert body["token_type"] == "Bearer"
+    assert body["expires_in"] == 3600
+    assert body["user"]["username"] == "emp_13311331133"
+    assert len(calls) == 1
+    assert calls[0]["mobile"] == "13311331133"
+    assert calls[0]["password"] == "erp-password"
+
+
+async def test_login_does_not_forward_local_password_to_youli(client, monkeypatch) -> None:
+    from octop.api.routers import auth as auth_router
+
+    c, srv, home = client
+    await bootstrap_admin(c, home, username="admin", password="TestPass12")
+
+    srv.services.config.youli.enabled = True
+    srv.services.config.youli.base_url = "http://erp.example.test/_octop_internal/crm"
+    srv.services.config.youli.client_id = "octop-test"
+    srv.services.config.youli.client_secret = "secret"
+    srv.services.config.youli.callback_url = "http://octop.example.test/login/youli/complete"
+    srv.services.config.youli.business_entry_url = "https://erp.example.test/#/octop-login"
+
+    called = False
+
+    async def _unexpected_staff_login(self, *, mobile: str, password: str, public_base: str):
+        nonlocal called
+        called = True
+        raise AssertionError("local account password must not be forwarded to Youli")
+
+    monkeypatch.setattr(auth_router.YouliAuthService, "staff_login", _unexpected_staff_login)
+
+    r = await c.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong-password"},
+    )
+    assert r.status_code == 401
+    assert called is False

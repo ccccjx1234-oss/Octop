@@ -179,17 +179,55 @@ def _raise_if_throttled(retry_after: int) -> None:
     )
 
 
+def _youli_service(server: Any) -> YouliAuthService:
+    app_runtime = getattr(server, "app_runtime", None)
+    gateway = getattr(app_runtime, "gateway", None) if app_runtime is not None else None
+    return YouliAuthService(
+        services=server.services,
+        users=server.user_manager,
+        cfg=server.services.config.youli,
+        ws_hub=getattr(gateway, "ws_hub", None),
+    )
+
+
+async def _authenticate_youli(
+    server: Any,
+    username: str,
+    password: str,
+    public_base: str,
+) -> Any:
+    """Authenticate an MCN/Youli ERP employee when Youli integration is enabled."""
+    cfg = getattr(server.services.config, "youli", None)
+    if cfg is None or not cfg.business_entry_url:
+        return None
+    service = _youli_service(server)
+    if not service.enabled:
+        return None
+    mobile = username.strip()
+    if not mobile:
+        return None
+    return await service.staff_login(
+        mobile=mobile,
+        password=password,
+        public_base=public_base,
+    )
+
+
 @router.post("/login", summary="Sign in")
 async def login(
-    body: LoginBody, request: Request, server: Any = Depends(get_server)
+    body: LoginBody,
+    request: Request,
+    response: Response,
+    server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Exchange username (or email) and password for a JWT access token and user profile.
 
     When no local password matches, the credentials are retried against the
-    configured LDAP directory — but only for identifiers the directory could
-    legitimately own. Any account holding its own password stops at the local
-    check, so a mistyped local password is never forwarded to the directory nor
-    counted against the directory's lockout policy.
+    configured LDAP directory and, if enabled, Youli ERP staff authentication —
+    but only for identifiers an external provider could legitimately own. Any
+    account holding its own local password stops at the local check, so a
+    mistyped local password is never forwarded upstream nor counted against
+    external lockout policies.
     """
     if server.user_manager.count() == 0:
         raise OctopError(ErrorCode.SETUP_REQUIRED, "initial admin not created")
@@ -209,6 +247,21 @@ async def login(
             user = await _authenticate_ldap(server, body.username, body.password, client_ip)
             if user is not None:
                 amr = "ldap"
+            else:
+                youli_result = await _authenticate_youli(
+                    server,
+                    body.username,
+                    body.password,
+                    str(request.base_url).rstrip("/"),
+                )
+                if youli_result is not None:
+                    response.headers["Cache-Control"] = "no-store"
+                    return {
+                        "access_token": youli_result.access_token,
+                        "token_type": "Bearer",
+                        "expires_in": youli_result.expires_in,
+                        "user": me_payload(youli_result.user, server),
+                    }
     if user is None:
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid credentials")
     mfa = MfaService(server.services)
