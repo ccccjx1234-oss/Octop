@@ -654,3 +654,24 @@ def test_youli_client_fetch_org_directory_and_sync_revokes_session(
     summary = ErpOrgSyncService(_FakeServices(repos), cfg).sync_company(100)
     assert summary["revoked_user_ids"] == [emp_user]
     assert repos.youli_session_repo.get_active("sid-777") is None
+
+
+def test_known_company_ids_includes_youli_sso_identities(repos: RepoBundle) -> None:
+    youli_provider = repos.sso_repo.upsert_by_kind(
+        "youli",
+        enabled=True,
+        display_name="Youli ERP",
+        issuer="https://erp.example",
+        client_id="erp",
+        client_secret_enc=None,
+        scopes="",
+        dashboard_origin=None,
+        extra={},
+    )
+    emp_user = _create_user(repos, "legacy-youli-emp")
+    repos.user_repo.upsert_sso_identity(
+        emp_user,
+        provider_id=youli_provider.id,
+        subject="youli:8801:9002",
+    )
+    assert repos.erp_org_repo.known_company_ids() == [8801]

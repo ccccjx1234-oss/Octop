@@ -593,7 +593,23 @@ class ErpOrgRepo:
                 "  UNION SELECT company_id FROM youli_identity_binding WHERE unlinked = 0"
                 ") t WHERE company_id > 0 ORDER BY company_id ASC"
             ).fetchall()
-        return [int(r[0]) for r in rows]
+            sso_rows = conn.execute(
+                "SELECT i.subject FROM user_sso_identities i "
+                "JOIN sso_providers p ON p.id = i.provider_id "
+                "WHERE p.kind = 'youli' AND i.subject LIKE 'youli:%' "
+                "UNION "
+                "SELECT u.sso_subject FROM users u "
+                "JOIN sso_providers p ON p.id = u.sso_provider_id "
+                "WHERE p.kind = 'youli' AND u.sso_subject LIKE 'youli:%'"
+            ).fetchall()
+        ids = {int(r[0]) for r in rows}
+        for r in sso_rows:
+            parts = str(r[0] or "").split(":")
+            if len(parts) == 3 and parts[0] == "youli" and parts[1].isdigit():
+                cid = int(parts[1])
+                if cid > 0:
+                    ids.add(cid)
+        return sorted(ids)
 
     def get_sync_summary(self) -> dict[str, Any]:
         with self._db.connect() as conn:

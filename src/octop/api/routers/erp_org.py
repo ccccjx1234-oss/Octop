@@ -150,10 +150,12 @@ async def sync_erp_org(
     cfg = server.services.config.youli
     svc = ErpOrgSyncService(server.services, cfg)
     if not svc.enabled:
+        reason = "会火 ERP 组织同步未配置或未启用"
         raise OctopError(
             ErrorCode.NETWORK_ERROR,
-            "会火 ERP 组织同步未配置或未启用",
+            reason,
             status=503,
+            details={"reason": reason},
         )
     org_repo = server.services.repos.erp_org_repo
     target_ids: list[int] = []
@@ -166,19 +168,25 @@ async def sync_erp_org(
             if ctx is not None and ctx.company_id > 0:
                 target_ids = [int(ctx.company_id)]
     if not target_ids:
+        reason = "请先输入 company_id 或至少使用会火员工账号登录一次后再同步"
         raise OctopError(
             ErrorCode.SLASH_BAD_ARGS,
-            "请先输入 company_id 或至少使用会火员工账号登录一次后再同步",
+            reason,
             status=400,
+            details={"reason": reason},
         )
     results: list[dict[str, Any]] = []
     try:
         for cid in target_ids:
             results.append(await asyncio.to_thread(svc.sync_company, cid))
     except YouliClientUnavailable as exc:
-        raise OctopError(ErrorCode.NETWORK_ERROR, str(exc), status=503) from exc
+        raise OctopError(
+            ErrorCode.NETWORK_ERROR, str(exc), status=503, details={"reason": str(exc)}
+        ) from exc
     except YouliClientError as exc:
-        raise OctopError(ErrorCode.INTERNAL_ERROR, str(exc), status=502) from exc
+        raise OctopError(
+            ErrorCode.INTERNAL_ERROR, str(exc), status=502, details={"reason": str(exc)}
+        ) from exc
     return {
         "results": results,
         "summary": org_repo.get_sync_summary(),

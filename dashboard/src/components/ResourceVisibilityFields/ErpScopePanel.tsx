@@ -14,6 +14,7 @@ import {
   type ResourceScopeSelection,
   type ScopedResourceVisibilityMode,
 } from "../../api/modules/erpOrg";
+import { apiErrorMessage } from "../../utils/apiError";
 import styles from "./ResourceVisibilityFields.module.less";
 
 export type ErpCatalogState = {
@@ -504,8 +505,10 @@ export function ErpScopePanel({
       await erpOrgApi.sync(activeCompanyId > 0 ? activeCompanyId : undefined);
       await refresh();
       message.success(t("resourceVisibility.erpSyncSuccess"));
-    } catch {
-      message.error(t("resourceVisibility.erpSyncFailed"));
+    } catch (err) {
+      message.error(
+        apiErrorMessage(err, t("resourceVisibility.erpSyncFailed"), t),
+      );
     } finally {
       setSyncing(false);
     }
