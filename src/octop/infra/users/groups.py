@@ -626,7 +626,12 @@ class GroupAccess:
         return {"visibility": VISIBILITY_GROUPS, "group_ids": legacy_groups}
 
     def scope_payload(
-        self, resource_type: str, resource_key: str, *, shared: bool | None
+        self,
+        resource_type: str,
+        resource_key: str,
+        *,
+        shared: bool | None,
+        preloaded_group_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Full resource scope payload for Web APIs (backward compatible with visibility)."""
         base: dict[str, Any] = {
@@ -643,11 +648,16 @@ class GroupAccess:
         if shared is False:
             return base
         policy, subject_grants = self._get_policy_and_grants(resource_type, resource_key)
-        legacy_groups = sorted(
-            self._grants.group_ids(resource_type, resource_key)
-            if self._grants is not None
-            else set()
+        raw_legacy = (
+            preloaded_group_ids
+            if preloaded_group_ids is not None
+            else (
+                self._grants.group_ids(resource_type, resource_key)
+                if self._grants is not None
+                else set()
+            )
         )
+        legacy_groups = sorted(raw_legacy)
         if policy is None:
             if legacy_groups:
                 base["visibility"] = VISIBILITY_GROUPS
