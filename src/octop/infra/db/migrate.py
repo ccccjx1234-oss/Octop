@@ -1737,6 +1737,28 @@ def _ensure_sso_pending_binds_schema(db: DatabasePool) -> None:
         )
 
 
+def _ensure_youli_bigint_columns(db: DatabasePool) -> None:
+    """Widen 32-bit Youli ERP Snowflake ID columns to BIGINT on PostgreSQL."""
+    if db.dialect != "postgresql":
+        return
+    targets = (
+        ("youli_session", ("account_user_id", "company_id", "employee_id")),
+        ("youli_agent_binding", ("company_id", "employee_id")),
+    )
+    with db.connect() as conn, conn.transaction():
+        for table, columns in targets:
+            if not _table_exists(db, table):
+                continue
+            for col in columns:
+                row = conn.execute(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?",
+                    (table, col),
+                ).fetchone()
+                if row is not None and str(row["data_type"]).lower() == "integer":
+                    conn.execute(f"ALTER TABLE {table} ALTER COLUMN {col} TYPE BIGINT")
+
+
 _LOGIN_AUDIT_ACTIONS_SQL = (
     "'auth.login', 'auth.ldap_login', 'auth.oidc_login', 'auth.passkey_login'"
 )
@@ -2576,6 +2598,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_control_blobs_schema(db)
     _ensure_thread_contributed_schema(db)
     _ensure_sso_pending_binds_schema(db)
+    _ensure_youli_bigint_columns(db)
     _grant_default_nav_permissions(db)
     _grant_personalization_tab_permissions(db)
     _grant_bridge_permission(db)

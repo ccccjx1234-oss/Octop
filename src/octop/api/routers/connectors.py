@@ -1254,16 +1254,35 @@ async def test_credentials(
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Validate credentials before creating an instance (no persistence)."""
-    del user
     entry = get_catalog_entry(body.kind)
     if entry is None:
         raise OctopError(ErrorCode.CONNECTOR_KIND_UNSUPPORTED, f"unknown kind {body.kind!r}")
     if entry.phase != "available":
         raise OctopError(ErrorCode.CONNECTOR_KIND_UNSUPPORTED, f"{body.kind} not available")
+    cred_input = dict(body.credentials)
+    if body.kind == "mcn":
+        if not str(cred_input.get("token") or "").strip():
+            token = _active_youli_token(server, user.id)
+            if not token:
+                raise OctopError(
+                    ErrorCode.AUTH_FAILED,
+                    "请先完成会火员工登录，再安装 MCN 连接器",
+                    details={"login_url": "/aiwork/staff-login.html"},
+                )
+            cred_input["token"] = token
+        youli_cfg = getattr(server.services.config, "youli", None)
+        if not str(cred_input.get("base_url") or "").strip():
+            mcn_url = str(getattr(youli_cfg, "mcn_base_url", "") or "").strip().rstrip("/")
+            if mcn_url:
+                cred_input["base_url"] = mcn_url
+        if not str(cred_input.get("ca_file") or "").strip():
+            ca_file = str(getattr(youli_cfg, "ca_file", "") or "").strip()
+            if ca_file:
+                cred_input["ca_file"] = ca_file
     try:
         cred_payload = await prepare_probe_credentials(
             body.kind,
-            body.credentials,
+            cred_input,
             full_prepare=lambda k, c: _prepare_credentials(k, c, server.services.settings_repo),
         )
     except ValueError as exc:
