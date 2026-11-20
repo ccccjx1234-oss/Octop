@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Alert, Input, Button, Checkbox, Modal } from "antd";
+import { Alert, Input, Button, Checkbox } from "antd";
 import { message } from "@/utils/antdMessage";
 
 import {
@@ -146,12 +146,7 @@ function mfaHintKey(methods: MfaMethod[], mode: MfaStepMode): string {
   return "login.mfaHintTotp";
 }
 
-export default function LoginPage({
-  mode = "manage",
-}: {
-  mode?: "staff" | "manage";
-}) {
-  const isStaff = mode === "staff";
+export default function LoginPage() {
   const { t } = useTranslation();
   const { isDark } = useTheme();
   const location = useLocation();
@@ -228,7 +223,7 @@ export default function LoginPage({
   // try a refresh before showing a form nobody can fill in. Runs once per page
   // load, so a server that keeps refusing cannot bounce us in a loop.
   useEffect(() => {
-    if (isStaff || desktopAutoLoginTried) return;
+    if (desktopAutoLoginTried) return;
     desktopAutoLoginTried = true;
     // Logout of the local account sets this so the form stays up for other
     // accounts. The flag dies with the window; the next launch can enter again.
@@ -248,7 +243,7 @@ export default function LoginPage({
     return () => {
       cancelled = true;
     };
-  }, [isStaff, navigate]);
+  }, [navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,32 +264,6 @@ export default function LoginPage({
         if (status.setup_required) {
           clearAuthToken();
           navigate("/setup", { replace: true });
-          return;
-        }
-        // Employee passwords are checked by MCN; its endpoint does not use
-        // the local-account captcha or the platform's OAuth/LDAP providers.
-        if (isStaff) {
-          authApi
-            .getOauthStatus?.()
-            .then((next) => {
-              if (!cancelled) {
-                setProviders(next.providers.filter((item) => item.enabled));
-              }
-            })
-            .catch(() => {});
-          // Standalone deployments have no Youli endpoint. Send the visitor to
-          // the system-account form instead of letting a login hit a missing
-          // MCN service and fail with a server error.
-          void authApi
-            .getYouliStatus()
-            .then((next) => {
-              if (!cancelled && next.enabled !== true) {
-                navigate("/manageLogin", { replace: true });
-              }
-            })
-            .catch(() => {
-              if (!cancelled) navigate("/manageLogin", { replace: true });
-            });
           return;
         }
         if (isDesktopShell()) {
@@ -341,7 +310,7 @@ export default function LoginPage({
     return () => {
       cancelled = true;
     };
-  }, [navigate, isStaff]);
+  }, [navigate]);
 
   useEffect(() => {
     const code = searchParams.get("oidc_error");
@@ -352,8 +321,8 @@ export default function LoginPage({
         defaultValue: t("login.oidcError.generic"),
       }),
     );
-    navigate(isStaff ? "/login" : "/manageLogin", { replace: true });
-  }, [isStaff, navigate, searchParams, t]);
+    navigate("/login", { replace: true });
+  }, [navigate, searchParams, t]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -407,7 +376,6 @@ export default function LoginPage({
   // Conditional UI: passkeys appear in the username autofill when available.
   useEffect(() => {
     if (
-      isStaff ||
       mfaChallenge ||
       !passwordlessLogin ||
       !passkeyAvailable ||
@@ -455,7 +423,6 @@ export default function LoginPage({
     };
   }, [
     conditionalOk,
-    isStaff,
     finishLogin,
     mfaChallenge,
     passkeyAvailable,
@@ -524,23 +491,16 @@ export default function LoginPage({
   };
 
   const handleLogin = async () => {
-    if (
-      loading ||
-      !username.trim() ||
-      !password ||
-      (!isStaff && !captchaReady)
-    ) {
+    if (loading || !username.trim() || !password || !captchaReady) {
       return;
     }
     setLoading(true);
     try {
-      const res = isStaff
-        ? await authApi.staffLogin(username.trim(), password)
-        : await authApi.login(
-            username,
-            password,
-            await captchaRef.current?.getToken(),
-          );
+      const res = await authApi.login(
+        username,
+        password,
+        await captchaRef.current?.getToken(),
+      );
       if (isMfaChallenge(res)) {
         setMfaChallenge(res);
         setMfaMode(defaultMfaMode(res.methods));
@@ -551,7 +511,7 @@ export default function LoginPage({
       await finishLogin(res.access_token, res.user.locale);
     } catch (err) {
       message.error(apiErrorMessage(err, t("login.failed"), t));
-      if (!isStaff) resetCaptcha();
+      resetCaptcha();
     } finally {
       setLoading(false);
     }
@@ -911,12 +871,8 @@ export default function LoginPage({
             </div>
 
             <div className={styles.formHead}>
-              <h2 className={styles.formTitle}>
-                {t(isStaff ? "login.staffTitle" : "login.manageTitle")}
-              </h2>
-              <p className={styles.formSubtitle}>
-                {t(isStaff ? "login.staffSubtitle" : "login.manageSubtitle")}
-              </p>
+              <h2 className={styles.formTitle}>{t("login.manageTitle")}</h2>
+              <p className={styles.formSubtitle}>{t("login.manageSubtitle")}</p>
             </div>
 
             {authNotice ? (
@@ -944,16 +900,13 @@ export default function LoginPage({
                   style={{ color: "var(--fn-text-quaternary)" }}
                 />
               }
-              placeholder={t(
-                isStaff ? "login.staffUsername" : "login.username",
-              )}
+              placeholder={t("login.username")}
               size="large"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete={
-                !isStaff && passwordlessLogin ? "username webauthn" : "username"
+                passwordlessLogin ? "username webauthn" : "username"
               }
-              inputMode={isStaff ? "tel" : undefined}
               onPressEnter={handleLogin}
               autoFocus
               style={{ borderRadius: 10 }}
@@ -975,7 +928,7 @@ export default function LoginPage({
               style={{ borderRadius: 10 }}
             />
 
-            {!isStaff && ldap?.enabled && (
+            {ldap?.enabled && (
               <p
                 style={{
                   margin: 0,
@@ -993,17 +946,15 @@ export default function LoginPage({
               </p>
             )}
 
-            {!isStaff && (
-              <CaptchaField
-                ref={captchaRef}
-                config={captcha}
-                resetKey={captchaResetKey}
-                slideHint={t("login.slideHint")}
-                slideVerifiedLabel={t("login.slideVerified")}
-                unsupportedLabel={t("login.unsupportedCaptcha")}
-                onReadyChange={setCaptchaReady}
-              />
-            )}
+            <CaptchaField
+              ref={captchaRef}
+              config={captcha}
+              resetKey={captchaResetKey}
+              slideHint={t("login.slideHint")}
+              slideVerifiedLabel={t("login.slideVerified")}
+              unsupportedLabel={t("login.unsupportedCaptcha")}
+              onReadyChange={setCaptchaReady}
+            />
 
             <Button
               type="primary"
@@ -1011,9 +962,7 @@ export default function LoginPage({
               block
               loading={loading}
               onClick={handleLogin}
-              disabled={
-                !username.trim() || !password || (!isStaff && !captchaReady)
-              }
+              disabled={!username.trim() || !password || !captchaReady}
               style={{ borderRadius: 10, height: 44, fontWeight: 500 }}
             >
               {t("login.submit")}
@@ -1066,32 +1015,13 @@ export default function LoginPage({
                   {t("login.forgotPassword", "Forgot password?")}
                 </button>
               </div>
-              {isStaff ? (
-                <Modal
-                  open={showForgotHelp}
-                  title={t("login.forgotPasswordTitle")}
-                  onCancel={() => setShowForgotHelp(false)}
-                  footer={
-                    <Button
-                      type="primary"
-                      onClick={() => setShowForgotHelp(false)}
-                    >
-                      {t("login.forgotPasswordOk")}
-                    </Button>
-                  }
-                  centered
-                >
-                  <p>{t("login.staffForgotPasswordHelp")}</p>
-                </Modal>
-              ) : (
-                <ForgotPasswordModal
-                  open={showForgotHelp}
-                  onClose={() => setShowForgotHelp(false)}
-                />
-              )}
+              <ForgotPasswordModal
+                open={showForgotHelp}
+                onClose={() => setShowForgotHelp(false)}
+              />
             </div>
 
-            {!isStaff && passwordlessLogin && (
+            {passwordlessLogin && (
               <Button
                 block
                 icon={<Fingerprint size={18} />}
@@ -1102,7 +1032,7 @@ export default function LoginPage({
                 {t("login.passkeySignIn")}
               </Button>
             )}
-            {!isStaff && showCreateLocal && (
+            {showCreateLocal && (
               <Button
                 block
                 loading={localLoading}

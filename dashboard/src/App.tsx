@@ -10,7 +10,7 @@ import {
   useDesktopChrome,
 } from "./hooks/useDesktopChrome";
 import { useNativeWindowChrome } from "./hooks/useNativeWindowChrome";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { routerBasename } from "./utils/publicUrl";
 import { useTranslation } from "react-i18next";
 import MainLayout from "./layouts/MainLayout";
@@ -140,11 +140,11 @@ function ThemedApp() {
           <DesktopWindowDragBand />
           <WindowsAppMenu />
           <Routes>
+            <Route path="/login" element={<LoginPage />} />
             <Route
-              path="/login"
-              element={<LoginPage key="staff" mode="staff" />}
+              path="/manageLogin"
+              element={<Navigate to="/login" replace />}
             />
-            <Route path="/manageLogin" element={<LoginPage key="manage" />} />
             <Route path="/login/oidc/complete" element={<OidcComplete />} />
             <Route path="/login/youli/complete" element={<YouliComplete />} />
             <Route path="/setup" element={<SetupPage />} />

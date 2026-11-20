@@ -115,7 +115,7 @@ describe("<LoginPage /> Feishu and DingTalk OAuth", () => {
     try {
       render(
         <MemoryRouter initialEntries={["/login"]}>
-          <LoginPage mode="staff" />
+          <LoginPage />
         </MemoryRouter>,
       );
 
@@ -138,7 +138,7 @@ describe("<LoginPage /> Feishu and DingTalk OAuth", () => {
     }
   });
 
-  it("renders Feishu and DingTalk buttons on /manageLogin and starts DingTalk OAuth", async () => {
+  it("renders Feishu and DingTalk buttons on /login and starts DingTalk OAuth", async () => {
     const user = userEvent.setup();
     const fakePopup = {
       closed: false,
@@ -153,7 +153,7 @@ describe("<LoginPage /> Feishu and DingTalk OAuth", () => {
 
     try {
       render(
-        <MemoryRouter initialEntries={["/manageLogin"]}>
+        <MemoryRouter initialEntries={["/login"]}>
           <LoginPage />
         </MemoryRouter>,
       );

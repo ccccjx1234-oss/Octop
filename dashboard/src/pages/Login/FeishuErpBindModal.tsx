@@ -113,6 +113,7 @@ export default function FeishuErpBindModal({
       footer={null}
       centered
       width={480}
+      destroyOnHidden
     >
       {challenge ? (
         <div className={styles.modalBody} data-testid="feishu-erp-bind-modal">

@@ -27,7 +27,9 @@ vi.mock("../../api/modules/auth", () => ({
       Promise.resolve({
         providers: [{ kind: "feishu", enabled: true, display_name: "飞书" }],
       }),
-    getYouliStatus: () => Promise.resolve({ enabled: true }),
+    getLdapStatus: () => Promise.resolve({ enabled: false, display_name: "" }),
+    getPasskeyLoginStatus: () => Promise.resolve({ passwordless_login: false }),
+    getCaptcha: () => Promise.resolve({ provider: "none" }),
     staffLogin: mocks.staffLogin,
   },
 }));
@@ -36,7 +38,14 @@ vi.mock("../../utils/locale", () => ({
   applyUserLocale: () => Promise.resolve("zh"),
 }));
 vi.mock("../../i18n", () => ({ refreshServerLabels: vi.fn() }));
-vi.mock("./CaptchaField", () => ({ default: () => null }));
+vi.mock("./CaptchaField", async () => {
+  const React = await import("react");
+  return {
+    default: React.forwardRef(function MockCaptchaField() {
+      return null;
+    }),
+  };
+});
 vi.mock("@/utils/antdMessage", () => ({
   message: {
     error: mocks.msgError,
@@ -68,7 +77,7 @@ function renderStaffLogin() {
   return render(
     <MemoryRouter initialEntries={["/login"]}>
       <Routes>
-        <Route path="/login" element={<LoginPage mode="staff" />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/chat" element={<div>chat workspace</div>} />
       </Routes>
     </MemoryRouter>,
