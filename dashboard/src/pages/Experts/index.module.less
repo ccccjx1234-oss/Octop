@@ -2889,7 +2889,11 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--fn-border-primary);
+  border-radius: var(--fn-radius-md, 8px);
+  background: var(--fn-bg-secondary, #f7f7f8);
 }
 
 .publishShareRow {
@@ -2898,8 +2902,8 @@
 
 .publishShareHead {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 6px;
 }
 
@@ -2909,11 +2913,19 @@
   font-weight: 600;
 }
 
-.publishShareNote,
+.publishShareTip {
+  color: var(--fn-text-tertiary);
+  font-size: 13px;
+  cursor: help;
+}
+
 .publishShareEmpty {
   color: var(--fn-text-tertiary);
   font-size: 12px;
   line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--fn-bg-tertiary, rgba(0, 0, 0, 0.04));
 }
 
 .publishShareTags {

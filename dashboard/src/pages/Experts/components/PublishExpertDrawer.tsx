@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, Button, Drawer, Form, Input, Spin, Tag } from "antd";
+import { Alert, Button, Drawer, Form, Input, Spin, Tag, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { message } from "@/utils/antdMessage";
 
 import { agentChatApi } from "../../../api/modules/agentChat";
@@ -81,7 +82,9 @@ function ShareRow({
     <div className={styles.publishShareRow}>
       <div className={styles.publishShareHead}>
         <span className={styles.publishShareLabel}>{label}</span>
-        <span className={styles.publishShareNote}>{note}</span>
+        <Tooltip title={note}>
+          <InfoCircleOutlined className={styles.publishShareTip} />
+        </Tooltip>
       </div>
       <div className={styles.publishShareTags}>
         {items.length > 0 ? (
@@ -288,27 +291,6 @@ export default function PublishExpertDrawer({
           className={styles.publishDrawerHint}
           message={t("experts.published.drawerHint")}
         />
-        <div className={styles.publishShare}>
-          <ShareRow
-            label={t("experts.published.shareSkills")}
-            note={t("experts.published.shareSkillsNote")}
-            items={share.skills}
-            empty={t("experts.published.shareNone")}
-          />
-          <ShareRow
-            label={t("experts.published.shareConnectors")}
-            note={t("experts.published.shareConnectorsNote")}
-            items={share.connectors}
-            empty={t("experts.published.shareNone")}
-          />
-          <ShareRow
-            label={t("experts.published.shareKnowledge")}
-            note={t("experts.published.shareKnowledgeNote")}
-            items={share.knowledgeBases}
-            empty={t("experts.published.shareNone")}
-          />
-        </div>
-
         <Form
           form={form}
           layout="vertical"
@@ -355,6 +337,28 @@ export default function PublishExpertDrawer({
             />
           </Form.Item>
         </Form>
+        {!prefillLoading ? (
+        <div className={styles.publishShare}>
+          <ShareRow
+            label={t("experts.published.shareSkills")}
+            note={t("experts.published.shareSkillsNote")}
+            items={share.skills}
+            empty={t("experts.published.shareNone")}
+          />
+          <ShareRow
+            label={t("experts.published.shareConnectors")}
+            note={t("experts.published.shareConnectorsNote")}
+            items={share.connectors}
+            empty={t("experts.published.shareNone")}
+          />
+          <ShareRow
+            label={t("experts.published.shareKnowledge")}
+            note={t("experts.published.shareKnowledgeNote")}
+            items={share.knowledgeBases}
+            empty={t("experts.published.shareNone")}
+          />
+        </div>
+        ) : null}
       </div>
     </Drawer>
   );
