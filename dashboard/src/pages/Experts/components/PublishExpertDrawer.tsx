@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, Button, Drawer, Form, Input, Spin } from "antd";
+import { Alert, Button, Drawer, Form, Input, Spin, Tag } from "antd";
 import { message } from "@/utils/antdMessage";
 
 import { agentChatApi } from "../../../api/modules/agentChat";
+import { connectorsApi } from "../../../api/modules/connectors";
+import { knowledgeBasesApi } from "../../../api/modules/knowledgeBases";
 import {
   publishedExpertsApi,
   type PublishedExpert,
   type PublishExpertBody,
 } from "../../../api/modules/publishedExperts";
+import { request } from "../../../api/request";
 import type { OctopAgent } from "../../../context/AgentContext";
 import { apiErrorMessage } from "../../../utils/apiError";
 import { pickLocale } from "../../../utils/localizedText";
+import { resolveSkillDisplayName } from "../../Agent/Skills/skillDisplayNames";
 import styles from "../index.module.less";
 
 export interface PublishExpertDrawerProps {
@@ -30,6 +34,70 @@ interface PublishFormValues {
   welcome_en?: string;
 }
 
+interface SkillSummary {
+  name: string;
+  slug?: string;
+  kind?: string;
+  label?: { zh?: string; en?: string };
+  display_name?: string;
+}
+
+interface SharePreview {
+  skills: string[];
+  connectors: string[];
+  knowledgeBases: string[];
+}
+
+const EMPTY_SHARE: SharePreview = {
+  skills: [],
+  connectors: [],
+  knowledgeBases: [],
+};
+
+function uniqueNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of names) {
+    const text = name.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function ShareRow({
+  label,
+  note,
+  items,
+  empty,
+}: {
+  label: string;
+  note: string;
+  items: string[];
+  empty: string;
+}) {
+  return (
+    <div className={styles.publishShareRow}>
+      <div className={styles.publishShareHead}>
+        <span className={styles.publishShareLabel}>{label}</span>
+        <span className={styles.publishShareNote}>{note}</span>
+      </div>
+      <div className={styles.publishShareTags}>
+        {items.length > 0 ? (
+          items.map((item) => (
+            <Tag key={item} bordered={false}>
+              {item}
+            </Tag>
+          ))
+        ) : (
+          <span className={styles.publishShareEmpty}>{empty}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function PublishExpertDrawer({
   open,
   mode,
@@ -38,10 +106,11 @@ export default function PublishExpertDrawer({
   onClose,
   onSuccess,
 }: PublishExpertDrawerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [form] = Form.useForm<PublishFormValues>();
   const [submitting, setSubmitting] = useState(false);
   const [prefillLoading, setPrefillLoading] = useState(false);
+  const [share, setShare] = useState<SharePreview>(EMPTY_SHARE);
 
   useEffect(() => {
     if (!open) return;
@@ -49,6 +118,7 @@ export default function PublishExpertDrawer({
 
     const loadDefaults = async () => {
       setPrefillLoading(true);
+      setShare(EMPTY_SHARE);
       const baseName =
         mode === "refresh" && published ? published.name : agent.name;
       const baseDescription =
@@ -57,21 +127,64 @@ export default function PublishExpertDrawer({
           : agent.description || "";
 
       try {
-        const welcome = await agentChatApi.welcome(agent.agent_id);
+        const [welcome, skills, bases, instances, catalog] = await Promise.all([
+          agentChatApi.welcome(agent.agent_id).catch(() => null),
+          request<SkillSummary[]>(
+            "/agents/" + encodeURIComponent(agent.agent_id) + "/skills",
+          ).catch(() => [] as SkillSummary[]),
+          knowledgeBasesApi.list().catch(() => []),
+          connectorsApi.listInstances().catch(() => []),
+          connectorsApi.catalog().catch(() => []),
+        ]);
         if (cancelled) return;
-        form.setFieldsValue({
-          name: baseName,
-          description: baseDescription,
-          welcome_zh: pickLocale(welcome.welcome_message, "zh"),
-          welcome_en: pickLocale(welcome.welcome_message, "en"),
+        const knowledgeById = new Map(bases.map((base) => [base.id, base.name]));
+        const connectorByName = new Map(
+          (instances ?? []).map((item) => [
+            item.mcp_server_name,
+            item.display_name || item.mcp_server_name,
+          ]),
+        );
+        const connectorByKind = new Map(
+          (catalog ?? []).map((item) => [item.kind, item.name]),
+        );
+        const connectorNames = (agent.mcp_servers ?? []).map((ref) => {
+          const exact = connectorByName.get(ref);
+          if (exact) return exact;
+          const kind = ref.includes("__") ? ref.split("__")[0] : ref;
+          return connectorByKind.get(kind) || ref;
         });
-      } catch {
-        if (cancelled) return;
+        setShare({
+          skills: uniqueNames(
+            (skills ?? [])
+              .filter((skill) => skill.kind !== "builtin")
+              .map((skill) =>
+                resolveSkillDisplayName(
+                  {
+                    slug: skill.slug || skill.name,
+                    name: skill.name,
+                    label: skill.label,
+                    display_name: skill.display_name,
+                  },
+                  i18n.language,
+                ),
+              ),
+          ),
+          connectors: uniqueNames(connectorNames),
+          knowledgeBases: uniqueNames(
+            (agent.knowledge_base_ids ?? []).map(
+              (id) => knowledgeById.get(id) || id,
+            ),
+          ),
+        });
         form.setFieldsValue({
           name: baseName,
           description: baseDescription,
-          welcome_zh: "",
-          welcome_en: "",
+          welcome_zh: welcome
+            ? pickLocale(welcome.welcome_message, "zh")
+            : "",
+          welcome_en: welcome
+            ? pickLocale(welcome.welcome_message, "en")
+            : "",
         });
       } finally {
         if (!cancelled) setPrefillLoading(false);
@@ -82,7 +195,7 @@ export default function PublishExpertDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, mode, agent, published, form]);
+  }, [open, mode, agent, published, form, i18n.language]);
 
   const buildBody = (values: PublishFormValues): PublishExpertBody => ({
     name: values.name.trim(),
@@ -175,6 +288,26 @@ export default function PublishExpertDrawer({
           className={styles.publishDrawerHint}
           message={t("experts.published.drawerHint")}
         />
+        <div className={styles.publishShare}>
+          <ShareRow
+            label={t("experts.published.shareSkills")}
+            note={t("experts.published.shareSkillsNote")}
+            items={share.skills}
+            empty={t("experts.published.shareNone")}
+          />
+          <ShareRow
+            label={t("experts.published.shareConnectors")}
+            note={t("experts.published.shareConnectorsNote")}
+            items={share.connectors}
+            empty={t("experts.published.shareNone")}
+          />
+          <ShareRow
+            label={t("experts.published.shareKnowledge")}
+            note={t("experts.published.shareKnowledgeNote")}
+            items={share.knowledgeBases}
+            empty={t("experts.published.shareNone")}
+          />
+        </div>
 
         <Form
           form={form}
