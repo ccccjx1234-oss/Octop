@@ -398,10 +398,11 @@ class YouliAuthService:
                 ),
             )
             svc = ConnectorService(
-                connector_repo,
-                self._services.secret_repo,
-                youli_session_repo=self._services.youli_session_repo,
+                repo=connector_repo,
+                secret_repo=self._services.secret_repo,
+                settings_repo=self._services.settings_repo,
                 config=self._services.config,
+                youli_session_repo=self._services.youli_session_repo,
             )
             cred_payload: dict[str, Any] = {
                 "token": token,
