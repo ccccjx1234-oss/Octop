@@ -23,7 +23,7 @@ export interface ErpDepartmentTreeNode extends ErpDepartmentItem {
 
 export interface ErpEmployeeItem {
   company_id: number;
-  employee_id: number;
+  employee_id: number | string;
   account_user_id: number;
   user_id: number | null;
   has_octop_account: boolean;
@@ -64,7 +64,18 @@ export interface DepartmentGrant {
 
 export interface ErpEmployeeGrant {
   company_id: number;
-  employee_id: number;
+  employee_id: number | string;
+}
+
+export function normalizeEmployeeId(raw: number | string): number | string {
+  const s = String(raw).trim();
+  if (/^\d+$/.test(s)) {
+    const num = Number(s);
+    if (Number.isSafeInteger(num) && String(num) === s) {
+      return num;
+    }
+  }
+  return s;
 }
 
 export interface ResourceScopeExtensions {
@@ -130,7 +141,7 @@ export function scopeSelectionFromPayload(
     erpEmployees: Array.isArray(payload.erp_employees)
       ? payload.erp_employees.map((item) => ({
           company_id: Number(item.company_id || 0),
-          employee_id: Number(item.employee_id),
+          employee_id: normalizeEmployeeId(item.employee_id),
         }))
       : [],
     denyDepartmentGrants: Array.isArray(payload.deny_department_grants)
@@ -146,7 +157,7 @@ export function scopeSelectionFromPayload(
     denyErpEmployees: Array.isArray(payload.deny_erp_employees)
       ? payload.deny_erp_employees.map((item) => ({
           company_id: Number(item.company_id || 0),
-          employee_id: Number(item.employee_id),
+          employee_id: normalizeEmployeeId(item.employee_id),
         }))
       : [],
   };

@@ -22,6 +22,7 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   erpOrgApi,
+  normalizeEmployeeId,
   type DepartmentGrant,
   type ErpDepartmentItem,
   type ErpDepartmentTreeNode,
@@ -155,7 +156,7 @@ function parseDeptKey(key: string): { company_id: number; org_id: number } | nul
   return { company_id: companyId, org_id: orgId };
 }
 
-function empKey(companyId: number, employeeId: number): string {
+function empKey(companyId: number, employeeId: number | string): string {
   return `emp:${companyId}:${employeeId}`;
 }
 
@@ -659,9 +660,12 @@ function PersonScopePicker({
       if (raw.startsWith("emp:")) {
         const parts = raw.split(":");
         const cid = Number(parts[1]);
-        const eid = Number(parts[2]);
-        if (Number.isFinite(cid) && Number.isFinite(eid)) {
-          nextEmps.push({ company_id: cid, employee_id: eid });
+        const rawEid = parts.slice(2).join(":");
+        if (Number.isFinite(cid) && rawEid) {
+          nextEmps.push({
+            company_id: cid,
+            employee_id: normalizeEmployeeId(rawEid),
+          });
         }
       } else if (raw.startsWith("user:")) {
         const uid = Number(raw.slice(5));

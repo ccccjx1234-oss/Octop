@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -123,7 +124,11 @@ class YouliClient:
             raise YouliClientUnavailable("youli upstream returned a non-JSON body") from exc
         code = body.get("code") if isinstance(body, dict) else None
         if response.status_code >= 400 or code != 200:
-            message = body.get("msg") if isinstance(body, dict) else None
+            message = (
+                (body.get("msg") or body.get("message") or body.get("error"))
+                if isinstance(body, dict)
+                else None
+            )
             logger.warning(
                 "youli %s rejected: http=%s code=%s msg=%s",
                 suffix,
@@ -282,7 +287,11 @@ class YouliClient:
             raise YouliClientUnavailable("youli upstream returned a non-JSON body") from exc
         code = body.get("code") if isinstance(body, dict) else None
         if response.status_code >= 400 or code != 200:
-            message = body.get("msg") if isinstance(body, dict) else None
+            message = (
+                (body.get("msg") or body.get("message") or body.get("error"))
+                if isinstance(body, dict)
+                else None
+            )
             logger.warning(
                 "youli %s rejected: http=%s code=%s msg=%s",
                 url,
@@ -580,6 +589,251 @@ class YouliClient:
             return self._fallback_lookup_by_employee(company_id=company_id, employee_id=employee_id)
         return res
 
+    def _mdm_post_json(
+        self,
+        path: str,
+        *,
+        json_body: Any = None,
+        params: dict[str, Any] | None = None,
+        method: str = "POST",
+    ) -> Any:
+        if not self._cfg.mdm_base_url:
+            raise YouliClientError("youli MDM url is not configured")
+        from octop.infra.auth.youli.http_pool import perform_request
+
+        url = f"{self._cfg.mdm_base_url.rstrip('/')}{path}"
+        try:
+            response = perform_request(
+                httpx.Client,
+                method,
+                url,
+                timeout=httpx.Timeout(20.0, connect=5.0),
+                verify=self._tls,
+                json=json_body,
+                params=params,
+                target_label=f"mdm:{path}",
+            )
+        except httpx.HTTPError as exc:
+            raise YouliClientUnavailable(f"youli MDM unreachable ({type(exc).__name__})") from exc
+        if response.status_code >= 400:
+            raise YouliClientError(f"youli MDM error {response.status_code} on {path}")
+        raw_content = getattr(response, "content", None)
+        if raw_content is not None and not raw_content:
+            return None
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raw_text = getattr(response, "text", None)
+            if isinstance(raw_text, str) and not raw_text.strip():
+                return None
+            raise YouliClientUnavailable("youli MDM returned a non-JSON body") from exc
+        if isinstance(body, dict) and "code" in body and body.get("code") != 200:
+            msg = body.get("msg") or body.get("message")
+            raise YouliClientError(f"youli MDM rejected {path}: {body.get('code')} {msg}")
+        return body
+
+    def _fallback_org_directory_via_mdm(
+        self,
+        *,
+        company_id: int,
+        employee_id: int | None = None,
+        include_departments: bool | None = None,
+    ) -> YouliOrgDirectory:
+        """Fetch departments & employees directly from MDM org endpoints when CRM org-directory is absent."""
+        cid = int(company_id)
+        depts: list[YouliOrgDept] = []
+        visited_depts: set[int] = set()
+
+        def _flatten_tree(nodes: Any) -> None:
+            if not isinstance(nodes, list):
+                return
+            for node in nodes:
+                if not isinstance(node, dict) or node.get("id") is None:
+                    continue
+                oid = int(node["id"])
+                if oid not in visited_depts:
+                    visited_depts.add(oid)
+                    raw_parent = node.get("parentId")
+                    raw_sort = node.get("sort")
+                    depts.append(
+                        YouliOrgDept(
+                            org_id=oid,
+                            parent_id=int(raw_parent) if raw_parent is not None else 1,
+                            name=str(node.get("name") or oid),
+                            org_code=str(node.get("orgCode") or ""),
+                            sort=int(raw_sort) if raw_sort is not None else oid,
+                            status=1,
+                        )
+                    )
+                _flatten_tree(node.get("childOrg"))
+
+        raw_tree = self._mdm_post_json(
+            "/api/company/org/getByCompanyId",
+            json_body={"companyId": cid, "parentId": 1},
+        )
+        tree_nodes = raw_tree.get("data") if isinstance(raw_tree, dict) else raw_tree
+        _flatten_tree(tree_nodes)
+
+        if not depts:
+            raw_all = self._mdm_post_json(
+                "/api/company/org/getAllDeparts",
+                params={"companyId": cid},
+                method="GET",
+            )
+            all_list = raw_all.get("data") if isinstance(raw_all, dict) else raw_all
+            if isinstance(all_list, list):
+                for org in all_list:
+                    if not isinstance(org, dict) or org.get("id") is None:
+                        continue
+                    oid = int(org["id"])
+                    if oid in visited_depts:
+                        continue
+                    visited_depts.add(oid)
+                    raw_parent = org.get("parentId")
+                    raw_sort = org.get("sort")
+                    depts.append(
+                        YouliOrgDept(
+                            org_id=oid,
+                            parent_id=int(raw_parent) if raw_parent is not None else 1,
+                            name=str(org.get("name") or oid),
+                            org_code=str(org.get("orgCode") or ""),
+                            sort=int(raw_sort) if raw_sort is not None else oid,
+                            status=1,
+                        )
+                    )
+
+        root_org_id: int | None = None
+        for d in depts:
+            if d.parent_id == 1:
+                root_org_id = d.org_id
+                break
+        if root_org_id is None and depts:
+            root_org_id = depts[0].org_id
+
+        emp_acc: dict[int, dict[str, Any]] = {}
+
+        def _merge_emp_row(row: Any) -> None:
+            if not isinstance(row, dict) or row.get("id") is None:
+                return
+            eid = int(row["id"])
+            if employee_id is not None and eid != int(employee_id):
+                return
+            entry = emp_acc.get(eid)
+            if entry is None:
+                raw_acc = row.get("userId")
+                raw_status = row.get("status")
+                entry = {
+                    "employee_id": eid,
+                    "account_user_id": int(raw_acc) if raw_acc is not None else None,
+                    "nick_name": str(row.get("nickName") or ""),
+                    "phone": str(row.get("phone") or ""),
+                    "employee_no": str(row.get("employeeNo") or ""),
+                    "status": int(raw_status) if raw_status is not None else 1,
+                    "is_admin": int(row.get("isAdmin") or 0),
+                    "org_ids": [],
+                    "admin_org_ids": [],
+                    "_org_set": set(),
+                    "_admin_org_set": set(),
+                }
+                emp_acc[eid] = entry
+            if entry["account_user_id"] is None and row.get("userId") is not None:
+                entry["account_user_id"] = int(row["userId"])
+            if not entry["employee_no"] and row.get("employeeNo"):
+                entry["employee_no"] = str(row["employeeNo"])
+            if row.get("orgId") is not None:
+                oid = int(row["orgId"])
+                if oid not in entry["_org_set"]:
+                    entry["_org_set"].add(oid)
+                    entry["org_ids"].append(oid)
+                if int(row.get("isCharger") or 0) == 1:
+                    entry["_admin_org_set"].add(oid)
+            for org in row.get("orgIds") or []:
+                if isinstance(org, dict):
+                    if org.get("id") is None:
+                        continue
+                    oid = int(org["id"])
+                    if oid not in entry["_org_set"]:
+                        entry["_org_set"].add(oid)
+                        entry["org_ids"].append(oid)
+                    if bool(org.get("charger")):
+                        entry["_admin_org_set"].add(oid)
+                elif org is not None:
+                    oid = int(org)
+                    if oid not in entry["_org_set"]:
+                        entry["_org_set"].add(oid)
+                        entry["org_ids"].append(oid)
+
+        if root_org_id is not None:
+            for page_num in range(1, 51):
+                page_body = self._mdm_post_json(
+                    "/api/company/org/listOrgUser",
+                    json_body={
+                        "companyId": cid,
+                        "orgId": root_org_id,
+                        "subOrgQuery": True,
+                        "page": {"pageNum": page_num, "pageSize": 500},
+                    },
+                )
+                rows = (
+                    page_body.get("data")
+                    if isinstance(page_body, dict)
+                    else page_body
+                )
+                if not isinstance(rows, list) or not rows:
+                    break
+                for row in rows:
+                    _merge_emp_row(row)
+                if employee_id is not None and int(employee_id) in emp_acc:
+                    break
+                page_meta = page_body.get("page") if isinstance(page_body, dict) else None
+                total_page = (
+                    int(page_meta.get("totalPage") or 1)
+                    if isinstance(page_meta, dict)
+                    else 1
+                )
+                if page_num >= total_page:
+                    break
+
+        if not emp_acc or (employee_id is not None and int(employee_id) not in emp_acc):
+            raw_all_users = self._mdm_post_json(
+                "/api/company/org/getAllUser",
+                json_body=cid,
+            )
+            all_rows = (
+                raw_all_users.get("data")
+                if isinstance(raw_all_users, dict)
+                else raw_all_users
+            )
+            if isinstance(all_rows, list):
+                for row in all_rows:
+                    _merge_emp_row(row)
+
+        emps = tuple(
+            YouliOrgEmployee(
+                employee_id=e["employee_id"],
+                account_user_id=e["account_user_id"],
+                nick_name=e["nick_name"],
+                phone=e["phone"],
+                employee_no=e["employee_no"],
+                status=e["status"],
+                is_admin=e["is_admin"],
+                org_ids=tuple(e["org_ids"]),
+                admin_org_ids=tuple(sorted(e["_admin_org_set"])),
+            )
+            for e in emp_acc.values()
+        )
+        need_depts = (
+            bool(include_departments)
+            if include_departments is not None
+            else (employee_id is None)
+        )
+        return YouliOrgDirectory(
+            company_id=cid,
+            synced_at_epoch=int(time.time()),
+            departments=tuple(depts) if need_depts else (),
+            employees=emps,
+        )
+
     def fetch_org_directory(
         self,
         *,
@@ -598,7 +852,22 @@ class YouliClient:
             payload["employeeId"] = int(employee_id)
         if include_departments is not None:
             payload["includeDepartments"] = bool(include_departments)
-        data = self._post("org-directory", payload)
+        try:
+            data = self._post("org-directory", payload)
+        except YouliClientUnavailable:
+            raise
+        except YouliClientError as exc:
+            if not self._cfg.mdm_base_url:
+                raise
+            logger.info(
+                "crm org-directory failed (%s); falling back to MDM org endpoints",
+                exc,
+            )
+            return self._fallback_org_directory_via_mdm(
+                company_id=company_id,
+                employee_id=employee_id,
+                include_departments=include_departments,
+            )
 
         depts: list[YouliOrgDept] = []
         for raw in data.get("departments") or []:

@@ -26,7 +26,7 @@ class DepartmentGrantInput(BaseModel):
 
 class ErpEmployeeGrantInput(BaseModel):
     company_id: int | None = None
-    employee_id: int
+    employee_id: int | str
 
 
 class ResourceScopeFields(BaseModel):

@@ -691,7 +691,12 @@ class GroupAccess:
             elif g.subject_type == SUBJECT_ERP_EMPLOYEE:
                 parsed = parse_scoped_pair(g.subject_id)
                 if parsed is not None:
-                    item = {"company_id": parsed[0], "employee_id": parsed[1]}
+                    item = {
+                        "company_id": parsed[0],
+                        "employee_id": (
+                            str(parsed[1]) if parsed[1] > 9007199254740991 else parsed[1]
+                        ),
+                    }
                     (deny_emps if g.effect == "deny" else erp_emps).append(item)
 
         base["group_ids"] = sorted(allow_groups)

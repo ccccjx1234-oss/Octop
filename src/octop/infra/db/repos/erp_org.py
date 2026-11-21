@@ -185,18 +185,43 @@ class ErpOrgRepo:
         with self._db.transaction() as conn:
             # Resolve known local Octop user_id mappings for this company.
             bound_map: dict[int, int] = {}
+            unlinked_user_ids: set[int] = set()
             for r in conn.execute(
                 "SELECT employee_id, user_id, unlinked FROM youli_identity_binding WHERE company_id = ?",
                 (cid,),
             ).fetchall():
                 if int(r["unlinked"] or 0) == 0:
                     bound_map[int(r["employee_id"])] = int(r["user_id"])
+                else:
+                    unlinked_user_ids.add(int(r["user_id"]))
             for r in conn.execute(
                 "SELECT employee_id, user_id FROM youli_session "
                 "WHERE company_id = ? AND status = 'active'",
                 (cid,),
             ).fetchall():
                 bound_map.setdefault(int(r["employee_id"]), int(r["user_id"]))
+            prefix = f"youli:{cid}:%"
+            for r in conn.execute(
+                "SELECT i.user_id, i.subject FROM user_sso_identities i "
+                "JOIN sso_providers p ON p.id = i.provider_id "
+                "WHERE p.kind = 'youli' AND i.subject LIKE ? "
+                "UNION ALL "
+                "SELECT u.id AS user_id, u.sso_subject AS subject FROM users u "
+                "JOIN sso_providers p ON p.id = u.sso_provider_id "
+                "WHERE p.kind = 'youli' AND u.sso_subject LIKE ?",
+                (prefix, prefix),
+            ).fetchall():
+                uid = int(r["user_id"])
+                if uid in unlinked_user_ids:
+                    continue
+                parts = str(r["subject"] or "").split(":")
+                if (
+                    len(parts) == 3
+                    and parts[0] == "youli"
+                    and parts[1] == str(cid)
+                    and parts[2].isdigit()
+                ):
+                    bound_map.setdefault(int(parts[2]), uid)
             existing_emp_rows = conn.execute(
                 "SELECT employee_id, user_id FROM erp_directory_employees WHERE company_id = ?",
                 (cid,),
@@ -566,7 +591,11 @@ class ErpOrgRepo:
             out.append(
                 {
                     "company_id": emp.company_id,
-                    "employee_id": emp.employee_id,
+                    "employee_id": (
+                        str(emp.employee_id)
+                        if emp.employee_id > 9007199254740991
+                        else emp.employee_id
+                    ),
                     "account_user_id": emp.account_user_id,
                     "user_id": emp.user_id,
                     "has_octop_account": emp.user_id is not None,

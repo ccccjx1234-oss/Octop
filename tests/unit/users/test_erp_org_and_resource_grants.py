@@ -741,3 +741,104 @@ def test_known_company_ids_includes_youli_sso_identities(repos: RepoBundle) -> N
         subject="youli:8801:9002",
     )
     assert repos.erp_org_repo.known_company_ids() == [8801]
+
+
+def test_youli_client_fetch_org_directory_falls_back_to_mdm_on_404(
+    repos: RepoBundle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = YouliConfig(
+        enabled=True,
+        base_url="https://erp.example.com",
+        mdm_base_url="https://mdm.example.com",
+        client_id="octop",
+        client_secret="secret",
+        audience="octop",
+    )
+
+    def _fake_perform(_cls: Any, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if url == "https://erp.example.com/api/crm/sso/youli/org-directory":
+            return httpx.Response(
+                404,
+                json={"status": 404, "error": "Not Found", "message": "Not Found"},
+            )
+        if url == "https://mdm.example.com/api/company/org/getByCompanyId":
+            assert method == "POST"
+            assert kwargs["json"] == {"companyId": 147372, "parentId": 1}
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "2823592",
+                        "parentId": "1",
+                        "name": "会火-测试机构",
+                        "orgCode": "",
+                        "sort": "2823592",
+                        "childOrg": [
+                            {
+                                "id": "2824804",
+                                "parentId": "2823592",
+                                "name": "商务部",
+                                "orgCode": None,
+                                "sort": "2824804",
+                                "childOrg": [],
+                            }
+                        ],
+                    }
+                ],
+            )
+        if url == "https://mdm.example.com/api/company/org/listOrgUser":
+            assert method == "POST"
+            assert kwargs["json"]["orgId"] == 2823592
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "page": {"pageNum": 1, "totalPage": 1, "totalCount": 1},
+                    "data": [
+                        {
+                            "id": "2052238599420407810",
+                            "userId": "1177620",
+                            "nickName": "小胡1",
+                            "phone": "13312345679",
+                            "employeeNo": "0709002",
+                            "status": 1,
+                            "isAdmin": 0,
+                            "isCharger": 0,
+                            "orgIds": [{"id": "2824804", "charger": True}],
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("octop.infra.auth.youli.http_pool.perform_request", _fake_perform)
+
+    client = YouliClient(cfg)
+    directory = client.fetch_org_directory(company_id=147372)
+    assert directory.company_id == 147372
+    assert [d.org_id for d in directory.departments] == [2823592, 2824804]
+    assert len(directory.employees) == 1
+    assert directory.employees[0].employee_id == 2052238599420407810
+    assert directory.employees[0].org_ids == (2824804,)
+    assert directory.employees[0].admin_org_ids == (2824804,)
+
+    repos.erp_org_repo.sync_company_directory(
+        directory.company_id,
+        directory.departments,
+        directory.employees,
+    )
+    listed = repos.erp_org_repo.list_employees(company_id=147372)
+    assert len(listed) == 1
+    # Large 64-bit snowflake IDs serialize as strings to preserve JS precision.
+    assert listed[0]["employee_id"] == "2052238599420407810"
+
+    access = GroupAccess(repos)
+    scope = access.validate_scope(
+        visibility=VISIBILITY_SCOPED,
+        company_id=147372,
+        erp_employees=[{"company_id": 147372, "employee_id": "2052238599420407810"}],
+        actor_is_admin=True,
+    )
+    assert scope.erp_employees == (
+        {"company_id": 147372, "employee_id": 2052238599420407810},
+    )
