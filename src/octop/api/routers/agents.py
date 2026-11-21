@@ -22,7 +22,7 @@ from octop.api.common.scope import (
 )
 from octop.api.common.validators import assert_user_backend_root_dirs
 from octop.api.common.workspace import require_agent_workspace
-from octop.api.deps import current_user, get_server, require_admin
+from octop.api.deps import current_user, get_server
 from octop.infra.agents.experts.avatar import (
     agent_avatar_api_path,
     delete_workspace_avatar,
@@ -575,7 +575,7 @@ async def patch_agent(
             actor_user_id=user.id,
             actor_is_admin=bool(user.is_admin),
         )
-    if body.sync_knowledge_bases and user.is_admin:
+    if body.sync_knowledge_bases:
         effective_scope = normalized_scope
         if effective_scope is None:
             cur_payload = access.scope_payload(
@@ -594,12 +594,13 @@ async def patch_agent(
                 deny_user_ids=cur_payload["deny_user_ids"],
                 deny_erp_employees=cur_payload["deny_erp_employees"],
                 actor_user_id=user.id,
-                actor_is_admin=True,
+                actor_is_admin=bool(user.is_admin),
             )
         access.sync_agent_kb_grants(
             kb_ids=id_list_from_row(row, "knowledge_base_ids"),
             scope=effective_scope,
             actor_user_id=user.id,
+            actor_is_admin=bool(user.is_admin),
         )
     return _row_dict(
         row,
@@ -767,13 +768,14 @@ def agent_status(
 async def check_agent_scope_kb_gaps(
     agent_id: str,
     body: ScopeKbCheckBody,
-    user: Any = Depends(require_admin()),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     assert server.app_runtime is not None
     row = server.app_runtime.agent_registry.get_row(agent_id)
     if row is None:
         raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
+    _assert_agent_owner(row, user)
     kb_ids = (
         list(body.knowledge_base_ids)
         if body.knowledge_base_ids is not None
@@ -791,6 +793,13 @@ async def check_agent_scope_kb_gaps(
         deny_user_ids=body.deny_user_ids,
         deny_erp_employees=body.deny_erp_employees,
         actor_user_id=user.id,
-        actor_is_admin=True,
+        actor_is_admin=bool(user.is_admin),
     )
-    return {"gaps": access.check_agent_kb_gaps(kb_ids=kb_ids, scope=normalized)}
+    return {
+        "gaps": access.check_agent_kb_gaps(
+            kb_ids=kb_ids,
+            scope=normalized,
+            actor_user_id=user.id,
+            actor_is_admin=bool(user.is_admin),
+        )
+    }

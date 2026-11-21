@@ -47,7 +47,7 @@ export function isVisibilityControlVisible(
   },
 ): boolean {
   if (audience.status !== "ready") return false;
-  if (opts.enableErpScope && opts.isAdmin) return true;
+  if (opts.enableErpScope) return true;
   if (audience.userCount === 1) return false;
   const groups = showGroupVisibilityOption(audience, opts.visibility);
   const choices = (opts.allowOwner ? 1 : 0) + 1 + (groups ? 1 : 0);

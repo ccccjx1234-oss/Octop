@@ -1,4 +1,4 @@
-"""Admin endpoints for Huihuo ERP organization directory & employee sync."""
+"""Endpoints for Huihuo ERP organization directory & employee sync."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from octop.api.deps import get_server, require_admin
+from octop.api.deps import current_user, get_server
 from octop.infra.auth.youli.client import YouliClientError, YouliClientUnavailable
 from octop.infra.auth.youli.org_sync import ErpOrgSyncService
 from octop.infra.errors import ErrorCode, OctopError
@@ -20,6 +20,52 @@ router = APIRouter()
 
 class SyncErpOrgBody(BaseModel):
     company_id: int | None = None
+
+
+def _resolve_actor_company_id(
+    user: User,
+    org_repo: Any,
+    requested_company_id: int | None,
+) -> int | None:
+    if user.is_admin:
+        return requested_company_id
+    ctx = org_repo.get_user_erp_context(user.id)
+    if ctx is not None and ctx.company_id > 0:
+        actor_cid = int(ctx.company_id)
+        if (
+            requested_company_id is not None
+            and requested_company_id > 0
+            and int(requested_company_id) != actor_cid
+        ):
+            raise OctopError(
+                ErrorCode.FORBIDDEN,
+                "cross-company access is not allowed",
+                status=403,
+            )
+        return actor_cid
+    return requested_company_id
+
+
+def _summary_for_actor(user: User, org_repo: Any) -> dict[str, Any]:
+    summary = org_repo.get_sync_summary()
+    if user.is_admin:
+        return summary
+    eff_cid = _resolve_actor_company_id(user, org_repo, None)
+    if eff_cid is not None and eff_cid > 0:
+        depts = org_repo.list_departments(company_id=eff_cid)
+        emps = org_repo.list_employees(company_id=eff_cid)
+        synced_epochs = [int(d.synced_at or 0) for d in depts] + [
+            int(e.get("synced_at") or 0) for e in emps
+        ]
+        max_synced = max((ts for ts in synced_epochs if ts > 0), default=None)
+        known = summary.get("company_ids") or []
+        return {
+            "company_ids": [eff_cid] if (eff_cid in known or depts or emps) else [],
+            "department_count": len(depts),
+            "employee_count": len(emps),
+            "last_synced_at": max_synced,
+        }
+    return summary
 
 
 def _build_dept_tree(rows: list[Any]) -> list[dict[str, Any]]:
@@ -50,10 +96,10 @@ def _build_dept_tree(rows: list[Any]) -> list[dict[str, Any]]:
 
 @router.get("/status", summary="Get Huihuo ERP org directory sync summary")
 async def get_erp_org_status(
-    _: User = Depends(require_admin()),
+    user: User = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    summary = server.services.repos.erp_org_repo.get_sync_summary()
+    summary = _summary_for_actor(user, server.services.repos.erp_org_repo)
     cfg = server.services.config.youli
     summary["integration_enabled"] = bool(
         cfg.enabled and cfg.base_url and cfg.client_id and cfg.client_secret
@@ -65,11 +111,13 @@ async def get_erp_org_status(
 async def list_erp_departments(
     company_id: int | None = Query(default=None),
     include_inactive: bool = Query(default=False),
-    _: User = Depends(require_admin()),
+    user: User = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    rows = server.services.repos.erp_org_repo.list_departments(
-        company_id=company_id,
+    org_repo = server.services.repos.erp_org_repo
+    eff_cid = _resolve_actor_company_id(user, org_repo, company_id)
+    rows = org_repo.list_departments(
+        company_id=eff_cid,
         include_inactive=include_inactive,
     )
     flat = [
@@ -95,11 +143,13 @@ async def list_erp_employees(
     include_children: bool = Query(default=True),
     q: str = Query(default=""),
     active_only: bool = Query(default=True),
-    _: User = Depends(require_admin()),
+    user: User = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    employees = server.services.repos.erp_org_repo.list_employees(
-        company_id=company_id,
+    org_repo = server.services.repos.erp_org_repo
+    eff_cid = _resolve_actor_company_id(user, org_repo, company_id)
+    employees = org_repo.list_employees(
+        company_id=eff_cid,
         org_id=org_id,
         include_children=include_children,
         query=q,
@@ -111,7 +161,7 @@ async def list_erp_employees(
 @router.get("/local-users", summary="List enabled local Octop users for scope assignment")
 async def list_local_users(
     q: str = Query(default=""),
-    _: User = Depends(require_admin()),
+    _: User = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     needle = q.strip().lower()
@@ -144,7 +194,7 @@ async def list_local_users(
 @router.post("/sync", summary="Synchronize Huihuo ERP organization directory")
 async def sync_erp_org(
     body: SyncErpOrgBody | None = None,
-    user: User = Depends(require_admin()),
+    user: User = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     cfg = server.services.config.youli
@@ -158,8 +208,12 @@ async def sync_erp_org(
             details={"reason": reason},
         )
     org_repo = server.services.repos.erp_org_repo
+    requested_cid = body.company_id if body is not None else None
+    eff_cid = _resolve_actor_company_id(user, org_repo, requested_cid)
     target_ids: list[int] = []
-    if body is not None and body.company_id is not None and body.company_id > 0:
+    if eff_cid is not None and eff_cid > 0:
+        target_ids = [int(eff_cid)]
+    elif body is not None and body.company_id is not None and body.company_id > 0:
         target_ids = [int(body.company_id)]
     else:
         target_ids = org_repo.known_company_ids()
@@ -189,5 +243,5 @@ async def sync_erp_org(
         ) from exc
     return {
         "results": results,
-        "summary": org_repo.get_sync_summary(),
+        "summary": _summary_for_actor(user, org_repo),
     }

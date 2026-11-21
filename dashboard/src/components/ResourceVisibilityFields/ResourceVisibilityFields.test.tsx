@@ -258,19 +258,26 @@ describe("ResourceVisibilityFields", () => {
     expect(erpMocks.status).not.toHaveBeenCalled();
   });
 
-  it("hides ERP scope options for non-admin users even when enableErpScope is true", async () => {
+  it("shows ERP scope options for non-admin users when enableErpScope is true and displays department counts", async () => {
     audienceMock.mockResolvedValue({ user_count: 3, group_count: 0 });
     render(<ScopedHarness isAdmin={false} />);
     expect(
       await screen.findByRole("radio", { name: "resourceVisibility.owner" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("radio", { name: "resourceVisibility.company" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("radio", { name: "resourceVisibility.scoped" }),
-    ).toBeNull();
-    expect(erpMocks.status).not.toHaveBeenCalled();
+      screen.getByRole("radio", { name: "resourceVisibility.company" }),
+    ).toBeInTheDocument();
+    const scopedRadio = screen.getByRole("radio", {
+      name: "resourceVisibility.scoped",
+    });
+    expect(scopedRadio).toBeInTheDocument();
+
+    fireEvent.click(scopedRadio);
+    await waitFor(() => expect(erpMocks.departments).toHaveBeenCalledOnce());
+    expect(await screen.findByText("研发中心")).toBeInTheDocument();
+    expect(screen.getByText("AI 平台组")).toBeInTheDocument();
+    expect(screen.getByText("(2)")).toBeInTheDocument();
+    expect(screen.getByText("(1)")).toBeInTheDocument();
   });
 
   it("shows ERP scope panel for admins even with userCount === 1, renders pre-login badge, toggles dept children, and syncs", async () => {

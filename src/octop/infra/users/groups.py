@@ -764,12 +764,6 @@ class GroupAccess:
                 or deny_erp_employees
             )
         )
-        if uses_extended and not actor_is_admin:
-            raise OctopError(
-                ErrorCode.FORBIDDEN,
-                "admin permission is required to assign department or user scope",
-                status=403,
-            )
 
         if visibility == VISIBILITY_OWNER:
             return NormalizedScope(
@@ -799,6 +793,18 @@ class GroupAccess:
             )
 
         resolved_cid = raw_cid
+        if uses_extended and not actor_is_admin and actor_user_id is not None:
+            actor_ctx = self._get_erp_ctx(actor_user_id)
+            if actor_ctx is not None and actor_ctx.company_id > 0:
+                actor_cid = int(actor_ctx.company_id)
+                if raw_cid > 0 and raw_cid != actor_cid:
+                    raise OctopError(
+                        ErrorCode.FORBIDDEN,
+                        "cross-company scope target is not allowed",
+                        status=403,
+                    )
+                resolved_cid = actor_cid
+
         if visibility == VISIBILITY_COMPANY and resolved_cid <= 0:
             if actor_user_id is not None:
                 actor_ctx = self._get_erp_ctx(actor_user_id)
@@ -970,6 +976,8 @@ class GroupAccess:
         *,
         kb_ids: Sequence[str],
         scope: NormalizedScope,
+        actor_user_id: int | None = None,
+        actor_is_admin: bool = True,
     ) -> list[dict[str, Any]]:
         """Check which non-private knowledge bases bound to an agent lack coverage for *scope*."""
         kb_repo = getattr(self._repos, "knowledge_repo", None)
@@ -989,6 +997,10 @@ class GroupAccess:
                 continue
             kb = kb_repo.get_base(kb_id)
             if kb is None:
+                continue
+            if not actor_is_admin and int(getattr(kb, "owner_user_id", 0) or 0) != int(
+                actor_user_id or 0
+            ):
                 continue
             current = self.scope_payload(
                 RESOURCE_KNOWLEDGE_BASE,
@@ -1076,12 +1088,18 @@ class GroupAccess:
         kb_ids: Sequence[str],
         scope: NormalizedScope,
         actor_user_id: int | None,
+        actor_is_admin: bool = True,
     ) -> list[str]:
-        """Grant target scope read access on linked non-private KBs when admin confirms."""
+        """Grant target scope read access on linked non-private KBs when confirmed."""
         kb_repo = getattr(self._repos, "knowledge_repo", None)
         if kb_repo is None or self._policies_grants is None or not kb_ids:
             return []
-        gaps = self.check_agent_kb_gaps(kb_ids=kb_ids, scope=scope)
+        gaps = self.check_agent_kb_gaps(
+            kb_ids=kb_ids,
+            scope=scope,
+            actor_user_id=actor_user_id,
+            actor_is_admin=actor_is_admin,
+        )
         if not gaps:
             return []
         updated_ids: list[str] = []

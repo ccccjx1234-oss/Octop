@@ -192,7 +192,7 @@ export function ResourceVisibilityFields<
     [groups],
   );
   const disabledLabel = t("adminUsers.statusDisabled");
-  const erpEnabled = Boolean(enableErpScope && isAdmin);
+  const erpEnabled = Boolean(enableErpScope);
   const showGroups = showGroupVisibilityOption(audience, visibility);
 
   if (

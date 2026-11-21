@@ -618,7 +618,6 @@ function EditAgentDrawerBody({
       const kbIds =
         agent.kind === "managed" ? [] : stored.knowledge_base_ids ?? [];
       if (
-        isAdmin &&
         !remote &&
         agent.kind !== "managed" &&
         expertVisibility !== "owner" &&

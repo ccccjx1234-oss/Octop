@@ -1,6 +1,24 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { App, Button, Select, Switch, Tag, TreeSelect } from "antd";
-import { ChevronDown, ChevronUp, RefreshCw, X } from "lucide-react";
+import {
+  App,
+  Button,
+  Dropdown,
+  Input,
+  Select,
+  Switch,
+  Tag,
+  type MenuProps,
+} from "antd";
+import cx from "classnames";
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  MoreHorizontal,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   erpOrgApi,
@@ -145,20 +163,81 @@ function userKey(userId: number): string {
   return `user:${userId}`;
 }
 
-type DeptTreeDataNode = {
-  key: string;
-  value: string;
-  title: string;
-  children?: DeptTreeDataNode[];
+type FilteredTreeNode = {
+  node: ErpDepartmentTreeNode;
+  children: FilteredTreeNode[];
+  forceExpand: boolean;
 };
 
-function toTreeSelectData(nodes: ErpDepartmentTreeNode[]): DeptTreeDataNode[] {
-  return nodes.map((node) => ({
-    key: deptKey(node.company_id, node.org_id),
-    value: deptKey(node.company_id, node.org_id),
-    title: node.name,
-    children: node.children?.length ? toTreeSelectData(node.children) : [],
-  }));
+function computeDeptCounts(
+  tree: ErpDepartmentTreeNode[],
+  employees: ErpEmployeeItem[],
+): Map<string, number> {
+  const directMap = new Map<string, Set<string>>();
+  for (const emp of employees) {
+    if (emp.status !== 1) continue;
+    const memberId = `${emp.company_id}:${emp.employee_id}`;
+    for (const oid of emp.org_ids ?? []) {
+      const k = deptKey(emp.company_id, oid);
+      let set = directMap.get(k);
+      if (!set) {
+        set = new Set<string>();
+        directMap.set(k, set);
+      }
+      set.add(memberId);
+    }
+  }
+
+  const counts = new Map<string, number>();
+  const walk = (node: ErpDepartmentTreeNode): Set<string> => {
+    const k = deptKey(node.company_id, node.org_id);
+    const aggregated = new Set<string>(directMap.get(k) ?? []);
+    for (const child of node.children ?? []) {
+      for (const id of walk(child)) {
+        aggregated.add(id);
+      }
+    }
+    counts.set(k, aggregated.size);
+    return aggregated;
+  };
+  for (const root of tree) {
+    walk(root);
+  }
+  return counts;
+}
+
+function filterDeptTree(
+  nodes: ErpDepartmentTreeNode[],
+  query: string,
+): FilteredTreeNode[] {
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    return nodes.map((node) => ({
+      node,
+      children: filterDeptTree(node.children ?? [], ""),
+      forceExpand: false,
+    }));
+  }
+  const out: FilteredTreeNode[] = [];
+  for (const node of nodes) {
+    const matchedChildren = filterDeptTree(node.children ?? [], q);
+    const selfMatches =
+      node.name.toLowerCase().includes(q) ||
+      (node.org_code ?? "").toLowerCase().includes(q);
+    if (selfMatches || matchedChildren.length > 0) {
+      out.push({
+        node,
+        children:
+          matchedChildren.length > 0
+            ? matchedChildren
+            : selfMatches
+              ? filterDeptTree(node.children ?? [], "")
+              : [],
+        forceExpand: matchedChildren.length > 0,
+      });
+    }
+  }
+  return out;
 }
 
 type DepartmentScopePickerProps = {
@@ -166,6 +245,7 @@ type DepartmentScopePickerProps = {
   placeholder: string;
   value: DepartmentGrant[];
   tree: ErpDepartmentTreeNode[];
+  employees: ErpEmployeeItem[];
   deptByKey: Map<string, ErpDepartmentItem>;
   disabled?: boolean;
   onChange: (next: DepartmentGrant[]) => void;
@@ -176,55 +256,267 @@ function DepartmentScopePicker({
   placeholder,
   value,
   tree,
+  employees,
   deptByKey,
   disabled,
   onChange,
 }: DepartmentScopePickerProps) {
   const { t } = useTranslation();
-  const treeData = useMemo(() => toTreeSelectData(tree), [tree]);
-  const selectedKeys = useMemo(
-    () => value.map((item) => deptKey(item.company_id, item.org_id)),
-    [value],
+  const [searchText, setSearchText] = useState("");
+  const [expandOverrides, setExpandOverrides] = useState<
+    Record<string, boolean>
+  >({});
+
+  const deptCounts = useMemo(
+    () => computeDeptCounts(tree, employees),
+    [tree, employees],
   );
-  const existingChildrenFlag = useMemo(() => {
-    const map = new Map<string, boolean>();
-    value.forEach((item) => {
-      map.set(deptKey(item.company_id, item.org_id), item.include_children);
-    });
+  const filteredNodes = useMemo(
+    () => filterDeptTree(tree, searchText),
+    [tree, searchText],
+  );
+  const defaultExpandedSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const root of tree) {
+      if (root.children?.length) {
+        set.add(deptKey(root.company_id, root.org_id));
+      }
+      for (const child of root.children ?? []) {
+        if (child.children?.length) {
+          set.add(deptKey(child.company_id, child.org_id));
+        }
+      }
+    }
+    return set;
+  }, [tree]);
+
+  const selectedMap = useMemo(() => {
+    const map = new Map<string, DepartmentGrant>();
+    for (const item of value) {
+      map.set(deptKey(item.company_id, item.org_id), item);
+    }
     return map;
   }, [value]);
 
-  const handleTreeChange = (nextKeys: string[]) => {
-    const next: DepartmentGrant[] = [];
-    for (const key of nextKeys) {
-      const parsed = parseDeptKey(key);
-      if (!parsed) continue;
-      next.push({
-        company_id: parsed.company_id,
-        org_id: parsed.org_id,
-        include_children: existingChildrenFlag.get(key) ?? true,
-      });
+  const upsertGrant = (
+    companyId: number,
+    orgId: number,
+    includeChildren: boolean,
+  ) => {
+    const exists = value.some(
+      (item) => item.company_id === companyId && item.org_id === orgId,
+    );
+    if (exists) {
+      onChange(
+        value.map((item) =>
+          item.company_id === companyId && item.org_id === orgId
+            ? { ...item, include_children: includeChildren }
+            : item,
+        ),
+      );
+      return;
     }
-    onChange(next);
+    onChange([
+      ...value,
+      {
+        company_id: companyId,
+        org_id: orgId,
+        include_children: includeChildren,
+      },
+    ]);
   };
+
+  const removeGrant = (companyId: number, orgId: number) => {
+    onChange(
+      value.filter(
+        (item) => !(item.company_id === companyId && item.org_id === orgId),
+      ),
+    );
+  };
+
+  const toggleNode = (node: ErpDepartmentTreeNode) => {
+    if (disabled) return;
+    const k = deptKey(node.company_id, node.org_id);
+    if (selectedMap.has(k)) {
+      removeGrant(node.company_id, node.org_id);
+    } else {
+      upsertGrant(node.company_id, node.org_id, true);
+    }
+  };
+
+  const toggleExpand = (key: string, currentExpanded: boolean) => {
+    setExpandOverrides((prev) => ({
+      ...prev,
+      [key]: !currentExpanded,
+    }));
+  };
+
+  const renderTreeNodes = (
+    items: FilteredTreeNode[],
+    depth: number,
+  ): ReactNode =>
+    items.map((item) => {
+      const { node } = item;
+      const k = deptKey(node.company_id, node.org_id);
+      const hasChildren = item.children.length > 0;
+      const expanded =
+        item.forceExpand ||
+        (expandOverrides[k] ?? defaultExpandedSet.has(k));
+      const grant = selectedMap.get(k);
+      const selected = Boolean(grant);
+      const count = deptCounts.get(k) ?? 0;
+
+      const menuItems: MenuProps["items"] = selected
+        ? [
+            {
+              key: "include_children",
+              label: (
+                <span className={styles.deptMenuOption}>
+                  <span>{t("resourceVisibility.includeChildren")}</span>
+                  {grant?.include_children ? <Check size={12} /> : null}
+                </span>
+              ),
+            },
+            {
+              key: "current_only",
+              label: (
+                <span className={styles.deptMenuOption}>
+                  <span>{t("resourceVisibility.currentDeptOnly")}</span>
+                  {grant && !grant.include_children ? (
+                    <Check size={12} />
+                  ) : null}
+                </span>
+              ),
+            },
+            { type: "divider" },
+            {
+              key: "remove",
+              danger: true,
+              label: t("resourceVisibility.removeGrant"),
+            },
+          ]
+        : [
+            {
+              key: "include_children",
+              label: t("resourceVisibility.includeChildren"),
+            },
+            {
+              key: "current_only",
+              label: t("resourceVisibility.currentDeptOnly"),
+            },
+          ];
+
+      const handleMenuClick: MenuProps["onClick"] = ({
+        key: action,
+        domEvent,
+      }) => {
+        domEvent.stopPropagation();
+        if (disabled) return;
+        if (action === "remove") {
+          removeGrant(node.company_id, node.org_id);
+          return;
+        }
+        upsertGrant(node.company_id, node.org_id, action !== "current_only");
+      };
+
+      return (
+        <div key={k}>
+          <div
+            className={cx(
+              styles.deptTreeNodeRow,
+              selected && styles.deptTreeNodeRowSelected,
+              disabled && styles.deptTreeNodeRowDisabled,
+            )}
+            style={{ paddingLeft: `${depth * 18 + 8}px` }}
+            onClick={() => toggleNode(node)}
+          >
+            <span className={styles.deptTreeNodeMain}>
+              {hasChildren ? (
+                <button
+                  type="button"
+                  className={styles.deptTreeCaret}
+                  aria-label={expanded ? "collapse" : "expand"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleExpand(k, expanded);
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 10 10"
+                    width="9"
+                    height="9"
+                    aria-hidden="true"
+                    className={cx(
+                      styles.deptTreeCaretSvg,
+                      !expanded && styles.deptTreeCaretCollapsed,
+                    )}
+                  >
+                    <path d="M1.5 3 L8.5 3 L5 7.5 Z" fill="currentColor" />
+                  </svg>
+                </button>
+              ) : (
+                <span className={styles.deptTreeCaretPlaceholder} />
+              )}
+              <span
+                className={cx(
+                  styles.deptTreeNodeName,
+                  depth === 0 && styles.deptTreeNodeNameRoot,
+                )}
+              >
+                {node.name}
+              </span>
+              <span
+                className={
+                  depth === 0
+                    ? styles.deptTreeNodeCountRoot
+                    : styles.deptTreeNodeCount
+                }
+              >
+                ({count})
+              </span>
+            </span>
+            {!disabled ? (
+              <Dropdown
+                trigger={["click"]}
+                menu={{ items: menuItems, onClick: handleMenuClick }}
+              >
+                <button
+                  type="button"
+                  className={cx(
+                    styles.deptTreeMoreBtn,
+                    selected && styles.deptTreeMoreBtnVisible,
+                  )}
+                  aria-label={node.name}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MoreHorizontal size={15} />
+                </button>
+              </Dropdown>
+            ) : null}
+          </div>
+          {hasChildren && expanded ? renderTreeNodes(item.children, depth + 1) : null}
+        </div>
+      );
+    });
 
   return (
     <div className={styles.erpSection}>
       <span className={styles.erpSectionLabel}>{label}</span>
-      <TreeSelect
-        multiple
+      <Input
         allowClear
-        showSearch
-        treeDefaultExpandAll
-        treeNodeFilterProp="title"
+        size="small"
         disabled={disabled}
-        value={selectedKeys}
-        treeData={treeData}
+        className={styles.deptTreeSearch}
+        prefix={<Search size={13} />}
+        value={searchText}
         placeholder={placeholder}
-        onChange={(keys) =>
-          handleTreeChange(Array.isArray(keys) ? keys.map(String) : [])
-        }
+        onChange={(e) => setSearchText(e.target.value)}
       />
+      {filteredNodes.length > 0 ? (
+        <div className={styles.deptTreeContainer}>
+          {renderTreeNodes(filteredNodes, 0)}
+        </div>
+      ) : null}
       {value.length > 0 ? (
         <div className={styles.deptGrantList}>
           {value.map((grant) => {
@@ -243,14 +535,7 @@ function DepartmentScopePicker({
                     checkedChildren={t("resourceVisibility.includeChildren")}
                     unCheckedChildren={t("resourceVisibility.currentDeptOnly")}
                     onChange={(checked) => {
-                      onChange(
-                        value.map((item) =>
-                          item.company_id === grant.company_id &&
-                          item.org_id === grant.org_id
-                            ? { ...item, include_children: checked }
-                            : item,
-                        ),
-                      );
+                      upsertGrant(grant.company_id, grant.org_id, checked);
                     }}
                   />
                   <Button
@@ -259,17 +544,7 @@ function DepartmentScopePicker({
                     disabled={disabled}
                     aria-label={t("resourceVisibility.removeGrant")}
                     icon={<X size={12} />}
-                    onClick={() =>
-                      onChange(
-                        value.filter(
-                          (item) =>
-                            !(
-                              item.company_id === grant.company_id &&
-                              item.org_id === grant.org_id
-                            ),
-                        ),
-                      )
-                    }
+                    onClick={() => removeGrant(grant.company_id, grant.org_id)}
                   />
                 </div>
               </div>
@@ -636,6 +911,7 @@ export function ErpScopePanel({
             placeholder={t("resourceVisibility.deptPlaceholder")}
             value={scope.departmentGrants}
             tree={filteredTree}
+            employees={filteredEmployees}
             deptByKey={deptByKey}
             disabled={disabled}
             onChange={(next) =>
@@ -681,6 +957,7 @@ export function ErpScopePanel({
               placeholder={t("resourceVisibility.denyDeptPlaceholder")}
               value={scope.denyDepartmentGrants}
               tree={filteredTree}
+              employees={filteredEmployees}
               deptByKey={deptByKey}
               disabled={disabled}
               onChange={(next) =>

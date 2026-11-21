@@ -199,11 +199,28 @@ def test_prelogin_erp_employee_grant_and_department_include_children_and_deny(
 
     access = GroupAccess(repos)
 
-    # 1) Non-admin cannot assign extended scope.
+    # 1) Non-admin can assign extended scope within their own ERP company, but not cross-company.
+    staff_company_scope = access.validate_scope(
+        visibility=VISIBILITY_COMPANY,
+        actor_user_id=child_user,
+        actor_is_admin=False,
+    )
+    assert staff_company_scope.visibility == VISIBILITY_COMPANY
+    assert staff_company_scope.company_id == 100
+
+    staff_scoped = access.validate_scope(
+        visibility=VISIBILITY_SCOPED,
+        department_grants=[{"company_id": 100, "org_id": 20, "include_children": True}],
+        actor_user_id=child_user,
+        actor_is_admin=False,
+    )
+    assert staff_scoped.visibility == VISIBILITY_SCOPED
+    assert staff_scoped.company_id == 100
+
     with pytest.raises(OctopError) as exc_info:
         access.validate_scope(
             visibility=VISIBILITY_SCOPED,
-            department_grants=[{"company_id": 100, "org_id": 20, "include_children": True}],
+            department_grants=[{"company_id": 200, "org_id": 20, "include_children": True}],
             actor_user_id=child_user,
             actor_is_admin=False,
         )
@@ -525,10 +542,16 @@ async def test_erp_org_router_and_skill_package_scope_endpoints(
         id=outsider, username="outsider", role="user", display_name="Outsider", locale="zh", permissions=["skill_packages"]
     )
 
+    repos.erp_org_repo.sync_company_directory(
+        200,
+        [{"orgId": 20, "parentId": 1, "name": "外部公司运营部"}],
+        [{"employeeId": 901, "nickName": "外司员工", "status": 1, "orgIds": [20]}],
+    )
+
     depts_out = await erp_org_router.list_erp_departments(
         company_id=100,
         include_inactive=False,
-        _=admin_user,
+        user=admin_user,
         server=server,
     )
     assert len(depts_out["departments"]) == 2
@@ -541,23 +564,50 @@ async def test_erp_org_router_and_skill_package_scope_endpoints(
         include_children=True,
         q="",
         active_only=True,
-        _=admin_user,
+        user=admin_user,
         server=server,
     )
     assert len(emps_out["employees"]) == 1
     assert emps_out["employees"][0]["employee_id"] == 801
 
+    # Non-admin can query org directory, automatically scoped to their bound company (100).
+    staff_depts = await erp_org_router.list_erp_departments(
+        company_id=None,
+        include_inactive=False,
+        user=staff_user,
+        server=server,
+    )
+    assert {d["company_id"] for d in staff_depts["departments"]} == {100}
+    staff_emps = await erp_org_router.list_erp_employees(
+        company_id=None,
+        org_id=None,
+        include_children=True,
+        q="",
+        active_only=True,
+        user=staff_user,
+        server=server,
+    )
+    assert [e["employee_id"] for e in staff_emps["employees"]] == [801]
+    with pytest.raises(OctopError) as cross_co_exc:
+        await erp_org_router.list_erp_departments(
+            company_id=200,
+            include_inactive=False,
+            user=staff_user,
+            server=server,
+        )
+    assert cross_co_exc.value.code == ErrorCode.FORBIDDEN
+
     local_users = await erp_org_router.list_local_users(q="staff", _=admin_user, server=server)
     assert [u["user_id"] for u in local_users["users"]] == [staff]
 
-    # Non-admin cannot create a scoped skill package.
+    # Non-admin cannot create a cross-company scoped skill package.
     with pytest.raises(OctopError) as non_admin_exc:
         await skill_packages_router.create_skill_package(
             skill_packages_router.CreateSkillPackageBody(
-                name="受限技能",
+                name="跨司受限技能",
                 visibility="scoped",
-                company_id=100,
-                department_grants=[{"company_id": 100, "org_id": 20, "include_children": True}],
+                company_id=200,
+                department_grants=[{"company_id": 200, "org_id": 20, "include_children": True}],
             ),
             server=server,  # type: ignore[arg-type]
             user=staff_user,
@@ -591,6 +641,22 @@ async def test_erp_org_router_and_skill_package_scope_endpoints(
         user=outsider_user,
     )
     assert outsider_list == []
+
+    # Non-admin can create a scoped skill package within their own company (100).
+    staff_created = await skill_packages_router.create_skill_package(
+        skill_packages_router.CreateSkillPackageBody(
+            name="员工自建部门技能",
+            visibility="scoped",
+            company_id=100,
+            department_grants=[{"company_id": 100, "org_id": 20, "include_children": True}],
+        ),
+        server=server,  # type: ignore[arg-type]
+        user=staff_user,
+    )
+    assert staff_created["visibility"] == "scoped"
+    assert staff_created["department_grants"] == [
+        {"company_id": 100, "org_id": 20, "include_children": True}
+    ]
 
 
 def test_youli_client_fetch_org_directory_and_sync_revokes_session(

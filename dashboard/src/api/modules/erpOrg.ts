@@ -171,21 +171,10 @@ export function buildScopeRequestPayload(args: {
   visibility: ScopedResourceVisibilityMode;
   groupIds: string[];
   scope: ResourceScopeSelection;
-  isAdmin: boolean;
+  isAdmin?: boolean;
 }): Record<string, unknown> {
-  const { visibility, groupIds, scope, isAdmin } = args;
+  const { visibility, groupIds, scope } = args;
   const legacyGroupIds = visibility === "groups" ? groupIds : [];
-  if (!isAdmin) {
-    return {
-      visibility:
-        visibility === "owner" ||
-        visibility === "all" ||
-        visibility === "groups"
-          ? visibility
-          : "owner",
-      group_ids: legacyGroupIds,
-    };
-  }
   const hasDenies =
     scope.denyDepartmentGrants.length > 0 ||
     scope.denyUserIds.length > 0 ||
