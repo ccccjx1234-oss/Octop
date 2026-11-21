@@ -485,3 +485,287 @@ def test_approve_request_interval_validation():
 
     with pytest.raises(ValidationError):
         ApproveRequest(**base_kwargs, schedule="interval", interval_minutes=43201)
+
+
+def test_transient_refresh_failure_releases_lock_while_permanent_error_keeps_locked(
+    environment,
+) -> None:
+    env = environment
+    account = authorize(env, "finance")
+    scope = Scope("drive_folder", "department", "Department")
+    approval = env.svc.preview(env.owner, env.base.id, account, scope)
+    source = env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        approval["fingerprint"],
+        schedule="manual",
+        auto_add=False,
+    )
+    # Advance clock past token expiry (3600s) to force refresh on next sync.
+    env.clock[0] += 3600
+
+    refresh_mode = {"mode": "timeout"}
+
+    def flaky_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/v3/token":
+            mode = refresh_mode["mode"]
+            if mode == "timeout":
+                raise httpx.ReadTimeout("network blip", request=request)
+            if mode == "rate_limit":
+                return httpx.Response(200, json={"code": 99991400, "msg": "rate limit"})
+            if mode == "bad_grant":
+                return httpx.Response(400, json={"error": "invalid_grant"})
+            return httpx.Response(
+                200,
+                json={"access_token": "fresh", "refresh_token": "r2", "expires_in": 3600},
+            )
+        if request.url.path.endswith("/files"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "files": [{"token": "doc-a", "name": "Title doc-a", "type": "docx"}],
+                        "has_more": False,
+                    }
+                },
+            )
+        if request.url.path.endswith("/raw_content"):
+            return httpx.Response(200, json={"data": {"content": "Refreshed"}})
+        raise AssertionError(request.url.path)
+
+    env.svc.client_factory = lambda _p: FeishuDirectoryClient(
+        httpx.Client(transport=httpx.MockTransport(flaky_handler)),
+        client_id="app",
+        client_secret="test-secret",
+        sleep=lambda _: None,
+    )
+
+    assert env.svc.scan() == []
+    assert env.svc.repo.sources(env.base.id)[0]["status"] == "error"
+    assert env.svc.repo.connection(env.owner, account)["refreshing"] == 0
+
+    refresh_mode["mode"] = "rate_limit"
+    assert env.svc.repo.set_active(env.base.id, source, env.owner, True, env.clock[0])
+    assert env.svc.scan() == []
+    assert env.svc.repo.connection(env.owner, account)["refreshing"] == 0
+
+    refresh_mode["mode"] = "ok"
+    assert env.svc.repo.set_active(env.base.id, source, env.owner, True, env.clock[0])
+    assert len(env.svc.scan()) == 1
+    assert env.svc.repo.connection(env.owner, account)["refreshing"] == 0
+
+    # Permanent 400 error keeps refreshing=1 (requires explicit reauthorization).
+    env.clock[0] += 3600
+    refresh_mode["mode"] = "bad_grant"
+    assert env.svc.repo.set_active(env.base.id, source, env.owner, True, env.clock[0])
+    assert env.svc.scan() == []
+    assert env.svc.repo.connection(env.owner, account)["refreshing"] == 1
+
+
+def test_nested_feishu_documents_preserve_folders_enter_graph_and_cleanup(
+    environment, monkeypatch
+) -> None:
+    from octop.api.routers import shared_feishu as router_mod
+    from octop.infra.feishu_kb.directories import DirectoryDocument
+    from octop.infra.knowledge.graph_store import (
+        ChunkEntity,
+        ChunkGraph,
+        ChunkRelation,
+        SqliteKnowledgeGraphStore,
+    )
+    from octop.infra.users.identity import User
+
+    env = environment
+    account = authorize(env, "wiki")
+
+    def fake_discover(self, access_token, kind, root, space, include_children):
+        return [DirectoryDocument("doc-a", "Spec", ("Dept", "R&D"))], 0
+
+    monkeypatch.setattr(FeishuDirectoryClient, "discover", fake_discover)
+    scope = Scope("wiki_space", "space-1", "TeamWiki")
+    approval = env.svc.preview(env.owner, env.base.id, account, scope)
+    env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        approval["fingerprint"],
+        schedule="manual",
+        auto_add=False,
+    )
+
+    [(kb_id, doc_id)] = env.svc.scan()
+    docs = env.svc.knowledge.list_documents(kb_id, actor_user_id=env.owner)
+    assert any(d.is_dir and d.path == "Dept" for d in docs)
+    assert any(d.is_dir and d.path == "Dept/R&D" for d in docs)
+    file_doc = next(d for d in docs if not d.is_dir)
+    assert file_doc.id == doc_id
+    assert file_doc.path.startswith("Dept/R&D/")
+
+    for module in (jobs, retrieve):
+        monkeypatch.setattr(module, "assert_knowledge_usable", lambda *_: None)
+        monkeypatch.setattr(
+            module, "embed_knowledge_texts", lambda _, items: [[1.0, 0.0] for _ in items]
+        )
+    jobs.process_document(env.services, kb_id, doc_id)
+    assert doc_id in env.svc.knowledge._graph_document_ids(kb_id)
+
+    local_doc = env.services.knowledge_repo.create_document(
+        kb_id=kb_id, filename="local.md", content_type="text/markdown", byte_size=5, status="ready"
+    )
+    env.services.settings_repo.set("knowledge_graph_enabled", "true")
+    SqliteKnowledgeGraphStore(kb_id).replace_document(
+        doc_id,
+        [
+            ChunkGraph(
+                0,
+                (ChunkEntity("Dept"), ChunkEntity("Local")),
+                (ChunkRelation("Dept", "Local", "uses", "Secret Feishu fact", 9),),
+            )
+        ],
+    )
+    assert SqliteKnowledgeGraphStore(kb_id).counts() == (2, 1)
+
+    context_before = retrieve._retrieve_context_sync(
+        env.services,
+        user_id=env.owner,
+        is_admin=False,
+        query="Dept",
+        knowledge_base_ids=[kb_id],
+        k=3,
+        char_budget=2000,
+        locale="en",
+        visible_bases=None,
+    )
+    assert "Secret Feishu fact" in context_before
+
+    # Even if cleanup has not run after disconnect, graph facts must not leak.
+    assert env.svc.repo.disconnect(env.owner, account, env.clock[0])
+    assert local_doc.id is not None
+    context_after_disconnect = retrieve._retrieve_context_sync(
+        env.services,
+        user_id=env.owner,
+        is_admin=False,
+        query="Dept",
+        knowledge_base_ids=[kb_id],
+        k=3,
+        char_budget=2000,
+        locale="en",
+        visible_bases=None,
+    )
+    assert "Secret Feishu fact" not in context_after_disconnect
+
+    env.svc._cleanup()
+    assert SqliteKnowledgeGraphStore(kb_id).counts() == (0, 0)
+    assert SqliteKnowledgeGraphStore(kb_id).document_states() == {}
+
+    # Router disconnect also removes graph rows synchronously without waiting for cron.
+    account2 = authorize(env, "wiki-2")
+    approval2 = env.svc.preview(env.owner, env.base.id, account2, scope)
+    env.svc.approve(
+        env.owner,
+        env.base.id,
+        account2,
+        scope,
+        approval2["fingerprint"],
+        schedule="manual",
+        auto_add=False,
+    )
+    [(kb_id2, doc_id2)] = env.svc.scan()
+    SqliteKnowledgeGraphStore(kb_id2).replace_document(
+        doc_id2,
+        [
+            ChunkGraph(
+                0,
+                (ChunkEntity("Dept"), ChunkEntity("Local")),
+                (ChunkRelation("Dept", "Local", "uses", "Secret Feishu fact", 9),),
+            )
+        ],
+    )
+    assert SqliteKnowledgeGraphStore(kb_id2).counts() == (2, 1)
+    assert router_mod.disconnect(account2, user=User(env.owner, "owner", "user", None), svc=env.svc) == {
+        "ok": True
+    }
+    assert SqliteKnowledgeGraphStore(kb_id2).counts() == (0, 0)
+    assert SqliteKnowledgeGraphStore(kb_id2).document_states() == {}
+
+
+def test_admin_can_list_and_pause_another_owners_shared_feishu_source(
+    environment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    from octop.api.routers import shared_feishu as router_mod
+    from octop.infra.users.identity import User
+
+    env = environment
+    account = authorize(env, "ops")
+    scope = Scope("drive_folder", "department", "Department")
+    approval = env.svc.preview(env.owner, env.base.id, account, scope)
+    source_id = env.svc.approve(
+        env.owner,
+        env.base.id,
+        account,
+        scope,
+        approval["fingerprint"],
+        schedule="daily",
+        auto_add=False,
+    )
+
+    admin = User(999, "admin", "admin", None)
+    owner_user = User(env.owner, "owner", "user", None)
+    non_owner = User(env.reader, "reader", "user", None)
+
+    with pytest.raises(HTTPException) as denied:
+        router_mod.sources(env.base.id, user=non_owner, svc=env.svc)
+    assert denied.value.status_code == 403
+
+    rows = router_mod.sources(env.base.id, user=admin, svc=env.svc)
+    assert len(rows) == 1
+    assert rows[0]["id"] == source_id
+
+    res = router_mod.update_source(
+        env.base.id,
+        source_id,
+        router_mod.SourceUpdate(active=False),
+        user=admin,
+        svc=env.svc,
+    )
+    assert res == {"ok": True}
+    assert env.svc.repo.sources(env.base.id)[0]["active"] == 0
+
+    # Admin must not reactivate another user's paused personal Feishu OAuth grant.
+    with pytest.raises(HTTPException) as resume_denied:
+        router_mod.update_source(
+            env.base.id,
+            source_id,
+            router_mod.SourceUpdate(active=True),
+            user=admin,
+            svc=env.svc,
+        )
+    assert resume_denied.value.status_code == 404
+    assert env.svc.repo.sources(env.base.id)[0]["active"] == 0
+
+    # Connection owner can resume their own source.
+    assert router_mod.update_source(
+        env.base.id,
+        source_id,
+        router_mod.SourceUpdate(active=True),
+        user=owner_user,
+        svc=env.svc,
+    ) == {"ok": True}
+    assert env.svc.repo.sources(env.base.id)[0]["active"] == 1
+
+    owner_rows = router_mod.sources(env.base.id, user=owner_user, svc=env.svc)
+    assert len(owner_rows) == 1
+    assert owner_rows[0]["owner_user_id"] == env.owner
+
+    account_cleanup_fail = authorize(env, "ops-cleanup-fail")
+
+    def fail_cleanup() -> None:
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(env.svc, "_cleanup", fail_cleanup)
+    assert router_mod.disconnect(account_cleanup_fail, user=owner_user, svc=env.svc) == {"ok": True}

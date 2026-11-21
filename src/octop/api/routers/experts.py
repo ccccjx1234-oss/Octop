@@ -40,6 +40,7 @@ from octop.infra.agents.experts.catalog import (
     preview_paths_from_expert_dir,
     read_text_file_contents,
 )
+from octop.infra.agents.experts.composer_defaults import template_composer_defaults
 from octop.infra.agents.experts.composer_files import (
     ComposerApplyReport,
     ComposerSkillCopy,
@@ -598,6 +599,32 @@ def _require_published_expert(server: Any, expert_id: str) -> Any:
     return require_published_expert(server.services, expert_id)
 
 
+def _viewer_published_composer_defaults(
+    server: Any, user_id: int, row: Any
+) -> tuple[list[str], list[str]]:
+    """Knowledge bases and connectors from a template that this user can use.
+
+    Publisher-only ids are not returned. Snapshots published before these
+    fields existed fall back to the source expert, then the same filter.
+    """
+    manifest = read_snapshot_manifest(server.services.control_file_repo, row.id)
+    runtime = getattr(server, "app_runtime", None)
+    registry = getattr(runtime, "agent_registry", None)
+    source_defaults = None
+    if registry is not None and row.source_agent_id:
+        source_defaults = (
+            list(registry.default_knowledge_base_ids(row.source_agent_id)),
+            list(registry.default_mcp_servers(row.source_agent_id)),
+        )
+    knowledge, servers = template_composer_defaults(
+        manifest, source_defaults=source_defaults
+    )
+    if registry is None:
+        return [], []
+    visible = registry.visible_composer_defaults(user_id, knowledge, servers)
+    return visible
+
+
 @router.get("/experts/published", summary="List published expert templates")
 async def list_published_experts(
     _: Any = Depends(current_user),
@@ -631,11 +658,14 @@ async def get_published_expert_avatar(
 @router.get("/experts/published/{expert_id}", summary="Get published expert template detail")
 async def get_published_expert(
     expert_id: str,
-    _: Any = Depends(current_user),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Return published-expert metadata and a previewable snapshot file inventory."""
     row = _require_published_expert(server, expert_id)
+    knowledge_base_ids, mcp_servers = _viewer_published_composer_defaults(
+        server, user.id, row
+    )
     staging = Path(tempfile.mkdtemp(prefix="octop-published-"))
     snapshot_dir = staging / "snapshot"
     try:
@@ -659,6 +689,8 @@ async def get_published_expert(
             **_published_summary_dict(row, server),
             "welcome_message": welcome_payload["welcome_message"],
             "quick_prompts": welcome_payload["quick_prompts"],
+            "knowledge_base_ids": knowledge_base_ids,
+            "mcp_servers": mcp_servers,
             "files": files,
             "file_contents": await asyncio.to_thread(
                 read_text_file_contents,
@@ -787,11 +819,22 @@ async def install_published_expert(
         policy_repo=server.services.user_policy_repo,
         paths=server.paths,
     )
+    requested_knowledge = body.knowledge_base_ids
+    requested_servers = body.mcp_servers
+    if requested_knowledge is None or requested_servers is None:
+        published = _require_published_expert(server, expert_id)
+        default_knowledge, default_servers = _viewer_published_composer_defaults(
+            server, user.id, published
+        )
+        if requested_knowledge is None:
+            requested_knowledge = default_knowledge
+        if requested_servers is None:
+            requested_servers = default_servers
     kb_ids, servers = _validated_session_defaults(
         server.app_runtime.agent_registry,
         user.id,
-        knowledge_base_ids=body.knowledge_base_ids,
-        mcp_servers=body.mcp_servers,
+        knowledge_base_ids=requested_knowledge,
+        mcp_servers=requested_servers,
     )
     patch, copies, report = _composer_apply(body, user=user, server=server)
     from octop.infra.users.groups import GroupAccess  # noqa: PLC0415

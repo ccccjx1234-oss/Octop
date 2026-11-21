@@ -18,7 +18,10 @@ from octop.infra.utils.ulid import new_ulid
 
 ADMIN_USER_ROLE_ID = "admin"
 SEEDED_USER_ROLE_ID = "user"
-BUILTIN_USER_ROLE_IDS = frozenset({ADMIN_USER_ROLE_ID, SEEDED_USER_ROLE_ID})
+YOULI_EMPLOYEE_ROLE_ID = "youli_employee"
+BUILTIN_USER_ROLE_IDS = frozenset(
+    {ADMIN_USER_ROLE_ID, SEEDED_USER_ROLE_ID, YOULI_EMPLOYEE_ROLE_ID}
+)
 
 
 def parse_string_list(raw: object) -> builtins.list[str]:
@@ -275,3 +278,24 @@ def seeded_user_role_assignment(
     preset was deleted, and new SSO or CLI users keep an empty permission set.
     """
     return role_assignment_for(db, SEEDED_USER_ROLE_ID)
+
+
+def youli_employee_role_assignment(
+    db: DatabasePool,
+) -> tuple[str, str | None, builtins.list[str], builtins.list[tuple[str, str]]]:
+    """Defaults copied onto a Huihuo employee account when it is created.
+
+    The stored template wins, so an admin edit applies to accounts created
+    afterwards. Existing accounts keep the permissions already stored on the user.
+    """
+    found = role_assignment_for(db, YOULI_EMPLOYEE_ROLE_ID)
+    if found is not None:
+        return found
+    from octop.infra.users.permissions import YOULI_EMPLOYEE_PERMISSIONS
+
+    return (
+        YOULI_EMPLOYEE_ROLE_ID,
+        "会火员工",
+        sorted(YOULI_EMPLOYEE_PERMISSIONS),
+        [],
+    )

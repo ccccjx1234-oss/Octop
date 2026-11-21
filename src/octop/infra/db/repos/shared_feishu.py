@@ -85,6 +85,13 @@ class SharedFeishuRepo:
                 == 1
             )
 
+    def abort_refresh(self, connection_id: str, old: bytes) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE kb_feishu_connections SET refreshing=0 WHERE id=? AND refreshing=1 AND token_blob=?",
+                (connection_id, old),
+            )
+
     def sources(self, kb_id: str) -> list[Any]:
         with self.db.connect() as conn:
             return list(
@@ -140,23 +147,35 @@ class SharedFeishuRepo:
                 params,
             ).fetchone()
 
-    def set_active(self, kb_id: str, source_id: str, owner: int, active: bool, when: int) -> bool:
+    def set_active(
+        self,
+        kb_id: str,
+        source_id: str,
+        owner: int,
+        active: bool,
+        when: int,
+        *,
+        skip_owner_check: bool = False,
+    ) -> bool:
+        owner_filter = "" if skip_owner_check else "AND c.owner_user_id=? "
+        params: tuple[Any, ...] = (
+            int(active),
+            "queued" if active else "paused",
+            when,
+            kb_id,
+            source_id,
+            int(active),
+            when,
+        )
+        if not skip_owner_check:
+            params = (*params, owner)
         with self.db.transaction() as conn:
             return bool(
                 conn.execute(
                     "UPDATE kb_feishu_sources SET active=?,status=?,next_sync=?,lease_token=NULL,lease_until=0 "
                     "WHERE kb_id=? AND id=? AND (?=0 OR lease_until<=?) AND EXISTS (SELECT 1 FROM kb_feishu_connections c "
-                    "WHERE c.id=connection_id AND c.owner_user_id=? AND c.token_blob IS NOT NULL)",
-                    (
-                        int(active),
-                        "queued" if active else "paused",
-                        when,
-                        kb_id,
-                        source_id,
-                        int(active),
-                        when,
-                        owner,
-                    ),
+                    f"WHERE c.id=connection_id {owner_filter}AND c.token_blob IS NOT NULL)",
+                    params,
                 ).rowcount
                 == 1
             )
@@ -185,7 +204,7 @@ class SharedFeishuRepo:
             return {
                 row["feishu_document_id"]: row
                 for row in conn.execute(
-                    "SELECT document_id,filename,content_hash,feishu_document_id,feishu_origin "
+                    "SELECT document_id,path,filename,content_hash,feishu_document_id,feishu_origin "
                     "FROM knowledge_documents WHERE feishu_source_id=?",
                     (source_id,),
                 ).fetchall()

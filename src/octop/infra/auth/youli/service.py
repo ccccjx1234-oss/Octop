@@ -35,13 +35,6 @@ from octop.infra.users.manager import UserManager
 logger = logging.getLogger(__name__)
 
 YOULI_PROVIDER_KIND = "youli"
-YOULI_ROLE_ASSIGNMENT: tuple[str, str | None, list[str], list[tuple[str, str]]] = (
-    "youli_employee",
-    "会火员工",
-    ["channels", "connector_enabled", "connector_builtin"],
-    [],
-)
-
 REASON_SESSION_REPLACED = "session_replaced"
 REASON_UPSTREAM_EXPIRED = "upstream_expired"
 _SESSION_REPLACED_MESSAGE = "当前账号已在其他设备或窗口登录，当前会话已下线，请重新登录。"
@@ -152,6 +145,11 @@ class YouliAuthService:
             extra={"audience": self._cfg.audience},
         )
         return row.id
+
+    def _youli_role_assignment(self) -> tuple[str, str | None, list[str], list[tuple[str, str]]]:
+        from octop.infra.db.repos.user_roles import youli_employee_role_assignment
+
+        return youli_employee_role_assignment(self._services.db)
 
     async def start(self, *, public_base: str) -> YouliStartResult:
         if not self.enabled:
@@ -305,12 +303,13 @@ class YouliAuthService:
         ttl = int(self._cfg.token_ttl_seconds)
         abs_expires = now + min(int(self._services.config.access_token_ttl_seconds), ttl)
         try:
+            role_id, role_name, permissions, _policies = self._youli_role_assignment()
             user_row, session, replaced_sids = self._services.youli_session_repo.login(
                 provider_id=self.ensure_provider(),
                 subject=f"youli:{issued.company_id}:{issued.employee_id}",
-                role=YOULI_ROLE_ASSIGNMENT[0],
-                role_name=YOULI_ROLE_ASSIGNMENT[1] or "",
-                permissions=YOULI_ROLE_ASSIGNMENT[2],
+                role=role_id,
+                role_name=role_name or "",
+                permissions=permissions,
                 sid=sid,
                 account_user_id=issued.user_id,
                 account_username=issued.username,
@@ -453,7 +452,7 @@ class YouliAuthService:
                     "company_id": lookup.company_id,
                     "employee_id": lookup.employee_id,
                 },
-                role_assignment=YOULI_ROLE_ASSIGNMENT,
+                role_assignment=self._youli_role_assignment(),
             )
             sid = self._reusable_sid(
                 user.id, company_id=lookup.company_id, employee_id=lookup.employee_id
@@ -481,7 +480,7 @@ class YouliAuthService:
                     provider_id=self.ensure_provider(),
                     subject=f"youli:{company_id}:{employee_id}",
                     claims={"company_id": company_id, "employee_id": employee_id},
-                    role_assignment=YOULI_ROLE_ASSIGNMENT,
+                    role_assignment=self._youli_role_assignment(),
                 )
             sid = self._reusable_sid(user.id, company_id=company_id, employee_id=employee_id)
             return lookup, user, sid

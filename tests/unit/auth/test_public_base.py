@@ -7,6 +7,7 @@ from starlette.requests import Request
 
 from octop.api.common.public_base import resolve_public_base
 from octop.infra.auth.sso.public_base import build_redirect_uri
+from octop.infra.auth.sso.public_base import callback_origin
 
 
 def _request(*, scheme: str = "http", headers: list[tuple[bytes, bytes]] | None = None) -> Request:
@@ -131,3 +132,18 @@ def test_build_redirect_uri_accepts_oauth_callback_path() -> None:
         build_redirect_uri("https://octop.example", "/api/auth/oauth/callback")
         == "https://octop.example/api/auth/oauth/callback"
     )
+
+
+def test_callback_origin_prefers_dashboard_then_current_site() -> None:
+    assert (
+        callback_origin("https://admin.example", "http://8.163.137.235:18088")
+        == "https://admin.example"
+    )
+    assert callback_origin(None, "http://8.163.137.235:18088") == (
+        "http://8.163.137.235:18088"
+    )
+    assert (
+        callback_origin("http://bad.example/path", "http://8.163.137.235:18088")
+        == "http://8.163.137.235:18088"
+    )
+    assert callback_origin("", None) is None

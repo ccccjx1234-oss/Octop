@@ -22,6 +22,7 @@ import {
   type FeishuSource,
 } from "../../api/modules/feishuKb";
 import { getAuthToken } from "../../api/request";
+import { parseApiError } from "../../utils/apiError";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { formatServerDateTime } from "../../utils/formatMessageTime";
 
@@ -336,7 +337,7 @@ export default function FeishuKbPanel({ active }: { active: boolean }) {
     const popup = window.open("", "_blank", "popup,width=600,height=720");
     if (!popup || !session) {
       popup?.close();
-      fail();
+      message.error(t(!popup ? "feishuKb.popupBlocked" : "feishuKb.failed"));
       return;
     }
     const current: Pending = {
@@ -371,8 +372,14 @@ export default function FeishuKbPanel({ active }: { active: boolean }) {
         throw new Error("invalid authorization");
       current.state = state;
       popup.location.href = parsed.href;
-    } catch {
-      cancel(current, true);
+    } catch (error) {
+      const reason = parseApiError(error)?.message;
+      message.error(
+        reason === "identity_unavailable"
+          ? t("feishuKb.needFeishuLogin")
+          : t("feishuKb.failed"),
+      );
+      cancel(current, false);
     }
   };
   useEffect(() => {
@@ -514,6 +521,14 @@ export default function FeishuKbPanel({ active }: { active: boolean }) {
           )}
           {loaded && identities.length === 0 && (
             <Typography.Text>{t("feishuKb.noIdentity")}</Typography.Text>
+          )}
+          {identities.some((item) => item.consent !== "authorized") && (
+            <Alert
+              type="info"
+              showIcon
+              message={t("feishuKb.guideTitle")}
+              description={t("feishuKb.guideBody")}
+            />
           )}
           {identities.map((item) => (
             <div key={item.provider_id}>

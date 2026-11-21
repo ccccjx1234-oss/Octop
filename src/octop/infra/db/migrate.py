@@ -1032,14 +1032,17 @@ def _create_user_role_table(db: DatabasePool) -> None:
 
 
 def _seed_user_roles(db: DatabasePool) -> None:
-    """Ensure locked built-in admin and user role templates exist.
+    """Ensure locked built-in admin, user, and Huihuo employee templates exist.
 
-    Both ids are immutable product constants matching ``users.role`` values.
+    The ids are immutable product constants matching ``users.role`` values.
     Existing users are never rewritten.
     """
     if not _table_exists(db, "user_role"):
         return
-    from octop.infra.users.permissions import BASELINE_PERMISSIONS
+    from octop.infra.users.permissions import (
+        BASELINE_PERMISSIONS,
+        YOULI_EMPLOYEE_PERMISSIONS,
+    )
 
     ts = int(time.time())
     with db.connect() as conn:
@@ -1068,6 +1071,20 @@ def _seed_user_roles(db: DatabasePool) -> None:
                 "user_role_id, user_role_name, permissions, policies, created_at, updated_at"
                 ") VALUES ('user', ?, ?, '[]', ?, ?)",
                 ("用户", payload, ts, ts),
+            )
+    with db.connect() as conn:
+        employee = conn.execute(
+            "SELECT id FROM user_role WHERE user_role_id = ?",
+            ("youli_employee",),
+        ).fetchone()
+    if employee is None:
+        payload = json.dumps(sorted(YOULI_EMPLOYEE_PERMISSIONS), ensure_ascii=False)
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO user_role("
+                "user_role_id, user_role_name, permissions, policies, created_at, updated_at"
+                ") VALUES ('youli_employee', ?, ?, '[]', ?, ?)",
+                ("会火员工", payload, ts, ts),
             )
 
 
@@ -2454,6 +2471,61 @@ def _grant_permission_keys_once(
             )
 
 
+_OLD_YOULI_EMPLOYEE_PERMISSIONS = frozenset(
+    {"channels", "connector_builtin", "connector_enabled"}
+)
+_YOULI_EMPLOYEE_MENU_FLAG = "youli_employee_menu_permissions_v1"
+
+
+def _backfill_youli_employee_menu_permissions(db: DatabasePool) -> None:
+    """Expand the original three-key Huihuo employee snapshot once.
+
+    Accounts that already differ from that snapshot are left alone, so a later
+    per-user edit is not overwritten on the next startup.
+    """
+    if not _table_exists(db, "settings") or not _table_exists(db, "users"):
+        return
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (_YOULI_EMPLOYEE_MENU_FLAG,),
+        ).fetchone()
+    if existing is not None:
+        return
+    from octop.infra.users.permissions import YOULI_EMPLOYEE_PERMISSIONS
+
+    payload = json.dumps(sorted(YOULI_EMPLOYEE_PERMISSIONS), ensure_ascii=False)
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, permissions FROM users WHERE role = ?",
+            ("youli_employee",),
+        ).fetchall()
+    ids: list[object] = []
+    for row in rows:
+        current = _parse_perm_list(row[1])
+        if current is None or frozenset(current) != _OLD_YOULI_EMPLOYEE_PERMISSIONS:
+            continue
+        ids.append(row[0])
+    with db.transaction() as conn:
+        for uid in ids:
+            conn.execute(
+                "UPDATE users SET permissions = ?, role_name = ? "
+                "WHERE id = ? AND role = ?",
+                (payload, "会火员工", uid, "youli_employee"),
+            )
+        if db.dialect == "postgresql":
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO NOTHING",
+                (_YOULI_EMPLOYEE_MENU_FLAG, "1"),
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                (_YOULI_EMPLOYEE_MENU_FLAG, "1"),
+            )
+
+
 def _grant_default_nav_permissions(db: DatabasePool) -> None:
     """Grant experts/tasks/token usage once to accounts that already had them open."""
     _grant_permission_keys_once(db, _NAV_PAGE_PERMISSIONS, _NAV_PAGE_PERMISSIONS_FLAG)
@@ -2615,5 +2687,6 @@ def run_migrations(db: DatabasePool) -> None:
     _grant_default_nav_permissions(db)
     _grant_personalization_tab_permissions(db)
     _grant_bridge_permission(db)
+    _backfill_youli_employee_menu_permissions(db)
     _expand_page_tab_permissions(db)
     _repair_connector_text_credentials(db)

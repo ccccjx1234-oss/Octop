@@ -14,7 +14,8 @@ from octop.infra.knowledge.graph import enqueue_document_graph, mark_document_re
 from octop.infra.knowledge.ocr import optional_ocr_extractor
 from octop.infra.knowledge.params import get_advanced_settings
 from octop.infra.knowledge.parse import parse_document
-from octop.infra.knowledge.plane import open_knowledge_index
+from octop.infra.knowledge.plane import open_knowledge_index, postgres_database
+from octop.infra.utils.paths import PathLayout
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,22 @@ def enqueue_index_document(services: Any, kb_id: str, doc_id: str) -> asyncio.Ta
 def reindex_all_documents(services: Any, embedding_model: str) -> None:
     """Reset every index to use ``embedding_model`` and schedule fresh work."""
     documents = services.knowledge_repo.reindex_all_documents(embedding_model)
+    docs_by_kb: dict[str, list[str]] = {}
+    for document in documents:
+        docs_by_kb.setdefault(document.kb_id, []).append(document.id)
+    database = postgres_database(services)
+    if database is not None:
+        from octop.infra.knowledge.pg_index import PgVectorKnowledgeIndex
+
+        for kb_id in docs_by_kb:
+            PgVectorKnowledgeIndex(kb_id, database).delete_kb()
+    else:
+        knowledge_dir = PathLayout.from_env().knowledge_dir
+        for kb_id, doc_ids in docs_by_kb.items():
+            if (knowledge_dir / kb_id / "index.sqlite").is_file():
+                index = open_knowledge_index(services, kb_id)
+                for doc_id in doc_ids:
+                    index.delete_doc(doc_id)
     for document in documents:
         enqueue_index_document(services, document.kb_id, document.id)
 

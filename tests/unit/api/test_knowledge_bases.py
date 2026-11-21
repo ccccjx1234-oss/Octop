@@ -1290,3 +1290,148 @@ async def test_delete_graph_requires_write_access(monkeypatch: pytest.MonkeyPatc
         )
 
     assert raised.value.code == ErrorCode.KNOWLEDGE_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_list_documents_skips_blob_existence_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octop.api.routers import knowledge_bases
+
+    rows = [
+        _Document(id="dir-1", is_dir=True, path="folder", filename="folder"),
+        _Document(id="doc-1", is_dir=False, path="folder/notes.md", filename="notes.md"),
+    ]
+
+    class _FakeService:
+        def list_documents(self, *_args: object, **_kwargs: object) -> list[_Document]:
+            return rows
+
+        def document_has_original(self, *_args: object, **_kwargs: object) -> bool:
+            raise AssertionError("list_documents must not probe remote blobs per document")
+
+    monkeypatch.setattr(knowledge_bases, "_knowledge_service", lambda _server: _FakeService())
+
+    payload = await knowledge_bases.list_documents(
+        "kb-1",
+        request=_request(),
+        prefix=None,
+        server=SimpleNamespace(services=_services()),
+        user=SimpleNamespace(id=1, is_admin=False),
+    )
+
+    assert [item["has_original"] for item in payload] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_put_feature_persists_advanced_settings_and_reindexes_on_chunk_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    from octop.api.routers import knowledge_bases
+    from octop.infra.knowledge.params import get_advanced_settings
+
+    values: dict[str, str] = {
+        "knowledge_bases_enabled": "true",
+        "knowledge_embedding_backend": "onnx",
+        "knowledge_embedding_model": "model-1",
+        "knowledge_embedding_provider_id": "",
+    }
+    reindexed: list[str] = []
+    server = SimpleNamespace(
+        services=SimpleNamespace(
+            settings_repo=SimpleNamespace(get=values.get, set=values.__setitem__),
+            provider_repo=SimpleNamespace(list_all=lambda: [], get=lambda _id: None),
+            config=None,
+        )
+    )
+    monkeypatch.setattr(knowledge_bases, "set_feature_enabled", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        knowledge_bases,
+        "get_capability",
+        lambda get, _repo=None: {
+            "feature_enabled": True,
+            "selected_model": "model-1",
+            "backend": "onnx",
+            "provider_id": "",
+            "prerequisites_ok": True,
+            "usable": True,
+            "checks": {},
+            **get_advanced_settings(get),
+        },
+    )
+    monkeypatch.setattr(
+        knowledge_bases,
+        "reindex_all_documents",
+        lambda _services, model: reindexed.append(model),
+    )
+
+    with pytest.raises(HTTPException) as bad:
+        await knowledge_bases.put_feature(
+            knowledge_bases.FeatureBody(enabled=True, chunk_size=500, chunk_overlap=500),
+            request=_request(),
+            server=server,
+            _admin=object(),
+        )
+    assert bad.value.status_code == 422
+    assert "knowledge_chunk_size" not in values
+
+    cap = await knowledge_bases.put_feature(
+        knowledge_bases.FeatureBody(
+            enabled=True,
+            chunk_size=1200,
+            chunk_overlap=200,
+            retrieval_k=5,
+            context_char_budget=4000,
+        ),
+        request=_request(),
+        server=server,
+        _admin=object(),
+    )
+    assert cap["chunk_size"] == 1200
+    assert cap["chunk_overlap"] == 200
+    assert cap["retrieval_k"] == 5
+    assert cap["context_char_budget"] == 4000
+    assert reindexed == ["model-1"]
+
+
+@pytest.mark.asyncio
+async def test_move_document_to_another_base_refreshes_graph_for_ready_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from octop.api.routers import knowledge_bases
+
+    moved = _Document(id="doc-1", path="act.md", filename="act.md", kb_id="kb-2", status="ready")
+    graph_queued: list[tuple[str, str]] = []
+
+    class _FakeService:
+        def move_document(self, *_args: object, **_kwargs: object) -> _Document:
+            return moved
+
+        def pending_file_ids(self, _doc: _Document) -> list[str]:
+            return []
+
+        def ready_file_ids(self, _doc: _Document) -> list[str]:
+            return ["doc-1"]
+
+    monkeypatch.setattr(knowledge_bases, "_knowledge_service", lambda _server: _FakeService())
+    monkeypatch.setattr(
+        knowledge_bases,
+        "mark_document_reindexed",
+        lambda _services, kb_id, doc_id: kb_id == "kb-2" and doc_id == "doc-1",
+    )
+    monkeypatch.setattr(
+        knowledge_bases,
+        "enqueue_document_graph",
+        lambda _services, kb_id, doc_id: graph_queued.append((kb_id, doc_id)),
+    )
+
+    await knowledge_bases.move_document(
+        kb_id="kb-1",
+        doc_id="doc-1",
+        body=knowledge_bases.MoveDocumentBody(target_folder="", target_kb_id="kb-2"),
+        request=_request(),
+        server=SimpleNamespace(services=_services()),
+        user=SimpleNamespace(id=7, is_admin=False),
+    )
+
+    assert graph_queued == [("kb-2", "doc-1")]

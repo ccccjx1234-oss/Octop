@@ -3567,6 +3567,27 @@ class AgentManager:
         except ValueError as exc:
             raise OctopError(ErrorCode.CONNECTOR_NOT_BOUND, str(exc)) from exc
 
+    def visible_composer_defaults(
+        self,
+        user_id: int,
+        knowledge_base_ids: list[str],
+        mcp_servers: list[str],
+    ) -> tuple[list[str], list[str]]:
+        """Intersect a published template with resources this user already has.
+
+        Knowledge bases use the same visibility check as validate_knowledge_base_ids.
+        Connectors resolve to the user's own installed instances. Nothing the
+        user cannot already use is returned.
+        """
+        from octop.infra.agents.experts.composer_defaults import (  # noqa: PLC0415
+            resolve_installer_knowledge_bases,
+        )
+
+        visible = {base.id for base in self._repos.knowledge_repo.list_visible(user_id)}
+        knowledge = resolve_installer_knowledge_bases(knowledge_base_ids, visible)
+        connectors = self._connector_svc.resolve_template_mcp_servers(user_id, mcp_servers)
+        return knowledge, connectors
+
     def assert_backend_supports_skill_packages(
         self,
         backend_spec: Any | None,

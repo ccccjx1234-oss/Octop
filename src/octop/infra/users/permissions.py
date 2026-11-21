@@ -491,6 +491,34 @@ BASELINE_PERMISSIONS: set[str] = {
     if perm.assignable and perm.category in {"settings", "nav"}
 }
 
+# Huihuo ERP employees. Explicit tab keys, not BASELINE_PERMISSIONS, so a
+# later settings or nav permission is not granted automatically.
+# Menus: experts, tasks, token usage, personalization, channels, connectors,
+# skill packages, knowledge bases, cloud collab.
+# Not included: workbench, remote desktop, or admin pages.
+YOULI_EMPLOYEE_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "experts",
+        "tasks",
+        "token_usage",
+        "skills",
+        "skill_builtin",
+        "skill_market",
+        "subagents",
+        "tools",
+        "agent_plugins",
+        "mbti",
+        "memory",
+        "channels",
+        "connector_enabled",
+        "connector_builtin",
+        "connector_custom",
+        "skill_packages",
+        "knowledge_bases",
+        "bridge",
+    }
+)
+
 
 def expand_permission_grants(keys: list[str]) -> list[str]:
     """Replace retired umbrella keys with the tab keys they cover.

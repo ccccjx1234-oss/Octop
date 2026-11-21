@@ -35,6 +35,7 @@ from octop.infra.agents.experts.publish import (
     export_agent_workspace_to_dir,
     resolve_published_expert_slug,
 )
+from octop.infra.agents.experts.composer_defaults import strip_seeded_composer_defaults
 from octop.infra.agents.experts.snapshot_store import (
     delete_snapshot,
     materialize_snapshot,
@@ -201,6 +202,8 @@ def _snapshot_meta(
     quick_prompts: tuple[dict[str, Any], ...] = (),
     task_examples: dict[str, list[str]] | None = None,
     icon_url: str | None = None,
+    knowledge_base_ids: tuple[str, ...] = (),
+    mcp_servers: tuple[str, ...] = (),
 ) -> PublishedExpertSnapshotMeta:
     return PublishedExpertSnapshotMeta(
         name=name,
@@ -214,7 +217,18 @@ def _snapshot_meta(
         welcome_message_en=welcome_message_en,
         quick_prompts=quick_prompts,
         task_examples=task_examples,
+        knowledge_base_ids=knowledge_base_ids,
+        mcp_servers=mcp_servers,
     )
+
+
+def _agent_composer_defaults(
+    registry: Any, agent_id: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Knowledge bases and connectors currently selected on the source expert."""
+    knowledge = tuple(registry.default_knowledge_base_ids(agent_id))
+    servers = tuple(registry.default_mcp_servers(agent_id))
+    return knowledge, servers
 
 
 def require_published_expert(services: Any, expert_id: str) -> PublishedExpertRow:
@@ -268,6 +282,7 @@ async def publish_agent_expert(
     color = _agent_color(registry, source.agent_id) or ""
     icon_name = getattr(source, "icon_name", None) or source.icon or ""
     source_icon_url = public_portrait_icon_url(getattr(source, "icon_url", None))
+    knowledge_base_ids, mcp_servers = _agent_composer_defaults(registry, source.agent_id)
     metadata = _snapshot_meta(
         source,
         name=name,
@@ -278,6 +293,8 @@ async def publish_agent_expert(
         welcome_message_en=welcome_message_en,
         quick_prompts=resolved_quick_prompts,
         task_examples=resolved_task_examples,
+        knowledge_base_ids=knowledge_base_ids,
+        mcp_servers=mcp_servers,
     )
     try:
         await _write_published_snapshot(
@@ -357,6 +374,7 @@ async def refresh_published_expert(
         resolved_task_examples = (
             workspace_examples if workspace_examples is not None else existing_task_examples
         )
+    knowledge_base_ids, mcp_servers = _agent_composer_defaults(registry, source.agent_id)
     await _write_published_snapshot(
         services,
         row.id,
@@ -371,6 +389,8 @@ async def refresh_published_expert(
             quick_prompts=resolved_quick_prompts,
             task_examples=resolved_task_examples,
             icon_url=source_icon_url,
+            knowledge_base_ids=knowledge_base_ids,
+            mcp_servers=mcp_servers,
         ),
         row.slug,
     )
@@ -404,9 +424,10 @@ async def install_published_expert(
 ) -> dict[str, Any]:
     """Create a private agent and seed it from the immutable published snapshot.
 
-    Composer defaults (knowledge bases / connectors) are installer-owned: the
-    snapshot does not copy them from the publisher's source agent. The installer
-    may pass their own lists on this request.
+    Composer defaults travel with the snapshot, but only the knowledge bases
+    and connector instances the installer already has are applied. Callers
+    pass that filtered selection. An explicit list on this request, including
+    an empty one, is the installer's own choice and is not merged again.
     """
     row = require_published_expert(services, expert_id)
     repo = _control_files(services)
@@ -466,6 +487,7 @@ async def install_published_expert(
                 )
             if options.quick_prompts is not None:
                 await apply_workspace_quick_prompts(workspace, options.quick_prompts)
+            await strip_seeded_composer_defaults(workspace)
 
         created = await registry.create(
             AgentCreateSpec(

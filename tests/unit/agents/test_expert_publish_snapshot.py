@@ -431,6 +431,8 @@ async def test_export_snapshot_builds_manifest_from_publish_metadata(tmp_path: P
         "icon_name": "search",
         "color": "#123456",
         "prompt_files": ["SOUL.md"],
+        "knowledge_base_ids": [],
+        "mcp_servers": [],
     }
 
 
@@ -531,7 +533,12 @@ async def test_publish_agent_expert_maps_sqlite_integrity_error(
         published_expert_repo=_Repo(),
         paths=SimpleNamespace(published_experts_dir=tmp_path),
     )
-    registry = SimpleNamespace(get_row=lambda _agent_id: None, get_config=lambda _agent_id: {})
+    registry = SimpleNamespace(
+        get_row=lambda _agent_id: None,
+        get_config=lambda _agent_id: {},
+        default_knowledge_base_ids=lambda _agent_id: [],
+        default_mcp_servers=lambda _agent_id: [],
+    )
     user = User(id=1, username="owner", role=Role.USER, display_name=None)
     source = SimpleNamespace(
         agent_id="agt",

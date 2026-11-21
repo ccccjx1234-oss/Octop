@@ -921,6 +921,36 @@ class ConnectorService:
             raise ValueError(f"mcp_servers not available for user: {unknown}")
         return list(names)
 
+    def resolve_template_mcp_servers(self, user_id: int, refs: list[str]) -> list[str]:
+        """Map a shared expert's connector refs onto this user's own instances.
+
+        Does not keep a publisher instance the caller cannot already use, and
+        does not invent a kind the caller has not installed.
+        """
+        from octop.infra.agents.experts.composer_defaults import (  # noqa: PLC0415
+            resolve_installer_mcp_servers,
+        )
+        allowed = set(self.list_active_mcp_server_names(user_id))
+        by_kind: dict[str, list[str]] = {}
+        for inst in self._repo.list_visible(user_id):
+            if is_custom_mcp_kind(inst.kind):
+                continue
+            if not personal_connector_visible(inst, user_id):
+                continue
+            if inst.status != "active" or not inst.has_credentials:
+                continue
+            by_kind.setdefault(inst.kind, []).append(inst.mcp_server_name)
+
+        def _is_catalog_kind(kind: str) -> bool:
+            return not is_custom_mcp_kind(kind) and get_catalog_entry(kind) is not None
+
+        return resolve_installer_mcp_servers(
+            refs,
+            allowed_names=allowed,
+            names_by_kind=by_kind,
+            is_catalog_kind=_is_catalog_kind,
+        )
+
     def custom_harness_configs(self, user_id: int) -> dict[str, Any]:
         if not self._repo.connector_feature_allows(user_id):
             return {}

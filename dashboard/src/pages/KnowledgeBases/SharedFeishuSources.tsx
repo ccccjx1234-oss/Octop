@@ -627,6 +627,18 @@ export default function SharedFeishuSources({
       )}
       {step === "accounts" && (
         <>
+          {!accountsLoading && connections.length === 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message={t("sharedFeishu.guideTitle")}
+              description={
+                <span style={{ whiteSpace: "pre-line" }}>
+                  {t("sharedFeishu.guideBody")}
+                </span>
+              }
+            />
+          )}
           <List
             dataSource={connections}
             loading={accountsLoading}

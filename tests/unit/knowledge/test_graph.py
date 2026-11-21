@@ -21,6 +21,8 @@ from octop.infra.knowledge.graph_store import (
     ChunkEntity,
     ChunkGraph,
     ChunkRelation,
+    GraphEntity,
+    GraphRelation,
     SqliteKnowledgeGraphStore,
 )
 from octop.infra.knowledge.index import KnowledgeIndex
@@ -387,3 +389,34 @@ def test_entity_view_lists_relations_and_source_passages(env: SimpleNamespace) -
     ]
     with pytest.raises(LookupError, match="knowledge graph entity not found"):
         graph.entity_view(env.services, env.kb_id, "nobody")
+
+
+def test_expand_query_drops_chunkless_relations_when_allowed_docs_is_set() -> None:
+    class _FakeStore:
+        def match_keys(self, _query: str) -> list[str]:
+            return ["apollo"]
+
+        def relations_of(self, keys: list[str]) -> list[GraphRelation]:
+            if "apollo" in keys:
+                return [
+                    GraphRelation("apollo", "alice", "is led by", "chunkless", 9.0, chunks=()),
+                    GraphRelation(
+                        "apollo", "bob", "depends on", "allowed", 8.0, chunks=(("x", 0),)
+                    ),
+                ]
+            return []
+
+        def entities(self, _keys: list[str]) -> dict[str, GraphEntity]:
+            return {
+                "apollo": GraphEntity("apollo", "Apollo", "concept", "", 1),
+                "alice": GraphEntity("alice", "Alice", "person", "", 1),
+                "bob": GraphEntity("bob", "Bob", "person", "", 1),
+            }
+
+        def entity_chunks(self, _key: str, *, limit: int = 20) -> list[tuple[str, int]]:
+            return []
+
+    expansion = graph.expand_query(_FakeStore(), "Who runs Apollo?", allowed_docs={"x"})  # type: ignore[arg-type]
+
+    assert expansion.facts == ("Apollo -> depends on -> Bob: allowed",)
+    assert expansion.chunks == (("x", 0),)

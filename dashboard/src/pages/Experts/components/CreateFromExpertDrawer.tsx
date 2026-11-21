@@ -122,6 +122,22 @@ interface ExpertDetail {
   file_contents?: FileContent[];
   welcome_message?: { zh?: string; en?: string };
   quick_prompts?: QuickPrompt[];
+  knowledge_base_ids?: string[];
+  mcp_servers?: string[];
+}
+
+function idList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const text = item.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
 }
 
 export type CreateFromTemplateSource =
@@ -280,7 +296,10 @@ export default function CreateFromExpertDrawer({
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [subagentPickerOpen, setSubagentPickerOpen] = useState(false);
   const [localEditPath, setLocalEditPath] = useState<string | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(
+    () => source?.kind === "published",
+  );
+  const [wasOpen, setWasOpen] = useState(open);
   const [skillPackages, setSkillPackages] = useState<SkillPackage[]>([]);
   const [skillPackagesLoading, setSkillPackagesLoading] = useState(false);
   const [colorPalette, setColorPalette] = useState<string>("rose");
@@ -325,6 +344,11 @@ export default function CreateFromExpertDrawer({
   if (promptsSourceKey !== sourceKey) {
     setPromptsSourceKey(sourceKey);
     setDetailPrompts(null);
+    if (source?.kind === "published") setDetailLoading(true);
+  }
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open && source?.kind === "published") setDetailLoading(true);
   }
   const templatePrompts = detailPrompts ?? listPrompts;
 
@@ -392,11 +416,11 @@ export default function CreateFromExpertDrawer({
         setDetailPrompts(normalizeQuickPrompts(data.quick_prompts));
         const welcome = data.welcome_message;
         const welcomeText = pickLocale(welcome, lang);
-        if (welcomeText) {
-          form.setFieldsValue({
-            welcome_message: welcomeText,
-          });
-        }
+        form.setFieldsValue({
+          ...(welcomeText ? { welcome_message: welcomeText } : {}),
+          knowledge_base_ids: idList(data.knowledge_base_ids),
+          mcp_servers: idList(data.mcp_servers),
+        });
       })
       .catch(() => {
         if (!cancelled) {
@@ -534,8 +558,12 @@ export default function CreateFromExpertDrawer({
         skill_package_ids: skillPackagesSupported
           ? values.skill_package_ids ?? []
           : [],
-        knowledge_base_ids: values.knowledge_base_ids ?? [],
-        mcp_servers: values.mcp_servers ?? [],
+        ...(source.kind !== "published" || !detailLoading
+          ? {
+              knowledge_base_ids: values.knowledge_base_ids ?? [],
+              mcp_servers: values.mcp_servers ?? [],
+            }
+          : {}),
         color: isCuratedPalette(colorPalette)
           ? expertPaletteColor(colorPalette)
           : colorPalette,
@@ -655,7 +683,7 @@ export default function CreateFromExpertDrawer({
     models,
     t("experts.defaultModelAuto"),
   );
-  const createBlocked = submitting || hasNoModels;
+  const createBlocked = submitting || hasNoModels || detailLoading;
 
   const { configFiles, skillGroups, subagentFiles } =
     groupExpertFiles(fileContents);
@@ -925,6 +953,18 @@ export default function CreateFromExpertDrawer({
             placeholder={t("experts.skillPackagesPlaceholder")}
           />
         </Form.Item>
+        {source?.kind === "published" ? (
+          <div
+            style={{
+              marginBottom: 12,
+              color: "var(--fn-text-secondary)",
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {t("experts.published.installDefaultsHint")}
+          </div>
+        ) : null}
         <ExpertComposerDefaultsFields />
 
         <MoreConfigCollapse>

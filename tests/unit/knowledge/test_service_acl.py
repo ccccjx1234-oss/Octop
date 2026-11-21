@@ -672,3 +672,35 @@ def test_clearing_a_graph_and_deleting_a_document_remove_graph_rows(
     store.mark_document("other", "ready")
     service.clear_graph(kb_id, actor_user_id=owner)
     assert service.get_graph(kb_id, actor_user_id=owner)["stats"]["built"] is False
+
+
+def test_move_across_bases_cleans_source_graph(service: KnowledgeService) -> None:
+    from octop.infra.knowledge.graph_store import (
+        ChunkEntity,
+        ChunkGraph,
+        ChunkRelation,
+        SqliteKnowledgeGraphStore,
+    )
+
+    owner, kb_id, target_id = _two_bases(service)
+    repo = service._services.knowledge_repo
+    doc = repo.get_document_by_path(kb_id, "notes/readme.md")
+    store = SqliteKnowledgeGraphStore(kb_id)
+    store.replace_document(
+        doc.id,
+        [
+            ChunkGraph(
+                ordinal=0,
+                entities=(ChunkEntity("Alice", "person"), ChunkEntity("Apollo", "product")),
+                relations=(ChunkRelation("Alice", "Apollo", "leads"),),
+            )
+        ],
+    )
+    assert store.counts() == (2, 1)
+
+    service.move_document(
+        kb_id, doc.id, actor_user_id=owner, target_folder="inbox", target_kb_id=target_id
+    )
+
+    assert store.counts() == (0, 0)
+    assert doc.id not in store.document_states()

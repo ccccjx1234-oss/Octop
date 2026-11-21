@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from contextvars import copy_context
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ from octop.infra.knowledge.graph import (
     open_knowledge_graph,
 )
 from octop.infra.knowledge.index import Hit
+from octop.infra.knowledge.params import get_advanced_settings
 from octop.infra.knowledge.plane import open_knowledge_index
 from octop.infra.knowledge.rerank import candidate_count, get_rerank_capability, rerank_scores
 
@@ -46,6 +48,13 @@ async def retrieve_context(
     visible_bases: Sequence[Any] | None = None,
 ) -> str:
     """Return formatted readable context, skipping unavailable or failed retrieval."""
+    settings_get = getattr(getattr(services, "settings_repo", None), "get", None)
+    if callable(settings_get):
+        knobs = get_advanced_settings(settings_get)
+        if k == DEFAULT_RETRIEVAL_K:
+            k = knobs["retrieval_k"]
+        if char_budget == DEFAULT_CONTEXT_CHAR_BUDGET:
+            char_budget = knobs["context_char_budget"]
     if not (query or "").strip() or not knowledge_base_ids or k <= 0 or char_budget <= 0:
         return ""
     loop = asyncio.get_running_loop()
@@ -141,8 +150,8 @@ def _retrieve_context_sync(
             document = ready_documents.get(hit.doc_id)
             if document is not None:
                 ranked.append((base, hit, document))
-        if use_graph:
-            expansion = _expand(services, kb_id, query or "")
+        if use_graph and ready_documents:
+            expansion = _expand(services, kb_id, query or "", allowed_docs=ready_documents.keys())
             facts.extend(expansion.facts)
             related.extend(
                 (base, ready_documents[doc_id], ordinal)
@@ -193,10 +202,18 @@ def _retrieve_context_sync(
     return _format_context(top, char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS])
 
 
-def _expand(services: Any, kb_id: str, query: str) -> GraphExpansion:
+def _expand(
+    services: Any,
+    kb_id: str,
+    query: str,
+    *,
+    allowed_docs: AbstractSet[str] | None = None,
+) -> GraphExpansion:
     """Graph lookups are an addition; a failure leaves plain vector retrieval."""
     try:
-        return expand_query(open_knowledge_graph(services, kb_id), query)
+        return expand_query(
+            open_knowledge_graph(services, kb_id), query, allowed_docs=allowed_docs
+        )
     except Exception:
         logger.warning("knowledge graph lookup skipped for %s", kb_id, exc_info=True)
         return GraphExpansion()

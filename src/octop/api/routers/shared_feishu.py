@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from starlette.requests import Request
 from pydantic import BaseModel, Field, model_validator
 
 from octop.api.deps import get_server, require_permission
+from octop.api.common.public_base import resolve_public_base
 from octop.infra.feishu_kb.client import FeishuError
 from octop.infra.feishu_kb.directories import DirectoryKind
 from octop.infra.feishu_kb.shared_sources import (
@@ -19,6 +22,8 @@ from octop.infra.feishu_kb.shared_sources import (
     SharedFeishuService,
 )
 from octop.infra.users.identity import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/shared")
 knowledge_user = require_permission("knowledge_bases")
@@ -104,13 +109,20 @@ def connections(
 @router.post("/connections/authorize", summary="Authorize a Feishu account for directory imports")
 def authorize(
     body: ConnectionRequest,
+    request: Request,
     authorization: str | None = Header(default=None),
     user: User = Depends(knowledge_user),
     svc: SharedFeishuService = Depends(service),
 ) -> dict[str, str]:
     with _errors():
         return {
-            "url": svc.authorize(user.id, body.provider_id, _session(authorization), body.label)
+            "url": svc.authorize(
+                user.id,
+                body.provider_id,
+                _session(authorization),
+                body.label,
+                resolve_public_base(request),
+            )
         }
 
 
@@ -136,6 +148,10 @@ def disconnect(
 ) -> dict[str, bool]:
     if not svc.repo.disconnect(user.id, connection_id, int(svc.clock())):
         raise HTTPException(status_code=404, detail="connection_unavailable")
+    try:
+        svc._cleanup()
+    except Exception:
+        logger.warning("Shared Feishu cleanup after disconnect will retry", exc_info=True)
     return {"ok": True}
 
 
@@ -162,8 +178,11 @@ def sources(
     kb_id: str, user: User = Depends(knowledge_user), svc: SharedFeishuService = Depends(service)
 ) -> list[dict[str, Any]]:
     with _errors():
-        svc.knowledge.get_writable_base(kb_id, actor_user_id=user.id)
-        return [dict(row) for row in svc.repo.sources(kb_id) if row["owner_user_id"] == user.id]
+        svc.knowledge.get_writable_base(kb_id, actor_user_id=user.id, is_admin=bool(user.is_admin))
+        rows = svc.repo.sources(kb_id)
+        if user.is_admin:
+            return [dict(row) for row in rows]
+        return [dict(row) for row in rows if row["owner_user_id"] == user.id]
 
 
 @router.post(
@@ -177,7 +196,13 @@ def preview(
     svc: SharedFeishuService = Depends(service),
 ) -> dict[str, Any]:
     with _errors():
-        return svc.preview(user.id, kb_id, body.connection_id, body.scope())
+        return svc.preview(
+            user.id,
+            kb_id,
+            body.connection_id,
+            body.scope(),
+            is_admin=bool(user.is_admin),
+        )
 
 
 @router.post(
@@ -202,6 +227,7 @@ def approve(
                 schedule=body.schedule,
                 auto_add=body.auto_add,
                 interval_minutes=body.interval_minutes,
+                is_admin=bool(user.is_admin),
             )
         }
 
@@ -215,7 +241,15 @@ def update_source(
     svc: SharedFeishuService = Depends(service),
 ) -> dict[str, bool]:
     with _errors():
-        svc.knowledge.get_writable_base(kb_id, actor_user_id=user.id)
-        if not svc.repo.set_active(kb_id, source_id, user.id, body.active, int(svc.clock())):
+        svc.knowledge.get_writable_base(kb_id, actor_user_id=user.id, is_admin=bool(user.is_admin))
+        if not svc.repo.set_active(
+            kb_id,
+            source_id,
+            user.id,
+            body.active,
+            int(svc.clock()),
+            # Only an admin pausing skips connection ownership; resuming must belong to the OAuth owner.
+            skip_owner_check=bool(user.is_admin) and not body.active,
+        ):
             raise HTTPException(status_code=404, detail="source_unavailable")
     return {"ok": True}

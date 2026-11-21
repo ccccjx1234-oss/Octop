@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from octop.infra.auth.sso.crypto import decrypt_secret, encrypt_secret
+from octop.infra.auth.sso.public_base import callback_origin
 from octop.infra.db.repos.feishu_kb import FeishuKbRepo
 from octop.infra.feishu_kb.client import FeishuClient, FeishuError, Grant, authorize_url
 
@@ -79,16 +80,19 @@ class FeishuKbService:
             httpx.Client(timeout=10.0), client_id=provider.client_id, client_secret=secret
         )
 
-    def authorize(self, user: int, provider_id: int, session: str) -> str:
+    def authorize(
+        self, user: int, provider_id: int, session: str, public_base: str = ""
+    ) -> str:
         provider = self._provider(provider_id)
         subject = self.repo.linked_subject(user, provider_id)
+        origin = callback_origin(provider.dashboard_origin, public_base)
         if (
             not subject
             or not self._subject_matches(subject, provider.client_id)
-            or not provider.dashboard_origin
+            or not origin
         ):
             raise FeishuError("identity_unavailable")
-        redirect = provider.dashboard_origin.rstrip("/") + "/feishu-kb/callback"
+        redirect = origin + "/feishu-kb/callback"
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
         now = int(self.clock())
         created = self.repo.state_create(

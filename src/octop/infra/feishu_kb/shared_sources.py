@@ -17,13 +17,16 @@ from typing import Any
 import httpx
 
 from octop.infra.auth.sso.crypto import decrypt_secret, encrypt_secret
+from octop.infra.auth.sso.public_base import callback_origin
 from octop.infra.db.repos.shared_feishu import SharedFeishuRepo
 from octop.infra.feishu_kb.client import FeishuError, Grant, authorize_url
 from octop.infra.feishu_kb.directories import DIRECTORY_SCOPES, DirectoryKind, FeishuDirectoryClient
 from octop.infra.feishu_kb.service import FeishuKbService, _hash
 from octop.infra.knowledge.blobs import KnowledgeBlobs
 from octop.infra.knowledge.gate import assert_knowledge_usable
+from octop.infra.knowledge.graph import open_knowledge_graph
 from octop.infra.knowledge.plane import open_knowledge_index
+from octop.infra.knowledge.relpath import ancestor_dirs, normalize_kb_path
 from octop.infra.knowledge.service import KnowledgeService
 from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, GroupAccess
 from octop.infra.utils.ulid import new_ulid
@@ -43,6 +46,13 @@ class Scope:
     title: str
     space: str | None = None
     include_children: bool = True
+
+
+def _safe_segment(raw: str, *, fallback: str, limit: int) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw).strip(" .")
+    if not cleaned or cleaned in {".", ".."}:
+        return fallback
+    return cleaned[:limit] or fallback
 
 
 class SharedFeishuService:
@@ -77,8 +87,7 @@ class SharedFeishuService:
                 provider = self.providers._provider(row.id)
             except FeishuError:
                 continue
-            if provider.dashboard_origin:
-                options.append({"id": provider.id, "name": provider.display_name})
+            options.append({"id": provider.id, "name": provider.display_name})
         return options
 
     def connections(self, owner: int) -> list[dict[str, Any]]:
@@ -93,11 +102,19 @@ class SharedFeishuService:
             for row in self.repo.connections(owner)
         ]
 
-    def authorize(self, owner: int, provider_id: int, session: str, label: str) -> str:
+    def authorize(
+        self,
+        owner: int,
+        provider_id: int,
+        session: str,
+        label: str,
+        public_base: str = "",
+    ) -> str:
         provider = self.providers._provider(provider_id)
-        if not provider.dashboard_origin or not label.strip():
+        origin = callback_origin(provider.dashboard_origin, public_base)
+        if not origin or not label.strip():
             raise FeishuError("provider_unavailable")
-        redirect = provider.dashboard_origin.rstrip("/") + "/feishu-kb/callback"
+        redirect = origin + "/feishu-kb/callback"
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
         now = int(self.clock())
         self.repo.store_state(
@@ -179,7 +196,12 @@ class SharedFeishuService:
             if row["expires_at"] <= int(self.clock()) + 60:
                 if not self.repo.claim_refresh(connection_id, old):
                     raise FeishuError("connection_unavailable")
-                grant = client.refresh(credentials["refresh"])
+                try:
+                    grant = client.refresh(credentials["refresh"])
+                except FeishuError as exc:
+                    if exc.retryable:
+                        self.repo.abort_refresh(connection_id, old)
+                    raise
                 if not self.repo.finish_refresh(
                     connection_id, old, self._encrypt(grant), int(self.clock()) + grant.expires_in
                 ):
@@ -213,10 +235,18 @@ class SharedFeishuService:
             "next_page": result.next_page,
         }
 
-    def _approval(self, owner: int, kb_id: str, connection_id: str, scope: Scope) -> dict[str, Any]:
+    def _approval(
+        self,
+        owner: int,
+        kb_id: str,
+        connection_id: str,
+        scope: Scope,
+        *,
+        is_admin: bool = False,
+    ) -> dict[str, Any]:
         if not scope.title:
             raise FeishuError("invalid_directory_name")
-        base = self.knowledge.get_writable_base(kb_id, actor_user_id=owner)
+        base = self.knowledge.get_writable_base(kb_id, actor_user_id=owner, is_admin=is_admin)
         assert_knowledge_usable(self.services.settings_repo.get, self.services.provider_repo)
         with self.client(owner, connection_id) as (client, access):
             docs, skipped = client.discover(
@@ -276,8 +306,16 @@ class SharedFeishuService:
             "fingerprint": fingerprint,
         }
 
-    def preview(self, owner: int, kb_id: str, connection_id: str, scope: Scope) -> dict[str, Any]:
-        return self._approval(owner, kb_id, connection_id, scope)
+    def preview(
+        self,
+        owner: int,
+        kb_id: str,
+        connection_id: str,
+        scope: Scope,
+        *,
+        is_admin: bool = False,
+    ) -> dict[str, Any]:
+        return self._approval(owner, kb_id, connection_id, scope, is_admin=is_admin)
 
     def approve(
         self,
@@ -290,6 +328,7 @@ class SharedFeishuService:
         schedule: str,
         auto_add: bool,
         interval_minutes: int | None = None,
+        is_admin: bool = False,
     ) -> str:
         if schedule == "interval":
             if (
@@ -306,7 +345,7 @@ class SharedFeishuService:
             db_interval = 0
         else:
             raise FeishuError("invalid_schedule")
-        approval = self._approval(owner, kb_id, connection_id, scope)
+        approval = self._approval(owner, kb_id, connection_id, scope, is_admin=is_admin)
         if not secrets.compare_digest(approval["fingerprint"], fingerprint):
             raise FeishuError("review_changed")
         now = int(self.clock())
@@ -367,7 +406,9 @@ class SharedFeishuService:
             or (user.role != "admin" and "knowledge_bases" not in user.permissions)
         ):
             raise FeishuError("owner_unavailable")
-        self.knowledge.get_writable_base(kb_id, actor_user_id=owner)
+        self.knowledge.get_writable_base(
+            kb_id, actor_user_id=owner, is_admin=(user.role == "admin")
+        )
         assert_knowledge_usable(self.services.settings_repo.get, self.services.provider_repo)
         connection_id = source["connection_id"]
         connection = self.repo.connection(owner, connection_id)
@@ -375,6 +416,12 @@ class SharedFeishuService:
             raise FeishuError("connection_unavailable")
         allowed = set(json.loads(source["approved_document_ids"]))
         published = self.repo.published(source["id"])
+        existing_non_dirs = {
+            row.path
+            for row in self.services.knowledge_repo.list_documents(kb_id)
+            if not row.is_dir and getattr(row, "feishu_source_id", None) != source["id"]
+        }
+        folders_to_ensure: set[str] = set()
         blobs = KnowledgeBlobs.from_services(self.services)
         inserted = []
         keep: set[str] = set()
@@ -421,26 +468,45 @@ class SharedFeishuService:
                     },
                     ensure_ascii=False,
                 )
+                safe_title = _safe_segment(doc.title, fallback="Feishu", limit=70)
+                filename = f"{safe_title} · {source['id'][-8:]}-{_hash(doc.id)[:8]}.txt"
+                folder_parts = [
+                    _safe_segment(segment, fallback="Folder", limit=80)
+                    for segment in doc.path
+                    if segment and segment.strip()
+                ]
+                folder_prefix = normalize_kb_path("/".join(folder_parts)) if folder_parts else ""
+                if folder_prefix:
+                    candidate_path = f"{folder_prefix}/{filename}"
+                    if any(anc in existing_non_dirs for anc in ancestor_dirs(candidate_path)):
+                        folder_prefix = ""
+                rel_path = f"{folder_prefix}/{filename}" if folder_prefix else filename
                 old = published.get(doc.id)
+                old_path = (
+                    old["path"]
+                    if old is not None and "path" in old.keys()
+                    else (old["filename"] if old is not None else "")
+                )
                 if (
                     old is not None
                     and old["content_hash"] == digest
                     and old["feishu_origin"] == origin
+                    and old_path == rel_path
                 ):
+                    if folder_prefix:
+                        folders_to_ensure.add(folder_prefix)
                     keep.add(old["document_id"])
                     continue
+                if folder_prefix:
+                    folders_to_ensure.add(folder_prefix)
                 document_id = new_ulid()
-                safe_title = (
-                    re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", doc.title).strip(" .")[:70] or "Feishu"
-                )
-                filename = f"{safe_title} · {source['id'][-8:]}-{_hash(doc.id)[:8]}.txt"
                 self.repo.retain_blob(document_id, kb_id, filename, source["lease_until"] + 3600)
                 blobs.write(kb_id, document_id, filename, raw)
                 inserted.append(
                     (
                         document_id,
                         kb_id,
-                        filename,
+                        rel_path,
                         filename,
                         len(raw),
                         digest,
@@ -461,6 +527,16 @@ class SharedFeishuService:
             skipped=skipped,
             approved_document_ids=json.dumps(sorted(allowed)),
         ):
+            for folder_prefix in sorted(folders_to_ensure):
+                try:
+                    self.services.knowledge_repo.ensure_folder(kb_id, folder_prefix)
+                except ValueError:
+                    logger.warning(
+                        "Failed to ensure Feishu folder %s in knowledge base %s",
+                        folder_prefix,
+                        kb_id,
+                        exc_info=True,
+                    )
             return [(kb_id, row[0]) for row in inserted]
         return []
 
@@ -469,6 +545,9 @@ class SharedFeishuService:
         for row in self.repo.cleanup(int(self.clock()), 25):
             try:
                 open_knowledge_index(self.services, row["kb_id"]).delete_doc(row["document_id"])
+                open_knowledge_graph(self.services, row["kb_id"]).delete_document(
+                    row["document_id"]
+                )
                 blobs.delete(row["kb_id"], row["document_id"], row["filename"])
             except Exception:
                 logger.warning("Shared Feishu cleanup will retry", exc_info=True)

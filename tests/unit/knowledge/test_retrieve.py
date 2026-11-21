@@ -210,3 +210,16 @@ def test_retrieve_context_survives_a_broken_graph(tmp_path, monkeypatch) -> None
 
     assert "Apollo team" in context
     assert "is funded by" not in context
+
+
+def test_retrieve_context_uses_advanced_settings_defaults(tmp_path, monkeypatch) -> None:
+    services, owner, base = _graph_services(tmp_path, monkeypatch)
+    services.settings_repo.set("knowledge_retrieval_k", "2")
+    services.settings_repo.set("knowledge_context_char_budget", "500")
+
+    context = _retrieve(services, owner, base)
+
+    assert "Apollo overview" in context
+    assert "Apollo timeline" in context
+    assert "Apollo risks" not in context
+    assert "Apollo team" not in context

@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -49,7 +49,11 @@ from octop.infra.knowledge.gate import (
     get_capability,
     set_feature_enabled,
 )
-from octop.infra.knowledge.graph import enqueue_base_graph
+from octop.infra.knowledge.graph import (
+    enqueue_base_graph,
+    enqueue_document_graph,
+    mark_document_reindexed,
+)
 from octop.infra.knowledge.graph_extract import (
     get_graph_capability,
     graph_models,
@@ -61,6 +65,11 @@ from octop.infra.knowledge.ocr import (
     get_ocr_capability,
     set_ocr_settings,
     validate_ocr_settings,
+)
+from octop.infra.knowledge.params import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    set_advanced_settings,
 )
 from octop.infra.knowledge.rerank import (
     get_rerank_capability,
@@ -122,6 +131,30 @@ class FeatureBody(BaseModel):
         default=None, description="Provider whose chat model extracts entities and relations."
     )
     graph_model: str | None = Field(default=None, description="Chat model ID used for extraction.")
+    chunk_size: int | None = Field(
+        default=None,
+        ge=100,
+        le=8000,
+        description="Character length of each indexed chunk.",
+    )
+    chunk_overlap: int | None = Field(
+        default=None,
+        ge=0,
+        lt=8000,
+        description="Character overlap between consecutive chunks.",
+    )
+    retrieval_k: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="Default maximum passages returned per knowledge search.",
+    )
+    context_char_budget: int | None = Field(
+        default=None,
+        ge=500,
+        le=50_000,
+        description="Default character budget for formatted retrieval context.",
+    )
 
 
 class GraphStats(BaseModel):
@@ -622,6 +655,33 @@ async def put_feature(
     previous_ocr = get_ocr_capability(
         server.services.settings_repo.get, server.services.provider_repo
     )
+    has_advanced = any(
+        value is not None
+        for value in (
+            body.chunk_size,
+            body.chunk_overlap,
+            body.retrieval_k,
+            body.context_char_budget,
+        )
+    )
+    if body.chunk_size is not None or body.chunk_overlap is not None:
+        raw_size = previous.get("chunk_size")
+        raw_overlap = previous.get("chunk_overlap")
+        next_size = int(
+            body.chunk_size
+            if body.chunk_size is not None
+            else (raw_size if raw_size is not None else DEFAULT_CHUNK_SIZE)
+        )
+        next_overlap = int(
+            body.chunk_overlap
+            if body.chunk_overlap is not None
+            else (raw_overlap if raw_overlap is not None else DEFAULT_CHUNK_OVERLAP)
+        )
+        if next_overlap < 0 or next_overlap >= next_size:
+            raise HTTPException(
+                status_code=422,
+                detail="chunk_overlap must be non-negative and smaller than chunk_size",
+            )
     selected_backend = (body.backend or "onnx").strip().lower()
     if body.enabled and selected_backend == "onnx":
         try:
@@ -684,6 +744,15 @@ async def put_feature(
                 provider_id=body.ocr_provider_id,
                 provider_repo=server.services.provider_repo,
             )
+        if has_advanced:
+            set_advanced_settings(
+                server.services.settings_repo.get,
+                server.services.settings_repo.set,
+                chunk_size=body.chunk_size,
+                chunk_overlap=body.chunk_overlap,
+                retrieval_k=body.retrieval_k,
+                context_char_budget=body.context_char_budget,
+            )
     except (RuntimeError, ValueError) as exc:
         raise _map_knowledge_error(
             exc, locale=resolve_request_locale(request), server=server
@@ -698,12 +767,17 @@ async def put_feature(
         previous_ocr.get(key) != capability["ocr"].get(key)
         for key in ("enabled", "backend", "model", "provider_id")
     )
+    chunk_changed = has_advanced and (
+        previous.get("chunk_size") != capability.get("chunk_size")
+        or previous.get("chunk_overlap") != capability.get("chunk_overlap")
+    )
     if body.enabled and (
         not previous["feature_enabled"]
         or previous["selected_model"] != capability["selected_model"]
         or previous["backend"] != capability["backend"]
         or previous["provider_id"] != capability["provider_id"]
         or ocr_changed
+        or chunk_changed
     ):
         reindex_all_documents(server.services, capability["selected_model"])
     return capability
@@ -1028,7 +1102,7 @@ async def list_documents(
 ) -> list[dict[str, Any]]:
     try:
         return [
-            _row_payload(document, server=server)
+            _row_payload(document, has_original=not document.is_dir, server=server)
             for document in _knowledge_service(server).list_documents(
                 kb_id, actor_user_id=user.id, is_admin=_is_admin(user), prefix=prefix
             )
@@ -1315,6 +1389,18 @@ async def move_document(
         if document.kb_id != kb_id and server.services is not None:
             for pending_id in service.pending_file_ids(document):
                 enqueue_index_document(server.services, document.kb_id, pending_id)
+            ready_finder = getattr(service, "ready_file_ids", None)
+            if callable(ready_finder):
+                for ready_id in ready_finder(document):
+                    try:
+                        if mark_document_reindexed(server.services, document.kb_id, ready_id):
+                            enqueue_document_graph(server.services, document.kb_id, ready_id)
+                    except Exception:
+                        logger.warning(
+                            "knowledge graph refresh skipped after move for %s",
+                            ready_id,
+                            exc_info=True,
+                        )
         return _row_payload(document, server=server)
     except Exception as exc:
         raise _map_knowledge_error(

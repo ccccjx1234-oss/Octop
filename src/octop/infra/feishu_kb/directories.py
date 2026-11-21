@@ -18,8 +18,8 @@ DIRECTORY_SCOPES = (
     "drive:drive:readonly",
     "offline_access",
 )
-MAX_SCAN_ENTRIES = 200
-MAX_SCAN_PAGES = 40
+MAX_SCAN_ENTRIES = 1000
+MAX_SCAN_PAGES = 100
 _ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
 
 

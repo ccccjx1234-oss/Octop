@@ -104,8 +104,12 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.7
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     if [ -n "$APT_MIRROR" ]; then \
-        printf 'Types: deb\nURIs: https://%s/debian\nSuites: trixie trixie-updates\nComponents: main contrib non-free non-free-firmware\n\nTypes: deb\nURIs: https://%s/debian-security\nSuites: trixie-security\nComponents: main contrib non-free non-free-firmware\n' \
-            "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list.d/debian.sources; \
+        case "$APT_MIRROR" in \
+            http://*|https://*) apt_uri="$APT_MIRROR" ;; \
+            *) apt_uri="https://$APT_MIRROR" ;; \
+        esac; \
+        printf 'Types: deb\nURIs: %s/debian\nSuites: trixie trixie-updates\nComponents: main contrib non-free non-free-firmware\n\nTypes: deb\nURIs: %s/debian-security\nSuites: trixie-security\nComponents: main contrib non-free non-free-firmware\n' \
+            "$apt_uri" "$apt_uri" > /etc/apt/sources.list.d/debian.sources; \
     fi \
     && apt-get update && apt-get install -y --no-install-recommends \
         bubblewrap \
@@ -156,13 +160,29 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ENV PATH="/app/.venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 
-COPY src/ ./src/
-COPY --from=frontend-builder /build/src/octop/dashboard/ ./src/octop/dashboard/
-
-COPY .env.example ./
 COPY deploy/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY deploy/docker/bake-desktop.sh /usr/local/bin/bake-desktop.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/bake-desktop.sh
+
+# 仅拷贝桌面安装脚本及其静态资源，在全量业务源码之前烘焙中文字体与桌面层，
+# 避免每次修改业务代码击穿桌面 + Chromium 的长耗时缓存。
+# full 只装桌面包，不启动 Xvnc。lite 写明未捆绑桌面和浏览器。
+COPY src/octop/infra/control/desktop/scripts/ ./src/octop/infra/control/desktop/scripts/
+ARG OCTOP_IMAGE_VARIANT=full
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    if [ "$OCTOP_IMAGE_VARIANT" = "lite" ]; then \
+      mkdir -p /etc/octop \
+      && printf '%s\n' '{"desktop": false, "browser": false, "laya": false}' \
+        > /etc/octop/bundled-components.json; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
+      && bash /usr/local/bin/bake-desktop.sh; \
+    fi
+
+COPY src/ ./src/
+COPY --from=frontend-builder /build/src/octop/dashboard/ ./src/octop/dashboard/
+COPY .env.example ./
 
 # pynput 在 import 时会连接 X。full 的无头构建只确认包已安装，不加载后端。
 ARG OCTOP_IMAGE_VARIANT=full
@@ -177,24 +197,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
        else \
          uv sync --frozen --no-dev \
            --extra browser --extra desktop --extra local-embedding --extra knowledge-ocr \
-         && .venv/bin/python -c "import cv2, fastembed, huggingface_hub, mss, rapidocr, onnxruntime, pymupdf; import importlib.util; assert importlib.util.find_spec('pynput')" \
-         && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk; \
+         && .venv/bin/python -c "import cv2, fastembed, huggingface_hub, mss, rapidocr, onnxruntime, pymupdf; import importlib.util; assert importlib.util.find_spec('pynput')"; \
        fi \
-    && if dpkg -s build-essential >/dev/null 2>&1; then \
-         # 依赖层已卸掉编译器。lite 没有 apt 列表，未安装就跳过。
-         apt-get purge -y --auto-remove build-essential; \
-       fi \
-    && rm -rf /var/lib/apt/lists/* /tmp/*
-
-# full 只装桌面包，不启动 Xvnc。lite 写明未捆绑桌面和浏览器。
-ARG OCTOP_IMAGE_VARIANT=full
-RUN if [ "$OCTOP_IMAGE_VARIANT" = "lite" ]; then \
-      mkdir -p /etc/octop \
-      && printf '%s\n' '{"desktop": false, "browser": false, "laya": false}' \
-        > /etc/octop/bundled-components.json; \
-    else \
-      bash /usr/local/bin/bake-desktop.sh; \
-    fi
+    && rm -rf /tmp/*
 
 RUN mkdir -p /data/.octop
 

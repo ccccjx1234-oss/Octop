@@ -39,3 +39,19 @@ def parse_strict_origin(value: str | None) -> str | None:
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.username:
         raise ValueError("dashboard_origin must be an origin (scheme + host)")
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def callback_origin(configured: str | None, public_base: str | None) -> str | None:
+    """Origin for a browser OAuth callback.
+
+    An explicit dashboard origin wins. Otherwise use the site the user is on,
+    the same way Feishu login builds its redirect.
+    """
+    for candidate in (configured, public_base):
+        try:
+            origin = parse_strict_origin(candidate)
+        except ValueError:
+            continue
+        if origin:
+            return origin
+    return None

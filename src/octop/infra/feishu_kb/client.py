@@ -23,9 +23,10 @@ _DOCUMENT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 class FeishuError(Exception):
     """Sanitized upstream failure, safe to record without response contents."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, retryable: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ def _data(response: httpx.Response) -> dict[str, object]:
         raise FeishuError("invalid_response")
     code = body.get("code", 0)
     if code not in (0, "0"):
-        raise FeishuError("upstream_error")
+        raise FeishuError("upstream_error", retryable=(code in (99991400, "99991400")))
     result = body.get("data", body)
     if not isinstance(result, dict):
         raise FeishuError("invalid_response")
@@ -111,9 +112,10 @@ class FeishuClient:
                 json={**fields, "client_id": self._client_id, "client_secret": self._client_secret},
             )
         except httpx.RequestError:
-            raise FeishuError("token_unavailable") from None
+            raise FeishuError("token_unavailable", retryable=True) from None
         if not response.is_success:
-            raise FeishuError("token_unavailable")
+            transient = response.status_code == 429 or response.status_code >= 500
+            raise FeishuError("token_unavailable", retryable=transient)
         data = _data(response)
         access = data.get("access_token")
         refresh = data.get("refresh_token")

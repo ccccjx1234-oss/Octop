@@ -114,13 +114,17 @@ async def test_install_published_expert_accepts_create_options(
     assert (config.get("backend") or {}).get("type") == "local_shell"
 
 
-async def test_install_published_expert_does_not_copy_source_composer_defaults(
+async def test_install_published_expert_applies_only_visible_composer_defaults(
     env: tuple[Any, Any, dict[str, str]],
 ) -> None:
     client, server, owner_auth, peer_auth, source_agent_id = await _owner_and_peer(env)
     source = (await client.get(f"/api/agents/{source_agent_id}", headers=owner_auth)).json()
-    owner_kb = server.services.knowledge_repo.create_base(
-        owner_user_id=source["user_id"], name="Publisher KB"
+    owner_id = source["user_id"]
+    private_kb = server.services.knowledge_repo.create_base(
+        owner_user_id=owner_id, name="Publisher private KB"
+    )
+    shared_kb = server.services.knowledge_repo.create_base(
+        owner_user_id=owner_id, name="Shared KB", shared=True
     )
     owner_connector = await client.post(
         "/api/connector-instances",
@@ -132,21 +136,21 @@ async def test_install_published_expert_does_not_copy_source_composer_defaults(
         },
     )
     assert owner_connector.status_code == 201, owner_connector.text
+    owner_mcp = owner_connector.json()["mcp_server_name"]
     patched = await client.patch(
         f"/api/agents/{source_agent_id}",
         headers=owner_auth,
         json={
-            "knowledge_base_ids": [owner_kb.id],
-            "mcp_servers": [owner_connector.json()["mcp_server_name"]],
+            "knowledge_base_ids": [private_kb.id, shared_kb.id],
+            "mcp_servers": [owner_mcp],
         },
     )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["knowledge_base_ids"] == [owner_kb.id]
 
     published = await client.post(
         f"/api/agents/{source_agent_id}/publish-expert",
         headers=owner_auth,
-        json={"name": "Published without composer defaults"},
+        json={"name": "Published with composer defaults"},
     )
     assert published.status_code == 201, published.text
     expert_id = published.json()["id"]
@@ -155,26 +159,41 @@ async def test_install_published_expert_does_not_copy_source_composer_defaults(
     card = next(row for row in listed.json() if row["id"] == expert_id)
     assert "knowledge_base_ids" not in card
     assert "mcp_servers" not in card
+
+    owner_detail = await client.get(f"/api/experts/published/{expert_id}", headers=owner_auth)
+    assert owner_detail.status_code == 200, owner_detail.text
+    assert owner_detail.json()["knowledge_base_ids"] == [private_kb.id, shared_kb.id]
+    assert owner_detail.json()["mcp_servers"] == [owner_mcp]
+
     detail = await client.get(f"/api/experts/published/{expert_id}", headers=peer_auth)
     assert detail.status_code == 200, detail.text
-    assert "knowledge_base_ids" not in detail.json()
-    assert "mcp_servers" not in detail.json()
+    assert detail.json()["knowledge_base_ids"] == [shared_kb.id]
+    assert detail.json()["mcp_servers"] == []
+    assert private_kb.id not in detail.text
+    assert owner_mcp not in detail.text
 
     installed = await client.post(
         f"/api/experts/published/{expert_id}/install",
         headers=peer_auth,
-        json={"name": "Fork without inherited defaults"},
+        json={"name": "Fork with visible defaults"},
     )
     assert installed.status_code == 201, installed.text
-    fork = (
-        await client.get(f"/api/agents/{installed.json()['agent_id']}", headers=peer_auth)
-    ).json()
-    assert fork["knowledge_base_ids"] == []
+    installed_id = installed.json()["agent_id"]
+    fork = (await client.get(f"/api/agents/{installed_id}", headers=peer_auth)).json()
+    assert fork["knowledge_base_ids"] == [shared_kb.id]
     assert fork["mcp_servers"] == []
+    assert private_kb.id not in fork["knowledge_base_ids"]
 
-    peer_kb = server.services.knowledge_repo.create_base(
-        owner_user_id=fork["user_id"], name="Installer KB"
-    )
+    workspace = server.app_runtime.agent_registry.workspace_for_agent(installed_id)
+    assert workspace is not None
+    from octop.infra.agents.experts.catalog import WORKSPACE_MANIFEST_PATH
+
+    manifest_text = await workspace.aread_text(WORKSPACE_MANIFEST_PATH)
+    assert manifest_text is not None
+    assert private_kb.id not in manifest_text
+    assert owner_mcp not in manifest_text
+    assert shared_kb.id not in manifest_text
+
     peer_connector = await client.post(
         "/api/connector-instances",
         headers=peer_auth,
@@ -185,14 +204,63 @@ async def test_install_published_expert_does_not_copy_source_composer_defaults(
         },
     )
     assert peer_connector.status_code == 201, peer_connector.text
-    mcp_name = peer_connector.json()["mcp_server_name"]
+    peer_mcp = peer_connector.json()["mcp_server_name"]
+    peer_detail = await client.get(f"/api/experts/published/{expert_id}", headers=peer_auth)
+    assert peer_detail.status_code == 200, peer_detail.text
+    assert peer_detail.json()["mcp_servers"] == [peer_mcp]
+    assert owner_mcp not in peer_detail.text
+
+    inherited = await client.post(
+        f"/api/experts/published/{expert_id}/install",
+        headers=peer_auth,
+        json={"name": "Fork after connector installed"},
+    )
+    assert inherited.status_code == 201, inherited.text
+    inherited_agent = (
+        await client.get(f"/api/agents/{inherited.json()['agent_id']}", headers=peer_auth)
+    ).json()
+    assert inherited_agent["knowledge_base_ids"] == [shared_kb.id]
+    assert inherited_agent["mcp_servers"] == [peer_mcp]
+    assert private_kb.id not in inherited_agent["knowledge_base_ids"]
+    assert owner_mcp not in inherited_agent["mcp_servers"]
+
+    cleared = await client.post(
+        f"/api/experts/published/{expert_id}/install",
+        headers=peer_auth,
+        json={
+            "name": "Fork with cleared defaults",
+            "knowledge_base_ids": [],
+            "mcp_servers": [],
+        },
+    )
+    assert cleared.status_code == 201, cleared.text
+    cleared_agent = (
+        await client.get(f"/api/agents/{cleared.json()['agent_id']}", headers=peer_auth)
+    ).json()
+    assert cleared_agent["knowledge_base_ids"] == []
+    assert cleared_agent["mcp_servers"] == []
+
+    forged = await client.post(
+        f"/api/experts/published/{expert_id}/install",
+        headers=peer_auth,
+        json={
+            "name": "Fork forged private resources",
+            "knowledge_base_ids": [private_kb.id],
+            "mcp_servers": [owner_mcp],
+        },
+    )
+    assert forged.status_code == 404, forged.text
+
+    peer_kb = server.services.knowledge_repo.create_base(
+        owner_user_id=fork["user_id"], name="Installer KB"
+    )
     picked = await client.post(
         f"/api/experts/published/{expert_id}/install",
         headers=peer_auth,
         json={
             "name": "Fork with installer picks",
             "knowledge_base_ids": [peer_kb.id],
-            "mcp_servers": [mcp_name],
+            "mcp_servers": [peer_mcp],
         },
     )
     assert picked.status_code == 201, picked.text
@@ -200,9 +268,29 @@ async def test_install_published_expert_does_not_copy_source_composer_defaults(
         await client.get(f"/api/agents/{picked.json()['agent_id']}", headers=peer_auth)
     ).json()
     assert chosen["knowledge_base_ids"] == [peer_kb.id]
-    assert chosen["mcp_servers"] == [mcp_name]
-    assert owner_kb.id not in chosen["knowledge_base_ids"]
-    assert owner_connector.json()["mcp_server_name"] not in chosen["mcp_servers"]
+    assert chosen["mcp_servers"] == [peer_mcp]
+    assert private_kb.id not in chosen["knowledge_base_ids"]
+    assert shared_kb.id not in chosen["knowledge_base_ids"]
+    assert owner_mcp not in chosen["mcp_servers"]
+
+    narrowed = await client.patch(
+        f"/api/agents/{source_agent_id}",
+        headers=owner_auth,
+        json={"knowledge_base_ids": [private_kb.id], "mcp_servers": [owner_mcp]},
+    )
+    assert narrowed.status_code == 200, narrowed.text
+    refreshed = await client.post(
+        f"/api/experts/published/{expert_id}/refresh",
+        headers=owner_auth,
+        json={},
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    after_refresh = await client.get(f"/api/experts/published/{expert_id}", headers=peer_auth)
+    assert after_refresh.status_code == 200, after_refresh.text
+    assert after_refresh.json()["knowledge_base_ids"] == []
+    assert after_refresh.json()["mcp_servers"] == [peer_mcp]
+    assert private_kb.id not in after_refresh.text
+    assert owner_mcp not in after_refresh.text
 
 
 @posix_only

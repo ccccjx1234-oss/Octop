@@ -580,12 +580,14 @@ class KnowledgeService:
         return cast(KnowledgeDocumentRow, result)
 
     def _discard_copies(self, kb_id: str, rows: list[KnowledgeDocumentRow]) -> None:
-        """Best-effort removal of originals and chunks a base no longer owns."""
+        """Best-effort removal of originals, chunks, and graph rows a base no longer owns."""
         index = open_knowledge_index(self._services, kb_id)
+        graph = open_knowledge_graph(self._services, kb_id)
         blobs = self._blobs()
         for row in rows:
             try:
                 index.delete_doc(row.id)
+                graph.delete_document(row.id)
                 blobs.delete(kb_id, row.id, row.filename)
             except Exception:
                 logger.warning(
@@ -598,6 +600,14 @@ class KnowledgeService:
             row.id
             for row in self._repo.list_subtree(document)
             if not row.is_dir and row.status == "pending"
+        ]
+
+    def ready_file_ids(self, document: KnowledgeDocumentRow) -> list[str]:
+        """Files of a document or folder that are ready with reusable chunks."""
+        return [
+            row.id
+            for row in self._repo.list_subtree(document)
+            if not row.is_dir and row.status == "ready"
         ]
 
     def move_document(
@@ -700,9 +710,7 @@ class KnowledgeService:
         return [
             document.id
             for document in self._repo.list_documents(kb_id)
-            if document.status == "ready"
-            and not document.is_dir
-            and not getattr(document, "feishu_source_id", None)
+            if document.status == "ready" and not document.is_dir
         ]
 
     def delete_base(self, kb_id: str, *, actor_user_id: int, is_admin: bool = False) -> None:

@@ -192,6 +192,28 @@ def test_reindex_all_updates_base_model_marks_documents_pending_and_enqueues(
     assert enqueued == [(kb.id, doc.id)]
 
 
+def test_reindex_all_clears_existing_sqlite_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOP_HOME", str(tmp_path / "home"))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    repo = KnowledgeRepo(pool)
+    owner_id = UserRepo(pool).create(username="owner", password_hash="h", role="user")
+    kb = repo.create_base(owner_user_id=owner_id, name="Docs", embedding_model="old-model")
+    doc = repo.create_document(
+        kb_id=kb.id, filename="notes.md", content_type="text/markdown", byte_size=5
+    )
+    KnowledgeIndex(kb.id).replace_doc_chunks(doc.id, ["stale"], [[1.0, 0.0]])
+    repo.update_document(doc.id, status="ready", chunk_count=1)
+    services = SimpleNamespace(knowledge_repo=repo)
+    monkeypatch.setattr(jobs, "enqueue_index_document", lambda *_a: None)
+
+    jobs.reindex_all_documents(services, "new-model")
+
+    assert KnowledgeIndex(kb.id).list_doc_chunks(doc.id) == []
+
+
 def test_resume_pending_index_jobs_resets_processing_and_enqueues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -86,12 +87,7 @@ def build_document_graph(
     """Extract one indexed document's chunks and replace its part of the graph."""
     store = open_knowledge_graph(services, kb_id)
     document = services.knowledge_repo.get_document(doc_id)
-    if (
-        document is None
-        or document.kb_id != kb_id
-        or document.is_dir
-        or getattr(document, "feishu_source_id", None)
-    ):
+    if document is None or document.kb_id != kb_id or document.is_dir:
         store.delete_document(doc_id)
         return
     store.mark_document(doc_id, STATUS_PROCESSING)
@@ -217,8 +213,18 @@ def _mentions(query: str, key: str) -> bool:
     return False
 
 
+def _relation_allowed(relation: GraphRelation, allowed_docs: AbstractSet[str] | None) -> bool:
+    if allowed_docs is None:
+        return True
+    return any(doc_id in allowed_docs for doc_id, _ in relation.chunks)
+
+
 def expand_query(
-    store: KnowledgeGraphStore, query: str, *, max_facts: int = MAX_FACTS
+    store: KnowledgeGraphStore,
+    query: str,
+    *,
+    max_facts: int = MAX_FACTS,
+    allowed_docs: AbstractSet[str] | None = None,
 ) -> GraphExpansion:
     """Find entities named in *query* and collect their relations and passages.
 
@@ -233,7 +239,11 @@ def expand_query(
     if not seeds:
         return GraphExpansion()
     seeds = sorted(seeds, key=lambda key: (-len(key), key))[:_MAX_SEEDS]
-    direct = store.relations_of(seeds)
+    direct = [
+        relation
+        for relation in store.relations_of(seeds)
+        if _relation_allowed(relation, allowed_docs)
+    ]
     neighbors: dict[str, None] = {}
     for relation in direct:
         for end in (relation.source, relation.target):
@@ -245,6 +255,7 @@ def expand_query(
         relation
         for relation in (store.relations_of(near) if near else [])
         if (relation.source, relation.target, relation.label) not in known
+        and _relation_allowed(relation, allowed_docs)
     ]
     # Each list is already sorted by weight.
     stated: list[GraphRelation] = [*direct, *indirect][:max_facts]
@@ -259,10 +270,12 @@ def expand_query(
     chunks: dict[tuple[str, int], None] = {}
     for item in direct:
         for ref in item.chunks:
-            chunks.setdefault(ref)
+            if allowed_docs is None or ref[0] in allowed_docs:
+                chunks.setdefault(ref)
     for seed in seeds:
         for ref in store.entity_chunks(seed):
-            chunks.setdefault(ref)
+            if allowed_docs is None or ref[0] in allowed_docs:
+                chunks.setdefault(ref)
     return GraphExpansion(facts=tuple(facts), chunks=tuple(chunks))
 
 

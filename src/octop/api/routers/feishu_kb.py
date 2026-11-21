@@ -6,9 +6,11 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 
 from octop.api.deps import current_user, get_server
+from octop.api.common.public_base import resolve_public_base
 from octop.api.routers.shared_feishu import router as shared_router
 from octop.infra.feishu_kb.client import FeishuError
 from octop.infra.feishu_kb.service import FeishuKbService
@@ -62,6 +64,7 @@ def status(user: User = Depends(current_user), server: Any = Depends(get_server)
 @router.post("/authorize", summary="Begin owner-bound Feishu document authorization")
 def authorize(
     body: AuthorizeRequest,
+    request: Request,
     authorization: str | None = Header(None),
     user: User = Depends(current_user),
     server: Any = Depends(get_server),
@@ -72,6 +75,7 @@ def authorize(
             user.id,
             body.provider_id,
             _session(authorization),
+            resolve_public_base(request),
         )
     }
 

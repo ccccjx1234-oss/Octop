@@ -19,6 +19,7 @@ from octop.infra.agents.experts.catalog import (
     MANIFEST_FILENAME,
     read_workspace_manifest_bytes,
 )
+from octop.infra.agents.experts.composer_defaults import normalize_id_list
 from octop.infra.agents.subagents.catalog import slugify
 from octop.infra.db.repos.published_experts import PublishedExpertRepo, PublishedExpertRow
 from octop.infra.errors import ErrorCode, OctopError
@@ -74,6 +75,8 @@ class PublishedExpertSnapshotMeta:
     quick_prompts: tuple[dict[str, Any], ...] = ()
     task_examples: dict[str, list[str]] | None = None
     icon_url: str | None = None
+    knowledge_base_ids: tuple[str, ...] = ()
+    mcp_servers: tuple[str, ...] = ()
 
 
 def assert_can_mutate_published(row: PublishedExpertRow, user: User) -> None:
@@ -228,6 +231,10 @@ def _manifest_from_metadata(
         data["quick_prompts"] = list(metadata.quick_prompts)
     if metadata.task_examples is not None:
         data["task_examples"] = metadata.task_examples
+    # Resource ids stay in the server snapshot. Install strips them from the
+    # workspace copy and only applies the ones the installer can already use.
+    data["knowledge_base_ids"] = normalize_id_list(list(metadata.knowledge_base_ids))
+    data["mcp_servers"] = normalize_id_list(list(metadata.mcp_servers))
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
