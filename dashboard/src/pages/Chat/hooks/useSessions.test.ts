@@ -131,6 +131,30 @@ describe("useSessions agent switch", () => {
     );
   });
 
+  it("does not cache a superseded stream refresh", async () => {
+    const row = threadRow("thr_open");
+    listMock.mockResolvedValueOnce([row]);
+    const { result } = renderHook(() => useSessions("agent-a"));
+    await waitFor(() => expect(result.current.sessions).toHaveLength(1));
+    let resolve = (_rows: (typeof row)[]) => {};
+    listMock.mockReturnValueOnce(
+      new Promise<(typeof row)[]>((resolveRows) => {
+        resolve = resolveRows;
+      }),
+    );
+    let current = true;
+    await act(async () => {
+      const oldRefresh = result.current.fetchSessions(
+        row.thread_id,
+        () => current,
+      );
+      current = false;
+      resolve([{ ...row, title: "Stale title" }]);
+      await oldRefresh;
+    });
+    expect(result.current.sessions[0].name).not.toBe("Stale title");
+  });
+
   it("ensureThreadInList returns unknown on probe network errors", async () => {
     listMock
       .mockResolvedValueOnce([]) // initial fetch for agent

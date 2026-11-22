@@ -119,7 +119,11 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import { useListPanelCollapsed } from "../../hooks/useListPanelCollapsed";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import PageShell from "../../layouts/PageShell";
-import { apiErrorMessage, isNotFoundApiError } from "../../utils/apiError";
+import {
+  apiErrorMessage,
+  isNotFoundApiError,
+  parseApiError,
+} from "../../utils/apiError";
 import { saveBlobAsFile } from "../../utils/saveBlobAsFile";
 import { createDetailRequestGate } from "../../utils/detailRequestGate";
 import { getDocKind, type DocKind } from "../../utils/docKind";
@@ -1281,7 +1285,8 @@ export default function KnowledgeBasesPage() {
   };
 
   const saveBase = async () => {
-    const values = await baseForm.validateFields();
+    const values = await baseForm.validateFields().catch(() => undefined);
+    if (!values) return;
     if (baseVisibility === "groups" && baseGroupIds.length === 0) {
       message.error(t("resourceVisibility.needGroup"));
       return;
@@ -1334,6 +1339,12 @@ export default function KnowledgeBasesPage() {
         t(editingBaseId ? "knowledgeBases.updated" : "knowledgeBases.created"),
       );
     } catch (error) {
+      if (parseApiError(error)?.code === "KNOWLEDGE_NAME_TAKEN") {
+        baseForm.setFields([
+          { name: "name", errors: [t("apiErrors.KNOWLEDGE_NAME_TAKEN")] },
+        ]);
+        return;
+      }
       message.error(apiErrorMessage(error, t("knowledgeBases.saveFailed"), t));
     }
   };
@@ -2185,7 +2196,10 @@ export default function KnowledgeBasesPage() {
         message.success(t("knowledgeBases.editDocumentSuccess"));
       }
       setTextEditorOpen(false);
-      await loadDetail(selected.id);
+      await Promise.all([
+        loadDetail(selected.id),
+        textEditorMode === "create" ? loadBases() : undefined,
+      ]);
     } catch (error) {
       message.error(
         apiErrorMessage(

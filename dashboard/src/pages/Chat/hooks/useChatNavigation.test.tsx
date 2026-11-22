@@ -35,10 +35,18 @@ const sessionListenerRef: {
   current: ((event: StoreSessionEvent) => void) | null;
 } = { current: null };
 const invalidateHistoryMock = vi.fn();
+const streamListenerRef: {
+  current: ((event: StoreSessionEvent) => void) | null;
+} = { current: null };
 
 vi.mock("./chatStore", () => ({
   getSnapshot: () => ({ messages: [], isStreaming: false }),
-  onStreamEvent: () => () => undefined,
+  onStreamEvent: (listener: (event: StoreSessionEvent) => void) => {
+    streamListenerRef.current = listener;
+    return () => {
+      streamListenerRef.current = null;
+    };
+  },
   onSessionEvent: (listener: (event: StoreSessionEvent) => void) => {
     sessionListenerRef.current = listener;
     return () => {
@@ -254,6 +262,59 @@ describe("useChatNavigation proactive session events", () => {
       expect(invalidateHistoryMock).toHaveBeenCalledWith("thr_open");
       expect(loadHistory).toHaveBeenCalledWith("thr_open");
     });
+  });
+
+  it("reconciles the list and history when the server is still active at local stream end", async () => {
+    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const openThread = session("thr_open");
+    const fetchSessions = vi
+      .fn()
+      .mockResolvedValueOnce([{ ...openThread, turnActive: true }])
+      .mockResolvedValue([{ ...openThread, turnActive: false }]);
+    renderWithMocks(loadHistory, fetchSessions);
+    loadHistory.mockClear();
+
+    streamListenerRef.current?.({
+      kind: "streamEnd",
+      sessionId: openThread.id,
+    });
+
+    await waitFor(() => {
+      expect(fetchSessions).toHaveBeenCalledTimes(2);
+      expect(invalidateHistoryMock).toHaveBeenCalledWith(openThread.id);
+      expect(loadHistory).toHaveBeenCalledWith(openThread.id);
+    });
+  });
+
+  it("abandons an old stream refresh when a new turn starts in the same thread", async () => {
+    vi.useFakeTimers();
+    try {
+      const loadHistory = vi.fn().mockResolvedValue(undefined);
+      const openThread = session("thr_open");
+      const fetchSessions = vi
+        .fn()
+        .mockResolvedValue([{ ...openThread, turnActive: true }]);
+      renderWithMocks(loadHistory, fetchSessions);
+      loadHistory.mockClear();
+
+      streamListenerRef.current?.({
+        kind: "streamEnd",
+        sessionId: openThread.id,
+      });
+      const isCurrent = fetchSessions.mock.calls[0][1] as () => boolean;
+      expect(isCurrent()).toBe(true);
+      streamListenerRef.current?.({
+        kind: "streamStart",
+        sessionId: openThread.id,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(isCurrent()).toBe(false);
+      expect(fetchSessions).toHaveBeenCalledTimes(1);
+      expect(loadHistory).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes the list but not history for another thread", async () => {

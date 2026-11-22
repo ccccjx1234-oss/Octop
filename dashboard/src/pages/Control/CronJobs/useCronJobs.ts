@@ -17,6 +17,7 @@ import {
   scheduleFieldFromTrigger,
 } from "./onceSchedule";
 import { message } from "@/utils/antdMessage";
+import { apiErrorMessage, parseApiError } from "../../../utils/apiError";
 
 import {
   defaultModelFromForm,
@@ -390,7 +391,24 @@ export function useCronJobs() {
     void fetchJobs({ soft: false });
   }, [activeAgentId, canManageJobs, fetchJobs]);
 
-  const createJob = async (values: CronJobFormValues) => {
+  const reportSaveError = (
+    error: unknown,
+    onInvalidTrigger?: (text: string) => void,
+  ) => {
+    if (activeAgentRef.current !== activeAgentId) return;
+    if (parseApiError(error)?.code === "CRON_TRIGGER_INVALID") {
+      const text = t("apiErrors.CRON_TRIGGER_INVALID");
+      if (onInvalidTrigger) onInvalidTrigger(text);
+      else message.error(text);
+      return;
+    }
+    message.error(apiErrorMessage(error, t("common.saveFailed"), t));
+  };
+
+  const createJob = async (
+    values: CronJobFormValues,
+    onInvalidTrigger?: (text: string) => void,
+  ) => {
     if (!activeAgentId) return false;
     try {
       const created = await octopCronApi.create(
@@ -407,12 +425,16 @@ export function useCronJobs() {
       return true;
     } catch (error) {
       console.error("Failed to create cron job", error);
-      message.error(t("common.saveFailed"));
+      reportSaveError(error, onInvalidTrigger);
       return false;
     }
   };
 
-  const updateJob = async (jobId: string, values: CronJobFormValues) => {
+  const updateJob = async (
+    jobId: string,
+    values: CronJobFormValues,
+    onInvalidTrigger?: (text: string) => void,
+  ) => {
     if (!activeAgentId) return false;
     const original = jobs.find((j) => j.id === jobId);
     const body = toOctopPatchBody(values);
@@ -461,7 +483,7 @@ export function useCronJobs() {
           prev.map((j) => (j.id === jobId ? original : j)),
         );
       }
-      message.error(t("common.saveFailed"));
+      reportSaveError(error, onInvalidTrigger);
       return false;
     }
   };

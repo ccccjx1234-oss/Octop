@@ -12,6 +12,8 @@ import {
 } from "./useSessions";
 import { EMPTY_CHAT_SESSION_KEY } from "../constants";
 
+const TURN_SETTLE_DELAYS_MS = [250, 750, 2000, 4000];
+
 interface UseChatNavigationParams {
   routeAgentId: string | undefined;
   threadId: string | undefined;
@@ -23,7 +25,10 @@ interface UseChatNavigationParams {
   loadHistory: (threadId: string) => Promise<void>;
   clearMessages: () => void;
   ensureThreadInList: (threadId: string) => Promise<ThreadProbeResult>;
-  fetchSessions: (activeId?: string) => Promise<Session[]>;
+  fetchSessions: (
+    activeId?: string,
+    isCurrent?: () => boolean,
+  ) => Promise<Session[]>;
   refreshAgents: (opts?: { silent?: boolean }) => Promise<void>;
 }
 
@@ -91,15 +96,43 @@ export function useChatNavigation({
   }, [refreshAgents]);
 
   useEffect(() => {
-    return chatStore.onStreamEvent((event) => {
-      if (
-        event.kind === "streamEnd" &&
-        event.sessionId === (activeThreadId ?? "")
-      ) {
-        void fetchSessions(activeThreadId ?? undefined);
+    if (!activeThreadId) return;
+    const id = activeThreadId;
+    let refreshVersion = 0;
+    const refreshEndedTurn = async (version: number) => {
+      const isCurrent = () => version === refreshVersion;
+      const readSession = async () =>
+        (await fetchSessions(id, isCurrent)).find(
+          (session) => session.id === id,
+        );
+      const session = await readSession();
+      if (!session?.turnActive) return;
+      // Stop seals the local stream before the server leaves its turn.
+      for (const delay of TURN_SETTLE_DELAYS_MS) {
+        if (!isCurrent()) return;
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (!isCurrent()) return;
+        const current = await readSession();
+        if (!isCurrent() || !current) return;
+        if (!current.turnActive) {
+          // Pick up the persisted partial reply after the server settles.
+          chatStore.invalidateHistory(id);
+          void loadHistory(id);
+          return;
+        }
       }
+    };
+
+    const unsubscribe = chatStore.onStreamEvent((event) => {
+      if (event.sessionId !== id) return;
+      const version = ++refreshVersion;
+      if (event.kind === "streamEnd") void refreshEndedTurn(version);
     });
-  }, [activeThreadId, fetchSessions]);
+    return () => {
+      refreshVersion += 1;
+      unsubscribe();
+    };
+  }, [activeThreadId, fetchSessions, loadHistory]);
 
   // A proactive run (cron) created or wrote to a thread outside the chat socket:
   // refresh the list — and the open thread's history — without a page reload.

@@ -17,14 +17,15 @@ import type { KnowledgeCapability } from "../../api/modules/knowledgeBases";
 import KnowledgeBasesPage from "./index";
 
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: translate }),
+  useTranslation: () => ({ t: translate, i18n: { language: "zh" } }),
 }));
 
 vi.mock("../../hooks/useServerTimezone", () => ({
   useServerTimezone: () => "UTC",
 }));
 
-const translate = (key: string) => key;
+const translate = (key: string, values?: { count?: number }) =>
+  key === "knowledgeBases.documentCount" ? `${key} ${values?.count}` : key;
 
 const unavailableCapability: KnowledgeCapability = {
   feature_enabled: true,
@@ -88,6 +89,119 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+it("shows required and duplicate name errors in the creation drawer", async () => {
+  vi.spyOn(knowledgeBasesApi, "list").mockResolvedValue([]);
+  vi.spyOn(knowledgeBasesApi, "getCapability").mockResolvedValue({
+    ...unavailableCapability,
+    usable: true,
+  });
+  const create = vi
+    .spyOn(knowledgeBasesApi, "create")
+    .mockRejectedValue(
+      new Error(
+        'Request failed: 409 - {"error":{"code":"KNOWLEDGE_NAME_TAKEN"}}',
+      ),
+    );
+  renderPage();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "knowledgeBases.create" }),
+  );
+  const drawer = within(await screen.findByRole("dialog"));
+  const submit = drawer.getByRole("button", { name: "common.create" });
+  fireEvent.click(submit);
+  expect(await drawer.findByText("knowledgeBases.nameRequired")).toBeVisible();
+  expect(create).not.toHaveBeenCalled();
+
+  fireEvent.change(drawer.getByLabelText("knowledgeBases.name"), {
+    target: { value: "Existing name" },
+  });
+  fireEvent.click(submit);
+  expect(
+    await drawer.findByText("apiErrors.KNOWLEDGE_NAME_TAKEN"),
+  ).toBeVisible();
+  expect(create).toHaveBeenCalledOnce();
+});
+
+it("updates the sidebar count after creating a text file", async () => {
+  const base = {
+    id: "kb1",
+    owner_user_id: 2,
+    name: "Local files",
+    description: "",
+    default_open: false,
+    shared: false,
+    icon_name: "",
+    embedding_model: "existing-model",
+    embedding_dim: 384,
+    doc_count: 0,
+    max_documents: 10,
+    created_at: 1,
+    updated_at: 1,
+  };
+  const document = {
+    id: "doc1",
+    kb_id: base.id,
+    filename: "notes.md",
+    content_type: "text/markdown",
+    byte_size: 0,
+    content_hash: "",
+    status: "ready" as const,
+    error_message: "",
+    chunk_count: 0,
+    created_at: 1,
+    updated_at: 1,
+  };
+  let created = false;
+  const currentBase = () => ({ ...base, doc_count: Number(created) });
+  vi.spyOn(knowledgeBasesApi, "list").mockImplementation(async () => [
+    currentBase(),
+  ]);
+  vi.spyOn(knowledgeBasesApi, "get").mockImplementation(async () =>
+    currentBase(),
+  );
+  vi.spyOn(knowledgeBasesApi, "listDocuments").mockImplementation(async () =>
+    created ? [document] : [],
+  );
+  vi.spyOn(knowledgeBasesApi, "getCapability").mockResolvedValue({
+    ...unavailableCapability,
+    usable: true,
+  });
+  vi.spyOn(sharedFeishuApi, "list").mockResolvedValue([]);
+  vi.spyOn(sharedFeishuApi, "connections").mockResolvedValue({
+    connections: [],
+    providers: [],
+  });
+  vi.spyOn(knowledgeBasesApi, "createTextDocument").mockImplementation(
+    async () => {
+      created = true;
+      return document;
+    },
+  );
+
+  renderPage();
+  expect(
+    await screen.findByText("knowledgeBases.documentCount 0"),
+  ).toBeVisible();
+  const [createButton] = await screen.findAllByRole("button", {
+    name: "knowledgeBases.createFile",
+  });
+  await waitFor(() => expect(createButton).toBeEnabled());
+  fireEvent.click(createButton);
+  const drawer = within(await screen.findByRole("dialog"));
+  fireEvent.change(
+    drawer.getByRole("textbox", { name: "knowledgeBases.filename" }),
+    {
+      target: { value: "notes" },
+    },
+  );
+  fireEvent.click(drawer.getByRole("button", { name: "common.save" }));
+
+  expect(await screen.findByText("notes.md")).toBeVisible();
+  expect(
+    await screen.findByText("knowledgeBases.documentCount 1"),
+  ).toBeVisible();
 });
 
 it("keeps existing files visible when embedding is unavailable", async () => {

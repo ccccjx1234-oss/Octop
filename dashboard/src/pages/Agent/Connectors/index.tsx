@@ -1753,7 +1753,17 @@ function ConnectorConfigDrawer({
             <Form.Item
               name="token"
               label={t("connectors.token", "访问 Token")}
-              rules={secretFieldRules(secretRequired)}
+              rules={
+                secretRequired
+                  ? [
+                      {
+                        required: true,
+                        whitespace: true,
+                        message: t("connectors.tokenRequired"),
+                      },
+                    ]
+                  : []
+              }
               extra={
                 configuredExtra(preview, "token_configured", t) ??
                 (!hideFieldGuide && manualUrl ? (

@@ -7620,6 +7620,7 @@
     "defaultOpenLockedBadge": "Default on",
     "defaultOpenLockedHint": "Marked default-open for your account. Auto-injected on IM and Cron when no connectors are picked; Dashboard / Cron with explicit picks follow the selection.",
     "token": "Access token",
+    "tokenRequired": "Enter an access token",
     "getToken": "Get token",
     "goToAuthorize": "Authorize",
     "accessTokenManual": "Or paste access token manually",

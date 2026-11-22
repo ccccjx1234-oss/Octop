@@ -34,7 +34,7 @@ import {
 import ExpertColorPicker from "../../../components/ExpertColorPicker";
 import AgentTrajectoryField from "./AgentTrajectoryField";
 import MoreConfigCollapse from "./MoreConfigCollapse";
-import { apiErrorMessage } from "../../../utils/apiError";
+import { apiErrorMessage, parseApiError } from "../../../utils/apiError";
 import {
   expertPaletteColor,
   parseStoredColor,
@@ -459,7 +459,8 @@ export default function CreateFromExpertDrawer({
 
   const handleCreate = async () => {
     if (!source) return;
-    const values = await form.validateFields();
+    const values = await form.validateFields().catch(() => undefined);
+    if (!values) return;
     if (expertVisibility === "groups" && expertGroupIds.length === 0) {
       message.error(t("resourceVisibility.needGroup"));
       return;
@@ -481,17 +482,6 @@ export default function CreateFromExpertDrawer({
         return;
       }
     }
-    if (shouldProbeRootDir(values.backend_choice, values.root_dir)) {
-      const probe = await probeRootDir(values.root_dir ?? "/");
-      if (!probe.ok) {
-        message.error(
-          `${rootDirProbeMessage(probe, t)}\n${t(
-            "experts.rootDirProbe.guidance",
-          )}`,
-        );
-        return;
-      }
-    }
     const autoWorkspaceDir = form.getFieldValue("workspace_dir_auto");
     const workspaceSelection = createWorkspaceSelection({
       backendChoice: values.backend_choice,
@@ -501,28 +491,36 @@ export default function CreateFromExpertDrawer({
       agentId: values.agent_id,
     });
     const workspaceDir = workspaceSelection.workspaceDir;
-    if (
-      workspaceDir &&
-      shouldProbeWorkspaceDir(
-        values.backend_choice,
-        workspaceDir,
-        autoWorkspaceDir,
-      )
-    ) {
-      const probe = await probeRootDir(workspaceDir);
-      if (!probe.ok) {
-        message.error(
-          `${rootDirProbeMessage(probe, t)}\n${t(
-            "experts.rootDirProbe.guidance",
-          )}`,
-        );
-        return;
-      }
-    }
+    const checkDirectory = async (path: string) => {
+      const probe = await probeRootDir(path);
+      if (probe.ok) return true;
+      message.error(
+        `${rootDirProbeMessage(probe, t)}\n${t(
+          "experts.rootDirProbe.guidance",
+        )}`,
+      );
+      return false;
+    };
     setSubmitting(true);
     let bwrapToast: { kind: "success" | "warning"; text: string } | null = null;
     try {
-      if (shouldProbeRootDir(values.backend_choice, values.root_dir)) {
+      const probeRoot = shouldProbeRootDir(
+        values.backend_choice,
+        values.root_dir,
+      );
+      if (probeRoot && !(await checkDirectory(values.root_dir ?? "/"))) return;
+      if (
+        workspaceDir &&
+        shouldProbeWorkspaceDir(
+          values.backend_choice,
+          workspaceDir,
+          autoWorkspaceDir,
+        ) &&
+        !(await checkDirectory(workspaceDir))
+      ) {
+        return;
+      }
+      if (probeRoot) {
         const bwrap = await ensureBubblewrapAfterProbe();
         const kind = ensureBwrapToastKind(bwrap.status);
         if (kind !== "none") {
@@ -659,6 +657,12 @@ export default function CreateFromExpertDrawer({
       form.resetFields();
       onCreated(body.agent_id, body.name);
     } catch (err) {
+      if (parseApiError(err)?.code === "AGENT_NAME_TAKEN") {
+        form.setFields([
+          { name: "name", errors: [t("apiErrors.AGENT_NAME_TAKEN")] },
+        ]);
+        return;
+      }
       message.error(apiErrorMessage(err, t("experts.createFailed"), t));
     } finally {
       setSubmitting(false);

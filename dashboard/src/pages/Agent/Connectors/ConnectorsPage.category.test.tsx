@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { connectorsApi } from "../../../api/modules/connectors";
 
 import type {
   ConnectorCatalogEntry,
@@ -35,10 +36,10 @@ const { catalog, instances } = vi.hoisted(() => {
       category: "travel",
     },
     {
-      kind: "docs",
-      name: "Docs",
-      description: "",
-      auth_kind: "api_key",
+      kind: "tencent-docs",
+      name: "Tencent Docs",
+      description: "Read and write Tencent Docs",
+      auth_kind: "personal_token",
       doc_url: "",
       icon: "",
       color: "#000",
@@ -156,13 +157,13 @@ describe("ConnectorsPage category pills", () => {
     );
     expect(screen.getByText("Notion")).toBeInTheDocument();
     expect(screen.getByText("Amap")).toBeInTheDocument();
-    expect(screen.getByText("Docs")).toBeInTheDocument();
+    expect(screen.getByText("Tencent Docs")).toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "connectors.category.travel" }),
     );
     expect(screen.queryByText("Notion")).not.toBeInTheDocument();
-    expect(screen.queryByText("Docs")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tencent Docs")).not.toBeInTheDocument();
     expect(screen.getByText("Amap")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "connectors.tabCustom" }));
@@ -170,5 +171,76 @@ describe("ConnectorsPage category pills", () => {
       screen.queryByRole("button", { name: "connectors.categoryAll" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("custom-tab")).toBeInTheDocument();
+  });
+
+  it.each(["", "   "])(
+    "shows a required message for an empty token (%j)",
+    async (token) => {
+      const user = userEvent.setup();
+      const authInfo = vi
+        .spyOn(connectorsApi, "authInfo")
+        .mockRejectedValue(new Error());
+      const create = vi.spyOn(connectorsApi, "createInstance");
+      try {
+        renderPage();
+        await user.click(
+          screen.getByRole("tab", { name: "connectors.tabBuiltin" }),
+        );
+        await user.click(screen.getByText("Tencent Docs"));
+        if (token)
+          await user.type(screen.getByLabelText("connectors.token"), token);
+        await user.click(screen.getByRole("button", { name: "common.save" }));
+        expect(
+          await screen.findByText("connectors.tokenRequired"),
+        ).toBeVisible();
+        expect(create).not.toHaveBeenCalled();
+      } finally {
+        authInfo.mockRestore();
+        create.mockRestore();
+      }
+    },
+  );
+
+  it("lets an existing connection keep its saved token when the field is left empty", async () => {
+    const user = userEvent.setup();
+    const stored: ConnectorInstance = {
+      ...instances[0],
+      instance_id: "stored-docs",
+      kind: "tencent-docs",
+      display_name: "My Tencent Docs",
+      description: "Office documents",
+    };
+    const authInfo = vi
+      .spyOn(connectorsApi, "authInfo")
+      .mockRejectedValue(new Error());
+    const detail = vi.spyOn(connectorsApi, "getInstance").mockResolvedValue({
+      ...stored,
+      config: {},
+      credentials_preview: { token_configured: true },
+    });
+    const save = vi
+      .spyOn(connectorsApi, "patchInstance")
+      .mockResolvedValue(stored);
+    instances.push(stored);
+    try {
+      renderPage();
+      await user.click(screen.getByText("My Tencent Docs"));
+      await waitFor(() => {
+        expect(screen.getByLabelText("connectors.displayName")).toHaveValue(
+          "My Tencent Docs",
+        );
+      });
+      expect(screen.getByLabelText("connectors.token")).toHaveValue("");
+      await user.click(screen.getByRole("button", { name: "common.save" }));
+      expect(save).toHaveBeenCalledWith(
+        stored.instance_id,
+        expect.objectContaining({ credentials: {} }),
+      );
+    } finally {
+      instances.pop();
+      authInfo.mockRestore();
+      detail.mockRestore();
+      save.mockRestore();
+    }
   });
 });

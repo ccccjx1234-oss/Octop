@@ -436,7 +436,7 @@ export function useSessions(agentId: string | null) {
   );
 
   const fetchSessions = useCallback(
-    async (activeThreadId?: string) => {
+    async (activeThreadId?: string, isCurrent: () => boolean = () => true) => {
       if (!agentId) {
         setModuleSessions([]);
         setModuleLoading(false);
@@ -448,13 +448,13 @@ export function useSessions(agentId: string | null) {
           agentId,
           limit,
         );
-        if (_storeAgentId !== agentId) return _sessions;
+        if (_storeAgentId !== agentId || !isCurrent()) return _sessions;
         applySessionPage(valid, more, limit, agentId, activeThreadId);
         return visibleSessionsForAgent(valid, agentId, activeThreadId);
       } catch {
         return _sessions;
       } finally {
-        if (_storeAgentId === agentId) {
+        if (_storeAgentId === agentId && isCurrent()) {
           setModuleLoading(false);
         }
       }

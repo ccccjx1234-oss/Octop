@@ -7620,6 +7620,7 @@
     "defaultOpenLockedBadge": "默认打开",
     "defaultOpenLockedHint": "连接器已设为默认打开（仅你自己的对话）。IM 与未选手动连接器的 Cron 会自动携带；Dashboard / 已选手动的 Cron 以选择为准。",
     "token": "访问 Token",
+    "tokenRequired": "请输入访问 Token",
     "getToken": "获取 Token",
     "goToAuthorize": "前往授权",
     "accessTokenManual": "或手动粘贴 Access Token",

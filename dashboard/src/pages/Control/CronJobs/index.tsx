@@ -222,12 +222,21 @@ function CronJobsPage() {
   };
 
   const handleSubmit = async (values: CronJobFormValues) => {
-    let success = false;
-    if (editingJob?.id) {
-      success = await updateJob(editingJob.id, values);
-    } else {
-      success = await createJob(values);
-    }
+    const onInvalidTrigger =
+      values._scheduleMode === "custom"
+        ? (text: string) => {
+            const name: ["schedule", "cron"] = ["schedule", "cron"];
+            if (
+              form.getFieldValue("_scheduleMode") === "custom" &&
+              form.getFieldValue(name) === values.schedule?.cron
+            ) {
+              form.setFields([{ name, errors: [text] }]);
+            }
+          }
+        : undefined;
+    const success = editingJob?.id
+      ? await updateJob(editingJob.id, values, onInvalidTrigger)
+      : await createJob(values, onInvalidTrigger);
     if (success) {
       setDrawerOpen(false);
       setEditingJob(null);
