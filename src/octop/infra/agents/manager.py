@@ -2778,12 +2778,14 @@ class AgentManager:
                 if long_name in requested or (short in requested and short not in viewer_own)
             }
             if owner_backed:
-                owner_configs = self._connector_svc.custom_harness_configs(owner_id)
+                owner_configs = self._connector_svc.custom_harness_configs(
+                    owner_id, token_user_id=uid
+                )
                 for name in owner_backed:
                     spec = owner_configs.get(name)
                     if isinstance(spec, dict):
                         custom_configs[name] = spec
-                        load_user[name] = owner_id
+                        load_user[name] = uid
 
         tool_set: frozenset[str] = getattr(agent, "_mcp_tool_name_set", frozenset())
         attached_raw = getattr(agent, "_mcp_attached_user", None)
@@ -2792,7 +2794,14 @@ class AgentManager:
         for name in names:
             has_tools = any(tool_name.startswith(f"{name}_") for tool_name in tool_set)
             expected = load_user.get(name)
-            if has_tools and (expected is None or attached.get(name) == expected):
+            prev_spec = agent.config.mcp_server_configs.get(name)
+            cur_spec = custom_configs.get(name)
+            headers_changed = (
+                isinstance(cur_spec, dict)
+                and isinstance(prev_spec, dict)
+                and cur_spec.get("headers") != prev_spec.get("headers")
+            )
+            if has_tools and not headers_changed and (expected is None or attached.get(name) == expected):
                 continue
             missing_tools.append(name)
         logger.info(
