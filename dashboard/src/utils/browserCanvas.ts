@@ -3,6 +3,52 @@ export interface CanvasPoint {
   y: number;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Compute the rendered content rectangle inside a canvas element, accounting
+ * for CSS `object-fit` letterboxing (`contain` / `scale-down` / `cover`).
+ */
+function getRenderedContentRect(
+  canvas: HTMLCanvasElement,
+  rect: DOMRect,
+): { left: number; top: number; width: number; height: number } {
+  const objectFit =
+    typeof window !== "undefined" && typeof window.getComputedStyle === "function"
+      ? window.getComputedStyle(canvas).objectFit
+      : "";
+
+  if (
+    canvas.width > 0 &&
+    canvas.height > 0 &&
+    (objectFit === "contain" || objectFit === "scale-down" || objectFit === "cover")
+  ) {
+    const scaleX = rect.width / canvas.width;
+    const scaleY = rect.height / canvas.height;
+    let scale = objectFit === "cover" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+    if (objectFit === "scale-down") {
+      scale = Math.min(scale, 1);
+    }
+    const width = canvas.width * scale;
+    const height = canvas.height * scale;
+    return {
+      left: rect.left + (rect.width - width) / 2,
+      top: rect.top + (rect.height - height) / 2,
+      width,
+      height,
+    };
+  }
+
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
 /** Map a screen pointer position to canvas pixel coordinates. */
 export function getCanvasCoords(
   canvas: HTMLCanvasElement | null,
@@ -10,12 +56,16 @@ export function getCanvasCoords(
 ): CanvasPoint {
   if (!canvas) return { x: 0, y: 0 };
   const rect = canvas.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  if (rect.width === 0 || rect.height === 0 || canvas.width === 0 || canvas.height === 0) {
+    return { x: 0, y: 0 };
+  }
+  const content = getRenderedContentRect(canvas, rect);
+  if (content.width === 0 || content.height === 0) return { x: 0, y: 0 };
+  const scaleX = canvas.width / content.width;
+  const scaleY = canvas.height / content.height;
   return {
-    x: Math.round((e.clientX - rect.left) * scaleX),
-    y: Math.round((e.clientY - rect.top) * scaleY),
+    x: clamp(Math.round((e.clientX - content.left) * scaleX), 0, canvas.width),
+    y: clamp(Math.round((e.clientY - content.top) * scaleY), 0, canvas.height),
   };
 }
 
