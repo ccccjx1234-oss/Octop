@@ -951,9 +951,46 @@ class ConnectorService:
             is_catalog_kind=_is_catalog_kind,
         )
 
-    def custom_harness_configs(self, user_id: int) -> dict[str, Any]:
+    def _trusted_youli_mcp_url(self, url: str) -> bool:
+        target = url.strip().rstrip("/")
+        if not target:
+            return False
+        youli_cfg = getattr(self._config, "youli", None)
+        prefixes = getattr(youli_cfg, "mcp_trusted_urls", ()) or ()
+        for raw_prefix in prefixes:
+            prefix = str(raw_prefix or "").strip().rstrip("/")
+            if prefix and (target == prefix or target.startswith(prefix + "/")):
+                return True
+        return False
+
+    def _inject_youli_token_if_trusted(
+        self, spec: dict[str, Any], token_user_id: int
+    ) -> dict[str, Any]:
+        if spec.get("transport") != "streamable_http":
+            return spec
+        url = str(spec.get("url") or "").strip()
+        if not self._trusted_youli_mcp_url(url):
+            return spec
+        headers = {str(k): str(v) for k, v in dict(spec.get("headers") or {}).items()}
+        if any(
+            k.lower() in {"authorization", "auth-token"} and v.strip()
+            for k, v in headers.items()
+        ):
+            return spec
+        token = self._live_youli_token(token_user_id)
+        if not token:
+            return spec
+        out = dict(spec)
+        headers["Authorization"] = f"Bearer {token}"
+        out["headers"] = headers
+        return out
+
+    def custom_harness_configs(
+        self, user_id: int, *, token_user_id: int | None = None
+    ) -> dict[str, Any]:
         if not self._repo.connector_feature_allows(user_id):
             return {}
+        effective_uid = user_id if token_user_id is None else token_user_id
         configs = enabled_harness_configs(self.get_custom_servers(user_id))
         for parent in self._repo.list_by_kind(CUSTOM_MCP_KIND):
             if parent.user_id == user_id or not parent.has_credentials:
@@ -969,7 +1006,10 @@ class ConnectorService:
                 built = enabled_harness_configs({name: spec}).get(name)
                 if built is not None:
                     configs[shared_mcp_server_name(parent.instance_id, name)] = built
-        return configs
+        return {
+            name: self._inject_youli_token_if_trusted(spec, effective_uid)
+            for name, spec in configs.items()
+        }
 
     async def mcp_configs_for_user(self, user_id: int) -> dict[str, Any]:
         if not self._repo.connector_feature_allows(user_id):

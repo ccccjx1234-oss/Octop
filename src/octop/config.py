@@ -142,6 +142,7 @@ class YouliConfig:
     request_ttl_seconds: int = 300
     revalidate_seconds: int = 30
     cookie_secure: bool = True
+    mcp_trusted_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -722,6 +723,10 @@ def load_config(path: Path) -> OctopConfig:
     if v := os.environ.get("OCTOP_YOULI_COOKIE_SECURE"):
         youli_updates["cookie_secure"] = _coerce_bool(
             "OCTOP_YOULI_COOKIE_SECURE", v, youli.cookie_secure
+        )
+    if v := os.environ.get("OCTOP_YOULI_MCP_TRUSTED_URLS"):
+        youli_updates["mcp_trusted_urls"] = tuple(
+            item.strip().rstrip("/") for item in v.split(",") if item.strip()
         )
     if youli_updates:
         youli = replace(youli, **youli_updates)
