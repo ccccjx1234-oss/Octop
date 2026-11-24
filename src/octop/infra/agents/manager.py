@@ -4714,7 +4714,6 @@ class AgentManager:
 
         from octop.infra.agents.middleware.ask_user_options import (
             AskUserOptionsMiddleware,
-            McnWriteHitlMiddleware,
         )
         from octop.infra.agents.middleware.binary_read_guard import BinaryReadGuardMiddleware
         from octop.infra.agents.middleware.browser_profile import BrowserProfileMiddleware
@@ -4748,7 +4747,6 @@ class AgentManager:
                 timezone=self._config.default_timezone,
             ),
             AskUserOptionsMiddleware(),
-            McnWriteHitlMiddleware(session_store=self._hitl_session_store),
             ReasoningRequestMiddleware(),
             TeamDispatchBriefingMiddleware(),
             KnowledgeSearchHintMiddleware(),

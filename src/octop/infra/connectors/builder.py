@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from octop.config import OctopConfig
@@ -551,18 +551,6 @@ def validate_create_credentials(
         }
 
     if entry.auth_kind == "custom_fields":
-        if entry.kind == "mcn":
-            token = str(credentials.get("token") or "").strip()
-            if not token:
-                raise ValueError("请先完成会火员工登录，再安装 MCN 连接器")
-            out = {
-                "token": token,
-                "internal_token": new_internal_token(),
-            }
-            base_url = str(credentials.get("base_url") or "").strip()
-            if base_url:
-                out["base_url"] = base_url
-            return out
         if entry.kind == "agently-cli":
             # A caller must never select another instance's CLI credential directory.
             return {"internal_token": new_internal_token(), "cli_config_key": new_ulid()}
@@ -671,24 +659,6 @@ def _iter_active_connectors(
         if not creds:
             continue
         yield inst, entry, creds
-
-
-def _mcn_turn_token_resolver(svc: Any, owner_user_id: int) -> Any:
-    """Resolve this instance owner's token from the current turn."""
-
-    def resolve() -> str:
-        try:
-            from langgraph.config import get_config
-
-            configurable = get_config().get("configurable") or {}
-        except Exception:
-            return ""
-        sid = str(configurable.get("youli_sid") or "").strip()
-        if not sid or str(configurable.get("octop_user_id") or "") != str(owner_user_id):
-            return ""
-        return cast(str, svc.live_youli_token_for_sid(sid, owner_user_id=owner_user_id))
-
-    return resolve
 
 
 def build_mcp_server_configs_for_user(
@@ -821,13 +791,6 @@ def inject_missing_gateway_tools(
             continue
         if any(str(t).startswith(f"{inst.mcp_server_name}_") for t in tool_set):
             continue
-        if inst.kind == "mcn":
-            creds = dict(creds)
-            creds["_owner_user_id"] = inst.user_id
-            creds["_token_resolver"] = _mcn_turn_token_resolver(svc, inst.user_id)
-            creds["_latest_token_resolver"] = lambda uid=inst.user_id: (
-                svc.live_youli_token_for_user(uid)
-            )
         extra.extend(
             build_gateway_langchain_tools(
                 entry=entry,

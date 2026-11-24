@@ -421,14 +421,6 @@ def _validate_connector_visibility(
     GroupAccess(server.services.repos).validate_visibility(visibility, group_ids)
 
 
-def _reject_shared_mcn(kind: str, shared: bool) -> None:
-    if kind == "mcn" and shared:
-        raise OctopError(
-            ErrorCode.FORBIDDEN,
-            "MCN 连接器只能由安装它的员工使用，不能共享",
-        )
-
-
 async def _prepare_credentials(
     kind: str,
     credentials: dict[str, Any],
@@ -457,11 +449,6 @@ async def _prepare_credentials(
             raise ValueError("token is required")
         cred_payload = {"token": token}
     return validate_create_credentials(kind, cred_payload)
-
-
-def _active_youli_token(server: Any, user_id: int) -> str:
-    """Resolve and verify the current employee's credential at call time."""
-    return _connector_service(server).live_youli_token_for_user(user_id)
 
 
 def _merge_credentials(
@@ -898,16 +885,6 @@ async def create_instance(
     if repo.name_exists(user.id, display_name) or _custom_name_exists(svc, user.id, display_name):
         _raise_name_taken(display_name)
     cred_input = dict(body.credentials)
-    from_session = body.kind == "mcn" and not str(cred_input.get("token") or "").strip()
-    if from_session:
-        token = await asyncio.to_thread(_active_youli_token, server, user.id)
-        if not token:
-            raise OctopError(
-                ErrorCode.AUTH_FAILED,
-                "请先完成会火员工登录，再安装 MCN 连接器",
-                details={"login_url": "/aiwork/staff-login.html"},
-            )
-        cred_input["token"] = token
 
     try:
         cred_payload = await _prepare_credentials(
@@ -920,16 +897,12 @@ async def create_instance(
             details={"reason": str(exc)},
         ) from exc
 
-    if from_session:
-        # The encrypted session is authoritative; never copy its token into connector storage.
-        cred_payload.pop("token", None)
     instance_id = new_ulid()
     shared, visibility, group_ids = _shared_and_visibility(
         visibility=body.visibility,
         group_ids=body.group_ids,
         shared=body.shared,
     )
-    _reject_shared_mcn(body.kind, shared)
     _validate_connector_visibility(server, visibility=visibility, group_ids=group_ids)
     repo.create(
         instance_id=instance_id,
@@ -1050,7 +1023,6 @@ async def patch_instance(
             shared=body.shared,
             default_shared=bool(inst.shared),
         )
-        _reject_shared_mcn(inst.kind, shared)
         _validate_connector_visibility(server, visibility=visibility, group_ids=group_ids)
         repo.update_metadata(instance_id, shared=shared)
         _apply_connector_visibility(server, instance_id, visibility=visibility, group_ids=group_ids)
@@ -1219,10 +1191,6 @@ async def test_instance(
     creds = await svc.ensure_fresh_credentials(instance_id, inst.kind)
     if not creds:
         raise OctopError(ErrorCode.CONNECTOR_INVALID_CREDENTIALS, "missing credentials")
-    if inst.kind == "mcn":
-        creds["_token_resolver"] = lambda: (
-            svc.live_youli_token_for_user(user.id) if inst.user_id == user.id else ""
-        )
     if inst.kind in {"agently-cli", "ragflow"}:
         creds["_locale"] = resolve_request_locale(request)
 
@@ -1252,25 +1220,6 @@ async def test_credentials(
     if entry.phase != "available":
         raise OctopError(ErrorCode.CONNECTOR_KIND_UNSUPPORTED, f"{body.kind} not available")
     cred_input = dict(body.credentials)
-    if body.kind == "mcn":
-        if not str(cred_input.get("token") or "").strip():
-            token = _active_youli_token(server, user.id)
-            if not token:
-                raise OctopError(
-                    ErrorCode.AUTH_FAILED,
-                    "请先完成会火员工登录，再安装 MCN 连接器",
-                    details={"login_url": "/aiwork/staff-login.html"},
-                )
-            cred_input["token"] = token
-        youli_cfg = getattr(server.services.config, "youli", None)
-        if not str(cred_input.get("base_url") or "").strip():
-            mcn_url = str(getattr(youli_cfg, "mcn_base_url", "") or "").strip().rstrip("/")
-            if mcn_url:
-                cred_input["base_url"] = mcn_url
-        if not str(cred_input.get("ca_file") or "").strip():
-            ca_file = str(getattr(youli_cfg, "ca_file", "") or "").strip()
-            if ca_file:
-                cred_input["ca_file"] = ca_file
     try:
         cred_payload = await prepare_probe_credentials(
             body.kind,
