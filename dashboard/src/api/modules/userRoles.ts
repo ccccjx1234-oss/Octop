@@ -17,6 +17,7 @@ export interface UserRole {
   immutable: boolean;
   workspace_root_dir: string | null;
   token_quota: number | null;
+  token_quota_days?: number | null;
   max_agents: number | null;
   allowed_backend_types: string[] | null;
   created_at: number;
@@ -128,6 +129,7 @@ export function userRoleDrift(
     permissions?: string[];
     workspace_root_dir?: string | null;
     token_quota?: number | null;
+    token_quota_days?: number | null;
     max_agents?: number | null;
     allowed_backend_types?: string[] | null;
   },
@@ -156,6 +158,8 @@ export function userRoleDrift(
   const roleRoot = role.workspace_root_dir?.trim() || null;
   if (root !== roleRoot) return "changed";
   if ((row.token_quota ?? null) !== (role.token_quota ?? null))
+    return "changed";
+  if ((row.token_quota_days ?? null) !== (role.token_quota_days ?? null))
     return "changed";
   if ((row.max_agents ?? null) !== (role.max_agents ?? null)) return "changed";
   const types = (values: string[] | null | undefined) =>

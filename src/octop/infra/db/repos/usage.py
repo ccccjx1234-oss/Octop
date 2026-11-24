@@ -528,11 +528,18 @@ class UsageRepo:
             return 0
         return int(row["input_tokens"] or 0)
 
-    def total_tokens_for_user(self, user_id: int) -> int:
-        """Lifetime ``total_tokens`` for one user (all agents and sources)."""
+    def total_tokens_for_user(
+        self, user_id: int, *, start: int | None = None, end: int | None = None
+    ) -> int:
+        """All agents and sources, optionally restricted to a time range."""
+        sql = "SELECT COALESCE(SUM(total_tokens), 0) AS total FROM usage_log WHERE user_id = ?"
+        params = [user_id]
+        if start is not None:
+            sql += " AND ts >= ?"
+            params.append(start)
+        if end is not None:
+            sql += " AND ts < ?"
+            params.append(end)
         with self._db.connect() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(SUM(total_tokens), 0) AS total FROM usage_log WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
+            row = conn.execute(sql, tuple(params)).fetchone()
         return int(row["total"] if row is not None else 0)

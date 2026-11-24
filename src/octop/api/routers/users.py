@@ -53,6 +53,7 @@ class UserCreateBody(BaseModel):
     role_name: str | None = Field(default=None, max_length=64)
     workspace_root_dir: str | None = None
     token_quota: int | None = Field(default=None, ge=0)
+    token_quota_days: int | None = Field(default=None, strict=True, ge=1, le=999_999_999)
     max_agents: int | None = Field(default=None, ge=0)
     allowed_backend_types: list[str] | None = Field(
         default=None,
@@ -82,6 +83,7 @@ class UserPatchBody(BaseModel):
     avatar_icon: str | None = Field(default=None, max_length=32)
     workspace_root_dir: str | None = None
     token_quota: int | None = Field(default=None, ge=0)
+    token_quota_days: int | None = Field(default=None, strict=True, ge=1, le=999_999_999)
     max_agents: int | None = Field(default=None, ge=0)
     allowed_backend_types: list[str] | None = Field(
         default=None,
@@ -101,6 +103,7 @@ class UserBatchBody(BaseModel):
         ge=0,
         description="Used by set_token_quota. null clears the limit (unlimited).",
     )
+    token_quota_days: int | None = Field(default=None, strict=True, ge=1, le=999_999_999)
     max_agents: int | None = Field(
         default=None,
         ge=0,
@@ -221,6 +224,7 @@ def _policy_kwargs_replace_from_pairs(pairs: list[tuple[str, str]]) -> dict[str,
         POLICY_ALLOWED_BACKEND_TYPES,
         POLICY_MAX_AGENTS,
         POLICY_TOKEN_QUOTA,
+        POLICY_TOKEN_QUOTA_DAYS,
         POLICY_WORKSPACE_ROOT_DIR,
         allowed_backend_types_of,
         max_agents_of,
@@ -231,6 +235,7 @@ def _policy_kwargs_replace_from_pairs(pairs: list[tuple[str, str]]) -> dict[str,
     return {
         "workspace_root_dir": by_name.get(POLICY_WORKSPACE_ROOT_DIR),
         "token_quota": token_quota_of(by_name.get(POLICY_TOKEN_QUOTA)),
+        "token_quota_days": token_quota_of(by_name.get(POLICY_TOKEN_QUOTA_DAYS)),
         "max_agents": max_agents_of(by_name.get(POLICY_MAX_AGENTS)),
         "allowed_backend_types": allowed_backend_types_of(
             by_name.get(POLICY_ALLOWED_BACKEND_TYPES)
@@ -255,6 +260,10 @@ def _policy_kwargs_from_body(body: UserCreateBody | UserPatchBody) -> dict[str, 
         policy_kwargs["workspace_root_dir"] = body.workspace_root_dir
     if "token_quota" in body.model_fields_set:
         policy_kwargs["token_quota"] = body.token_quota
+    if "token_quota_days" in body.model_fields_set:
+        if body.token_quota_days is not None and body.token_quota is None:
+            raise OctopError(ErrorCode.FORBIDDEN, "period requires a token quota", status=400)
+        policy_kwargs["token_quota_days"] = body.token_quota_days
     if "max_agents" in body.model_fields_set:
         policy_kwargs["max_agents"] = body.max_agents
     if "allowed_backend_types" in body.model_fields_set:
@@ -440,8 +449,7 @@ async def _batch_apply_one(
     actor: User,
     user_id: int,
     action: UserBatchAction,
-    token_quota: int | None,
-    max_agents: int | None,
+    resource_policy: dict[str, int | None],
 ) -> UserBatchItemResult:
     if action in ("disable", "delete") and user_id == actor.id:
         return _batch_fail(
@@ -464,16 +472,8 @@ async def _batch_apply_one(
         elif action == "delete":
             registry = getattr(getattr(server, "app_runtime", None), "agent_registry", None)
             await server.user_manager.remove(row.username, agent_manager=registry)
-        elif action == "set_token_quota":
-            await server.user_manager.set_resource_policy(
-                row.username,
-                token_quota=token_quota,
-            )
-        elif action == "set_max_agents":
-            await server.user_manager.set_resource_policy(
-                row.username,
-                max_agents=max_agents,
-            )
+        elif action in ("set_token_quota", "set_max_agents"):
+            await server.user_manager.set_resource_policy(row.username, **resource_policy)
         else:
             return _batch_fail(
                 user_id,
@@ -504,10 +504,15 @@ async def batch_users(
     actor: Any = Depends(require_permission("users")),
     server: Any = Depends(get_server),
 ) -> UserBatchResponse:
+    resource_policy: dict[str, int | None] = {}
     if body.action == "set_token_quota":
-        normalize_token_quota(body.token_quota)
-    if body.action == "set_max_agents":
-        normalize_max_agents(body.max_agents)
+        resource_policy["token_quota"] = normalize_token_quota(body.token_quota)
+        if body.token_quota_days is not None and body.token_quota is None:
+            raise OctopError(ErrorCode.FORBIDDEN, "period requires a token quota", status=400)
+        if "token_quota_days" in body.model_fields_set:
+            resource_policy["token_quota_days"] = body.token_quota_days
+    elif body.action == "set_max_agents":
+        resource_policy["max_agents"] = normalize_max_agents(body.max_agents)
 
     # Preserve order while dropping duplicates.
     seen: set[int] = set()
@@ -526,8 +531,7 @@ async def batch_users(
                 actor=actor,
                 user_id=user_id,
                 action=body.action,
-                token_quota=body.token_quota,
-                max_agents=body.max_agents,
+                resource_policy=resource_policy,
             )
         )
     succeeded = sum(1 for item in results if item.ok)
@@ -566,6 +570,7 @@ async def patch_user(
     row = server.user_manager.get_row(user_id)
     if row is None:
         raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+    policy_kwargs = _policy_kwargs_from_body(body)
     if body.permissions is not None:
         _assert_can_assign(actor, body.permissions)
         # An administrator account keeps full access. The form stores that as
@@ -595,10 +600,10 @@ async def patch_user(
                 row.username,
                 [] if role_id == Role.ADMIN else template_perms,
             )
-        # Always replace policies from the new template; body fields overlay below.
         await server.user_manager.set_resource_policy(
-            row.username, **_policy_kwargs_replace_from_pairs(template_policies)
+            row.username, **(_policy_kwargs_replace_from_pairs(template_policies) | policy_kwargs)
         )
+        policy_kwargs = {}
     if body.display_name is not None:
         await server.user_manager.set_display_name(row.username, body.display_name)
     if "email" in body.model_fields_set:
@@ -616,7 +621,6 @@ async def patch_user(
 
         server.services.user_repo.set_avatar_icon(user_id, clean_avatar_icon(body.avatar_icon))
         delete_profile_avatar(server.services.avatars("user"), str(user_id))
-    policy_kwargs = _policy_kwargs_from_body(body)
     if policy_kwargs:
         await server.user_manager.set_resource_policy(row.username, **policy_kwargs)
     updated = server.user_manager.get_row(user_id)

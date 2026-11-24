@@ -31,6 +31,7 @@ from octop.infra.users.resource_policy import (
     POLICY_ALLOWED_BACKEND_TYPES,
     POLICY_MAX_AGENTS,
     POLICY_TOKEN_QUOTA,
+    POLICY_TOKEN_QUOTA_DAYS,
     POLICY_WORKSPACE_ROOT_DIR,
     allowed_backend_types_of,
     max_agents_of,
@@ -47,6 +48,7 @@ router = APIRouter()
 _KNOWN_POLICIES = {
     POLICY_WORKSPACE_ROOT_DIR,
     POLICY_TOKEN_QUOTA,
+    POLICY_TOKEN_QUOTA_DAYS,
     POLICY_MAX_AGENTS,
     POLICY_ALLOWED_BACKEND_TYPES,
 }
@@ -138,6 +140,7 @@ def _policies_from_fields(
     *,
     workspace_root_dir: str | None,
     token_quota: int | None,
+    token_quota_days: str | None,
     max_agents: int | None,
     allowed_backend_types: Any,
 ) -> list[tuple[str, str]]:
@@ -148,6 +151,12 @@ def _policies_from_fields(
     quota = normalize_token_quota(token_quota)
     if quota is not None:
         items.append((POLICY_TOKEN_QUOTA, str(quota)))
+    if token_quota_days is not None:
+        if quota is None or not re.fullmatch(r"[1-9][0-9]{0,8}", token_quota_days):
+            raise OctopError(
+                ErrorCode.FORBIDDEN, "period requires a quota and 1–999999999 days", status=400
+            )
+        items.append((POLICY_TOKEN_QUOTA_DAYS, token_quota_days))
     agents = normalize_max_agents(max_agents)
     if agents is not None:
         items.append((POLICY_MAX_AGENTS, str(agents)))
@@ -169,6 +178,7 @@ def _policies_from_items(items: list[PolicyItem]) -> list[tuple[str, str]]:
     return _policies_from_fields(
         workspace_root_dir=by_name.get(POLICY_WORKSPACE_ROOT_DIR),
         token_quota=token_quota_of(by_name.get(POLICY_TOKEN_QUOTA)),
+        token_quota_days=by_name.get(POLICY_TOKEN_QUOTA_DAYS),
         max_agents=max_agents_of(by_name.get(POLICY_MAX_AGENTS)),
         allowed_backend_types=by_name.get(POLICY_ALLOWED_BACKEND_TYPES),
     )
@@ -193,6 +203,7 @@ def public_role(row: UserRoleRow, *, avatar_url: str | None = None) -> dict[str,
         policies: list[dict[str, str]] = []
         workspace_root_dir = None
         token_quota = None
+        token_quota_days = None
         max_agents = None
         allowed_backend_types = None
     else:
@@ -201,6 +212,7 @@ def public_role(row: UserRoleRow, *, avatar_url: str | None = None) -> dict[str,
         policies = [{"name": name, "value": value} for name, value in row.policies]
         workspace_root_dir = workspace_root_dir_of(row.policy_value(POLICY_WORKSPACE_ROOT_DIR))
         token_quota = token_quota_of(row.policy_value(POLICY_TOKEN_QUOTA))
+        token_quota_days = token_quota_of(row.policy_value(POLICY_TOKEN_QUOTA_DAYS))
         max_agents = max_agents_of(row.policy_value(POLICY_MAX_AGENTS))
         allowed_backend_types = allowed_backend_types_of(
             row.policy_value(POLICY_ALLOWED_BACKEND_TYPES)
@@ -216,6 +228,7 @@ def public_role(row: UserRoleRow, *, avatar_url: str | None = None) -> dict[str,
         "immutable": row.is_admin,
         "workspace_root_dir": workspace_root_dir,
         "token_quota": token_quota,
+        "token_quota_days": token_quota_days,
         "max_agents": max_agents,
         "allowed_backend_types": allowed_backend_types,
         "created_at": row.created_at,

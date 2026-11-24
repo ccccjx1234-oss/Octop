@@ -246,6 +246,9 @@ export default function RolesPanel() {
             : undefined,
           limit_token_quota: editor.token_quota != null,
           token_quota: editor.token_quota ?? undefined,
+          quota_cycle:
+            editor.token_quota_days != null ? "periodic" : "lifetime",
+          token_quota_days: editor.token_quota_days ?? 1,
           limit_max_agents: editor.max_agents != null,
           max_agents: editor.max_agents ?? undefined,
           limit_allowed_backend_types:

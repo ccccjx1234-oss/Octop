@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta
+from datetime import time as day_time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.utils.host_dirs import (
@@ -21,6 +25,7 @@ _LOCAL_BACKEND_KINDS = {"local_shell", "filesystem"}
 
 POLICY_WORKSPACE_ROOT_DIR = "workspace_root_dir"
 POLICY_TOKEN_QUOTA = "token_quota"
+POLICY_TOKEN_QUOTA_DAYS = "token_quota_days"
 POLICY_MAX_AGENTS = "max_agents"
 POLICY_ALLOWED_BACKEND_TYPES = "allowed_backend_types"
 
@@ -127,6 +132,7 @@ def public_policy_fields(rows: Sequence[Any] | Mapping[str, str] | None) -> dict
     return {
         "workspace_root_dir": workspace_root_dir_of(by_name),
         "token_quota": token_quota_of(by_name.get(POLICY_TOKEN_QUOTA)),
+        "token_quota_days": token_quota_of(by_name.get(POLICY_TOKEN_QUOTA_DAYS)),
         "max_agents": max_agents_of(by_name.get(POLICY_MAX_AGENTS)),
         "allowed_backend_types": allowed_backend_types_of(
             by_name.get(POLICY_ALLOWED_BACKEND_TYPES)
@@ -517,12 +523,26 @@ def apply_workspace_root_to_config(
         raise OctopError(ErrorCode.WORKSPACE_ROOT_RESTRICTED, str(exc)) from exc
 
 
-def assert_token_quota_available(policy_repo: Any, usage_repo: Any, user_id: int) -> None:
-    """Raise when the user's lifetime ``total_tokens`` is at or above quota."""
-    quota = token_quota_of(policy_repo.get(user_id, POLICY_TOKEN_QUOTA))
+def assert_token_quota_available(
+    policy_repo: Any, usage_repo: Any, user_id: int, *, timezone: str = "UTC"
+) -> None:
+    """Check the amount and period from the same user-policy snapshot."""
+    rows = {row.name: row for row in policy_repo.list_for_user(user_id) if row.enabled}
+    quota = token_quota_of(rows.get(POLICY_TOKEN_QUOTA))
     if quota is None:
         return
-    used = int(usage_repo.total_tokens_for_user(user_id))
+    period = rows.get(POLICY_TOKEN_QUOTA_DAYS)
+    if period is None:
+        used = usage_repo.total_tokens_for_user(user_id)
+    else:
+        days = int(period.value)
+        tz = ZoneInfo(timezone)
+        now = int(time.time())
+        today = datetime.fromtimestamp(now, tz).date()
+        anchor = datetime.fromtimestamp(period.created_at, tz).date()
+        start_day = today - timedelta(days=(today - anchor).days % days)
+        start = int(datetime.combine(start_day, day_time.min, tz).timestamp())
+        used = usage_repo.total_tokens_for_user(user_id, start=start, end=now + 1)
     if used >= quota:
         raise OctopError(
             ErrorCode.TOKEN_QUOTA_EXCEEDED,
