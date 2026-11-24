@@ -126,17 +126,7 @@ class ConnectorService:
         row = self._repo.get(instance_id)
         if row is None or not row.credential_blob:
             return {}
-        creds = decrypt_credentials(self._secret_repo, row.credential_blob)
-        if row.kind == "mcn":
-            creds = dict(creds)
-            youli_cfg = getattr(getattr(self, "_config", None), "youli", None)
-            mcn_url = str(getattr(youli_cfg, "mcn_base_url", "") or "").strip().rstrip("/")
-            if mcn_url:
-                creds["base_url"] = mcn_url
-            ca_file = str(getattr(youli_cfg, "ca_file", "") or "").strip()
-            if ca_file:
-                creds["ca_file"] = ca_file
-        return creds
+        return decrypt_credentials(self._secret_repo, row.credential_blob)
 
     def _verified_bound_session(self, session: Any) -> bool:
         repo = self._youli_session_repo
@@ -188,33 +178,6 @@ class ConnectorService:
     def live_youli_token_for_user(self, user_id: int, *, allow_bound: bool = True) -> str:
         """Newest token for the employee, resolved at tool-call time."""
         return self._live_youli_token(user_id, allow_bound=allow_bound)
-
-    def live_youli_token_for_sid(self, sid: str, owner_user_id: int | None = None) -> str:
-        """Token for the employee who is running this turn, if they own MCN."""
-        if not sid or self._youli_session_repo is None:
-            return ""
-        try:
-            session = self._youli_session_repo.get_active(sid)
-        except Exception:
-            logger.exception("failed to read youli session %s", sid)
-            return ""
-        if session is None or session.token_blob is None:
-            return ""
-        if owner_user_id is not None and int(session.user_id) != int(owner_user_id):
-            return ""
-        if not self._verified_bound_session(session):
-            return ""
-        owns_mcn = any(
-            inst.kind == "mcn" and inst.status == "active"
-            for inst in self._repo.list_by_user(session.user_id)
-        )
-        if not owns_mcn:
-            return ""
-        try:
-            return decrypt_secret(self._secret_repo, session.token_blob) or ""
-        except Exception:
-            logger.exception("failed to decrypt youli token for session %s", sid)
-            return ""
 
     def encrypt_and_store(
         self,

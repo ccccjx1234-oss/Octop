@@ -16,7 +16,6 @@ from octop.infra.auth.youli.client import (
     YouliIssuedToken,
 )
 from octop.infra.auth.youli.service import YouliAuthService, revalidate_business_session
-from octop.infra.connectors.service import ConnectorService
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.services import build_shared_services
@@ -110,41 +109,6 @@ async def test_start_and_exchange_creates_session(service, monkeypatch):
     assert payload["password_version"] == 0
     assert result.user.username
     assert service.session(result.session.sid) is not None
-
-
-@pytest.mark.asyncio
-async def test_exchange_provisions_one_personal_mcn_connector(service, monkeypatch):
-    _mock_client(monkeypatch)
-    started = await service.start(public_base="https://octop.example")
-    result = await service.exchange(
-        code="code-1",
-        state=started.state,
-        request_id=started.request_id,
-        browser_token=started.browser_token,
-    )
-
-    def mcn_rows():
-        return [
-            row
-            for row in service._services.repos.connector_repo.list_by_user(result.user.id)
-            if row.kind == "mcn"
-        ]
-
-    rows = mcn_rows()
-    assert len(rows) == 1
-    assert rows[0].has_credentials
-    creds = ConnectorService(
-        repo=service._services.repos.connector_repo,
-        secret_repo=service._services.secret_repo,
-        settings_repo=service._services.settings_repo,
-        config=service._services.config,
-        youli_session_repo=service._services.youli_session_repo,
-    ).decrypt(rows[0].instance_id)
-    assert creds["token"] == "business-token"
-    assert creds["internal_token"]
-
-    service._ensure_personal_mcn_connector(user=result.user, token="business-token")
-    assert [row.instance_id for row in mcn_rows()] == [rows[0].instance_id]
 
 
 @pytest.mark.asyncio

@@ -34,17 +34,6 @@ def _service(server: Any) -> ConnectorService:
     )
 
 
-def _live_mcn_token(server: Any, user_id: int) -> str:
-    """Resolve the current session at each call, including MDM revalidation."""
-    return ConnectorService(
-        repo=server.services.repos.connector_repo,
-        secret_repo=server.services.secret_repo,
-        settings_repo=server.services.settings_repo,
-        config=server.services.config,
-        youli_session_repo=server.services.youli_session_repo,
-    ).live_youli_token_for_user(user_id, allow_bound=False)
-
-
 def _negotiate_initialize_result(body: dict[str, Any], resp: dict[str, Any]) -> dict[str, Any]:
     if body.get("method") != "initialize":
         return resp
@@ -74,11 +63,6 @@ async def internal_mcp_post(
     creds = svc.verify_internal_token(instance_id, token)
     if creds is None:
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid internal token")
-    if kind == "mcn":
-        creds = dict(creds)
-        live = await asyncio.to_thread(_live_mcn_token, server, inst.user_id)
-        creds.pop("token", None)
-        creds["_token_resolver"] = lambda: live
 
     try:
         body = await request.json()

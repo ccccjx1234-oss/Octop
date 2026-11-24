@@ -352,74 +352,7 @@ class YouliAuthService:
                     )
                 except Exception:  # noqa: BLE001 - best-effort notification
                     logger.debug("youli session_revoked push failed for sid %s", old_sid)
-        self._ensure_personal_mcn_connector(user=user, token=issued.token)
         return user, session, max(1, abs_expires - now)
-
-    def _ensure_personal_mcn_connector(self, *, user: User, token: str) -> None:
-        """Auto-provision a personal MCN connector once an employee has an ERP session."""
-        if not token:
-            return
-        try:
-            from octop.infra.connectors.builder import (
-                mcp_server_name,
-                new_internal_token,
-            )
-            from octop.infra.connectors.catalog import get_catalog_entry
-            from octop.infra.connectors.default_open import build_instance_config_json
-            from octop.infra.connectors.service import ConnectorService
-            from octop.infra.utils.ulid import new_ulid
-
-            connector_repo = getattr(self._services.repos, "connector_repo", None)
-            if connector_repo is None:
-                return
-            existing = connector_repo.list_by_user(user.id)
-            if any(inst.kind == "mcn" for inst in existing):
-                return
-            entry = get_catalog_entry("mcn")
-            display_name = entry.name.resolve("zh") if entry is not None else "MCN 业务"
-            description = (
-                entry.description.resolve("zh")
-                if entry is not None
-                else "按员工本人在 MCN 的权限访问账号、报价、订单、合同、项目和交付数据"
-            )
-            instance_id = new_ulid()
-            connector_repo.create(
-                instance_id=instance_id,
-                user_id=user.id,
-                kind="mcn",
-                display_name=display_name,
-                mcp_server_name=mcp_server_name("mcn", instance_id),
-                shared=False,
-                config_json=build_instance_config_json(
-                    kind="mcn",
-                    default_open=True,
-                    email=None,
-                    description=description,
-                ),
-            )
-            svc = ConnectorService(
-                repo=connector_repo,
-                secret_repo=self._services.secret_repo,
-                settings_repo=self._services.settings_repo,
-                config=self._services.config,
-                youli_session_repo=self._services.youli_session_repo,
-            )
-            cred_payload: dict[str, Any] = {
-                "token": token,
-                "internal_token": new_internal_token(),
-            }
-            mcn_url = str(getattr(self._cfg, "mcn_base_url", "") or "").strip().rstrip("/")
-            if mcn_url:
-                cred_payload["base_url"] = mcn_url
-            svc.encrypt_and_store(instance_id=instance_id, payload=cred_payload)
-            self._services.audit_repo.write(
-                actor=user.username,
-                action="connector.instance.auto_create",
-                target=instance_id,
-                payload="mcn",
-            )
-        except Exception:  # noqa: BLE001 - best-effort auto-provisioning
-            logger.warning("auto-provision MCN connector failed for user_id=%s", user.id, exc_info=True)
 
     def _reusable_sid(self, user_id: int, *, company_id: int, employee_id: int) -> str | None:
         now = int(time.time())
