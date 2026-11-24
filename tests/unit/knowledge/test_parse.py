@@ -257,3 +257,36 @@ def test_parse_wps_raises_when_anydoc_returns_empty(
     )
     with pytest.raises(ValueError, match="failed to extract"):
         parse_document(path)
+
+
+def test_parse_doc_falls_back_to_word_html(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "sample.doc"
+    path.write_text(
+        '<html xmlns:o="urn:schemas-microsoft-com:office:office" '
+        'xmlns:w="urn:schemas-microsoft-com:office:word">'
+        "<body><h1>示例标题</h1><p>正文内容</p></body></html>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "octop.infra.utils.anydoc_convert.extract_markdown_file",
+        lambda _path: "",
+    )
+    assert parse_document(path) == "示例标题\n正文内容"
+
+
+def test_map_knowledge_error_maps_unreadable_document() -> None:
+    from octop.api.routers.knowledge_bases import _map_knowledge_error
+    from octop.infra.errors import ErrorCode
+
+    err1 = _map_knowledge_error(
+        ValueError("failed to extract text from .doc document"), locale="zh"
+    )
+    err2 = _map_knowledge_error(
+        ValueError("knowledge document has no extractable text"), locale="zh"
+    )
+    assert err1.code == ErrorCode.KNOWLEDGE_DOC_UNREADABLE
+    assert err1.status == 400
+    assert err2.code == ErrorCode.KNOWLEDGE_DOC_UNREADABLE
+    assert err2.status == 400

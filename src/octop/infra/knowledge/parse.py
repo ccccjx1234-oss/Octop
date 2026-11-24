@@ -60,6 +60,8 @@ def parse_document(path: Path, *, ocr: OcrExtractor | None = None) -> str:
 
         text = extract_markdown_file(path)
         if not text.strip():
+            text = _parse_legacy_word_fallback(path)
+        if not text.strip():
             raise ValueError(f"failed to extract text from {suffix} document")
         return text
     if suffix == ".pptx":
@@ -112,6 +114,26 @@ def _parse_docx(path: Path) -> str:
 
     document = Document(str(path))
     return _docx_body_text(document.element.body, document.part)
+
+
+def _parse_legacy_word_fallback(path: Path) -> str:
+    """Fallback for .doc/.wps files saved as Word HTML or misnamed DOCX."""
+    raw = path.read_bytes()
+    if not raw:
+        return ""
+    if raw.startswith(b"PK\x03\x04"):
+        try:
+            return _parse_docx(path)
+        except Exception:
+            return ""
+    head = raw[:2048].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if (
+        head.startswith((b"<html", b"<!doctype", b"<?xml"))
+        or b"<html" in head
+        or b"urn:schemas-microsoft-com:office:word" in head
+    ):
+        return _parse_html(path)
+    return ""
 
 
 def _docx_body_text(body: Any, part: Any) -> str:

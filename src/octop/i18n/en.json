@@ -519,6 +519,7 @@
     "KNOWLEDGE_DOC_TOO_LARGE": "This document exceeds the {max_mb} MB size limit.",
     "KNOWLEDGE_BASE_LIMIT": "You can create at most 20 knowledge bases.",
     "KNOWLEDGE_UNSUPPORTED_TYPE": "This document type is not supported for knowledge bases.",
+    "KNOWLEDGE_DOC_UNREADABLE": "Could not extract readable text from this document. Enable OCR for scanned PDFs, or re-save legacy .doc files as .docx.",
     "KNOWLEDGE_NAME_TAKEN": "You already have a knowledge base with this name.",
     "KNOWLEDGE_GRAPH_NOT_READY": "Choose an available chat model for the knowledge graph in knowledge-base settings first.",
     "KNOWLEDGE_NAME_INVALID": "Invalid name.",

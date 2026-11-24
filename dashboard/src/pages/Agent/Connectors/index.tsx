@@ -437,6 +437,11 @@ function ConnectorConfigDrawer({
     restoringDraftRef.current = false;
   }, [draftScope, form]);
 
+  const handleDismiss = useCallback(() => {
+    if (draftScope) clearFormDraft(draftScope);
+    onClose();
+  }, [draftScope, onClose]);
+
   useEffect(() => {
     if (!open || !entry) return;
     setShowManual(false);
@@ -1292,12 +1297,12 @@ function ConnectorConfigDrawer({
             })
       }
       open={open}
-      onClose={onClose}
+      onClose={handleDismiss}
       width={isMobile ? "100%" : 480}
       destroyOnHidden
       footer={
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button onClick={onClose}>{t("common.cancel")}</Button>
+          <Button onClick={handleDismiss}>{t("common.cancel")}</Button>
           <Button
             icon={<Activity size={14} />}
             loading={probing}

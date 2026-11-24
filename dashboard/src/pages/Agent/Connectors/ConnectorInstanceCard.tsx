@@ -137,6 +137,8 @@ export function ConnectorInstanceCard({
             ? t("connectors.noCredentials", "缺少凭证")
             : editable
             ? t("connectors.clickToManage", "点击管理连接")
+            : instance.can_manage
+            ? t("connectors.retiredReadonly", "该连接器类型已下线，仅支持停用或删除")
             : t("connectors.sharedReadonly", "共享连接器，仅所有者可管理")}
         </div>
         {instance.can_manage ? (
