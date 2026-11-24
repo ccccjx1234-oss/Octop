@@ -80,4 +80,21 @@ describe("<ConnectorInstanceCard />", () => {
       "typography-ellipsis",
     );
   });
+
+  it("shows retired hint instead of shared-readonly when owner manages an uncataloged kind", () => {
+    renderCard(
+      makeInstance({
+        kind: "mcn",
+        shared: false,
+        can_manage: true,
+      }),
+    );
+
+    expect(
+      screen.getByText("该连接器类型已下线，仅支持停用或删除"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("共享连接器，仅所有者可管理"),
+    ).not.toBeInTheDocument();
+  });
 });

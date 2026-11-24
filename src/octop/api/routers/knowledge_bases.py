@@ -457,6 +457,8 @@ def _map_knowledge_error(
         return OctopError.localized(ErrorCode.KNOWLEDGE_BASE_LIMIT, locale)
     if "unsupported knowledge document content type" in text:
         return OctopError.localized(ErrorCode.KNOWLEDGE_UNSUPPORTED_TYPE, locale)
+    if "failed to extract text" in text or "no extractable text" in text:
+        return OctopError.localized(ErrorCode.KNOWLEDGE_DOC_UNREADABLE, locale)
     if "knowledge rerank" in text:
         return OctopError.localized(ErrorCode.KNOWLEDGE_RERANK_NOT_READY, locale)
     if "knowledge ocr" in text:
