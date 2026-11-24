@@ -24,17 +24,20 @@ def configurable_user_id() -> int | None:
 
 
 class TokenQuotaMiddleware(AgentMiddleware[Any, Any]):
-    """Check the acting user's lifetime token total before an agent turn."""
+    """Check the acting user's applicable token total before an agent turn."""
 
-    def __init__(self, *, policy_repo: Any, usage_repo: Any) -> None:
+    def __init__(self, *, policy_repo: Any, usage_repo: Any, timezone: str = "UTC") -> None:
         super().__init__()
         self._policies = policy_repo
         self._usage = usage_repo
+        self._timezone = timezone
 
     def _enforce(self) -> None:
         user_id = configurable_user_id()
         if user_id is not None:
-            assert_token_quota_available(self._policies, self._usage, user_id)
+            assert_token_quota_available(
+                self._policies, self._usage, user_id, timezone=self._timezone
+            )
 
     def before_agent(self, state: Any, runtime: Any) -> None:
         del state, runtime

@@ -15,7 +15,9 @@ def test_token_quota_middleware_rejects_exhausted_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policies = Mock()
-    policies.get.return_value = SimpleNamespace(enabled=True, value="10")
+    policies.list_for_user.return_value = [
+        SimpleNamespace(name="token_quota", enabled=True, value="10")
+    ]
     usage = Mock()
     usage.total_tokens_for_user.return_value = 10
     monkeypatch.setattr(
@@ -29,7 +31,7 @@ def test_token_quota_middleware_rejects_exhausted_user(
 
     assert exc.value.code is ErrorCode.TOKEN_QUOTA_EXCEEDED
     assert exc.value.details == {"used": 10, "quota": 10}
-    policies.get.assert_called_once_with(7, "token_quota")
+    policies.list_for_user.assert_called_once_with(7)
     usage.total_tokens_for_user.assert_called_once_with(7)
 
 
@@ -37,7 +39,7 @@ def test_token_quota_middleware_allows_unlimited_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policies = Mock()
-    policies.get.return_value = None
+    policies.list_for_user.return_value = []
     usage = Mock()
     monkeypatch.setattr(
         "octop.infra.agents.middleware.token_quota.get_config",
@@ -55,7 +57,9 @@ async def test_token_quota_middleware_async_hook_rejects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policies = Mock()
-    policies.get.return_value = SimpleNamespace(enabled=True, value="1")
+    policies.list_for_user.return_value = [
+        SimpleNamespace(name="token_quota", enabled=True, value="1")
+    ]
     usage = Mock()
     usage.total_tokens_for_user.return_value = 1
     monkeypatch.setattr(

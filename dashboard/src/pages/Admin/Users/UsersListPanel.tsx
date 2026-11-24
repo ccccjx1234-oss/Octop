@@ -138,6 +138,7 @@ interface UserRow {
   avatar_icon?: string | null;
   workspace_root_dir?: string | null;
   token_quota?: number | null;
+  token_quota_days?: number | null;
   max_agents?: number | null;
   allowed_backend_types?: string[] | null;
   /** Present when the users list includes MFA status from the backend. */
@@ -161,7 +162,9 @@ export interface PolicyFormValues {
   limit_workspace_root?: boolean;
   workspace_root_dir?: string;
   limit_token_quota?: boolean;
+  quota_cycle?: "lifetime" | "periodic";
   token_quota?: number | null;
+  token_quota_days?: number | null;
   limit_max_agents?: boolean;
   max_agents?: number | null;
   limit_allowed_backend_types?: boolean;
@@ -319,6 +322,8 @@ function policyFieldsFromRole(
     workspace_root_dir: role.workspace_root_dir ?? undefined,
     limit_token_quota: role.token_quota != null,
     token_quota: role.token_quota ?? undefined,
+    quota_cycle: role.token_quota_days != null ? "periodic" : "lifetime",
+    token_quota_days: role.token_quota_days ?? 1,
     limit_max_agents: role.max_agents != null,
     max_agents: role.max_agents ?? undefined,
     limit_allowed_backend_types: (role.allowed_backend_types?.length ?? 0) > 0,
@@ -597,7 +602,9 @@ interface BatchResponse {
 
 interface BatchTokenFormValues {
   limit_token_quota?: boolean;
+  quota_cycle?: "lifetime" | "periodic";
   token_quota?: number | null;
+  token_quota_days?: number | null;
 }
 
 interface BatchMaxAgentsFormValues {
@@ -610,12 +617,23 @@ const FIELD_ICON_PROPS = {
   style: { color: "var(--fn-text-tertiary)" },
 };
 
+function tokenQuotaPayload(values: BatchTokenFormValues) {
+  return {
+    token_quota: values.limit_token_quota ? values.token_quota ?? null : null,
+    token_quota_days:
+      values.limit_token_quota && values.quota_cycle === "periodic"
+        ? values.token_quota_days ?? null
+        : null,
+  };
+}
+
 export function policyPayload(
   values: PolicyFormValues,
   options: { workspaceRootAllowed: boolean },
 ): {
   workspace_root_dir: string | null;
   token_quota: number | null;
+  token_quota_days: number | null;
   max_agents: number | null;
   allowed_backend_types: string[] | null;
 } {
@@ -624,7 +642,7 @@ export function policyPayload(
       options.workspaceRootAllowed && values.limit_workspace_root
         ? values.workspace_root_dir?.trim() || null
         : null,
-    token_quota: values.limit_token_quota ? values.token_quota ?? null : null,
+    ...tokenQuotaPayload(values),
     max_agents: values.limit_max_agents ? values.max_agents ?? null : null,
     allowed_backend_types:
       values.limit_allowed_backend_types && values.allowed_backend_types?.length
@@ -647,6 +665,12 @@ export function rolePoliciesFromForm(
   }
   if (flat.token_quota != null) {
     policies.push({ name: "token_quota", value: String(flat.token_quota) });
+  }
+  if (flat.token_quota_days != null) {
+    policies.push({
+      name: "token_quota_days",
+      value: String(flat.token_quota_days),
+    });
   }
   if (flat.max_agents != null) {
     policies.push({ name: "max_agents", value: String(flat.max_agents) });
@@ -675,6 +699,60 @@ function formatMillionsLabel(tokens: number): string {
 
 function formatTokenQuotaExact(tokens: number): string {
   return tokens.toLocaleString("en-US");
+}
+
+function TokenQuotaFields() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Form.Item
+        name="quota_cycle"
+        label={t("adminUsers.quotaCycle")}
+        initialValue="lifetime"
+      >
+        <Select
+          options={[
+            { value: "lifetime", label: t("adminUsers.quotaLifetime") },
+            { value: "periodic", label: t("adminUsers.quotaPeriodic") },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        noStyle
+        shouldUpdate={(prev, cur) => prev.quota_cycle !== cur.quota_cycle}
+      >
+        {({ getFieldValue }) =>
+          getFieldValue("quota_cycle") === "periodic" ? (
+            <Form.Item
+              name="token_quota_days"
+              initialValue={1}
+              label={t("adminUsers.quotaDays")}
+              extra={t("adminUsers.quotaDaysHint")}
+              rules={[
+                {
+                  required: true,
+                  type: "integer",
+                  min: 1,
+                  max: 999999999,
+                  message: t("adminUsers.quotaDaysRequired"),
+                },
+              ]}
+            >
+              <InputNumber min={1} max={999999999} precision={0} />
+            </Form.Item>
+          ) : null
+        }
+      </Form.Item>
+      <Form.Item
+        name="token_quota"
+        rules={[
+          { required: true, message: t("adminUsers.policyTokenQuotaRequired") },
+        ]}
+      >
+        <TokenQuotaInput />
+      </Form.Item>
+    </>
+  );
 }
 
 interface TokenQuotaInputProps {
@@ -959,19 +1037,7 @@ export function ResourcePolicyFields({
         }
       >
         {({ getFieldValue }) =>
-          getFieldValue("limit_token_quota") ? (
-            <Form.Item
-              name="token_quota"
-              rules={[
-                {
-                  required: true,
-                  message: t("adminUsers.policyTokenQuotaRequired"),
-                },
-              ]}
-            >
-              <TokenQuotaInput />
-            </Form.Item>
-          ) : null
+          getFieldValue("limit_token_quota") ? <TokenQuotaFields /> : null
         }
       </Form.Item>
       <Form.Item
@@ -1890,6 +1956,7 @@ export default function UsersListPanel() {
       action: BatchAction,
       options?: {
         token_quota?: number | null;
+        token_quota_days?: number | null;
         max_agents?: number | null;
       },
     ) => {
@@ -1902,7 +1969,10 @@ export default function UsersListPanel() {
             user_ids: selectedIds,
             action,
             ...(action === "set_token_quota"
-              ? { token_quota: options?.token_quota ?? null }
+              ? {
+                  token_quota: options?.token_quota ?? null,
+                  token_quota_days: options?.token_quota_days ?? null,
+                }
               : {}),
             ...(action === "set_max_agents"
               ? { max_agents: options?.max_agents ?? null }
@@ -1966,14 +2036,14 @@ export default function UsersListPanel() {
     batchTokenForm.setFieldsValue({
       limit_token_quota: true,
       token_quota: 10_000_000,
+      quota_cycle: "lifetime",
+      token_quota_days: 1,
     });
     setBatchTokenOpen(true);
   };
 
   const submitBatchToken = async (values: BatchTokenFormValues) => {
-    await runBatch("set_token_quota", {
-      token_quota: values.limit_token_quota ? values.token_quota ?? null : null,
-    });
+    await runBatch("set_token_quota", tokenQuotaPayload(values));
   };
 
   const openBatchMaxAgents = () => {
@@ -2208,6 +2278,8 @@ export default function UsersListPanel() {
       workspace_root_dir: undefined,
       limit_token_quota: false,
       token_quota: undefined,
+      quota_cycle: "lifetime",
+      token_quota_days: 1,
       limit_max_agents: false,
       max_agents: undefined,
       limit_allowed_backend_types: false,
@@ -2242,6 +2314,8 @@ export default function UsersListPanel() {
         : undefined,
       limit_token_quota: row.token_quota != null,
       token_quota: row.token_quota ?? undefined,
+      quota_cycle: row.token_quota_days != null ? "periodic" : "lifetime",
+      token_quota_days: row.token_quota_days ?? 1,
       limit_max_agents: row.max_agents != null,
       max_agents: row.max_agents ?? undefined,
       limit_allowed_backend_types: (row.allowed_backend_types?.length ?? 0) > 0,
@@ -3352,19 +3426,7 @@ export default function UsersListPanel() {
             }
           >
             {({ getFieldValue }) =>
-              getFieldValue("limit_token_quota") ? (
-                <Form.Item
-                  name="token_quota"
-                  rules={[
-                    {
-                      required: true,
-                      message: t("adminUsers.policyTokenQuotaRequired"),
-                    },
-                  ]}
-                >
-                  <TokenQuotaInput />
-                </Form.Item>
-              ) : null
+              getFieldValue("limit_token_quota") ? <TokenQuotaFields /> : null
             }
           </Form.Item>
         </Form>

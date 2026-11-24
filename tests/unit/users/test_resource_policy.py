@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -17,6 +19,7 @@ from octop.infra.users.resource_policy import (
     POLICY_ALLOWED_BACKEND_TYPES,
     POLICY_MAX_AGENTS,
     POLICY_TOKEN_QUOTA,
+    POLICY_TOKEN_QUOTA_DAYS,
     POLICY_WORKSPACE_ROOT_DIR,
     apply_workspace_root_to_config,
     assert_agent_quota_available,
@@ -286,6 +289,46 @@ def test_assert_token_quota_available(db: SqlitePool) -> None:
     assert_token_quota_available(policies, usage, uid)
 
 
+@pytest.mark.parametrize("days,reset_day", [(1, 8), (3, 10)])
+def test_calendar_token_quota(db, monkeypatch, days, reset_day):
+    # This range includes the US daylight-saving transition on March 8.
+    tz = ZoneInfo("America/New_York")
+
+    def ts(day, hour=0):
+        return int(datetime(2026, 3, day, hour, tzinfo=tz).timestamp())
+
+    uid = UserRepo(db).create(username="alice", password_hash="h", role="user")
+    other = UserRepo(db).create(username="bob", password_hash="h", role="user")
+    agents = AgentRepo(db)
+    policies = UserPolicyRepo(db)
+    usage = UsageRepo(db)
+    for agent, owner in (("a1", uid), ("a2", uid), ("b", other)):
+        agents.create(agent_id=agent, user_id=owner, name=agent)
+    monkeypatch.setattr("octop.infra.db.repos.user_policies.now_ts", lambda: ts(7, 12))
+    policies.merge(uid, {POLICY_TOKEN_QUOTA: "100000000", POLICY_TOKEN_QUOTA_DAYS: str(days)})
+    for agent, owner, stamp, tokens in (
+        ("a1", uid, ts(7) - 1, 20),
+        ("a1", uid, ts(7), 60_000_000),
+        ("a2", uid, ts(reset_day) - 1, 40_000_000),
+        ("b", other, ts(reset_day), 100_000_000),
+    ):
+        usage.record(
+            agent_id=agent,
+            user_id=owner,
+            ts=stamp,
+            input_tokens=tokens,
+            output_tokens=0,
+            model="m",
+            thread_id="t",
+        )
+    monkeypatch.setattr("time.time", lambda: ts(reset_day) - 1)
+    with pytest.raises(OctopError) as exc:
+        assert_token_quota_available(policies, usage, uid, timezone=tz.key)
+    assert exc.value.details == {"used": 100_000_000, "quota": 100_000_000}
+    monkeypatch.setattr("time.time", lambda: ts(reset_day))
+    assert_token_quota_available(policies, usage, uid, timezone=tz.key)
+
+
 def test_assert_agent_quota_available(db: SqlitePool) -> None:
     users = UserRepo(db)
     policies = UserPolicyRepo(db)
@@ -328,6 +371,7 @@ def test_user_policy_repo_named_rows(db: SqlitePool, tmp_path: Path) -> None:
     assert public_policy_fields(policies.list_for_user(uid)) == {
         "workspace_root_dir": str(jail),
         "token_quota": 42,
+        "token_quota_days": None,
         "max_agents": None,
         "allowed_backend_types": None,
     }

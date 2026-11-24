@@ -613,6 +613,7 @@ class UserManager:
         *,
         workspace_root_dir: Any = UNSET,
         token_quota: Any = UNSET,
+        token_quota_days: Any = UNSET,
         max_agents: Any = UNSET,
         allowed_backend_types: Any = UNSET,
     ) -> None:
@@ -620,6 +621,7 @@ class UserManager:
             POLICY_ALLOWED_BACKEND_TYPES,
             POLICY_MAX_AGENTS,
             POLICY_TOKEN_QUOTA,
+            POLICY_TOKEN_QUOTA_DAYS,
             POLICY_WORKSPACE_ROOT_DIR,
             normalize_allowed_backend_types,
             normalize_max_agents,
@@ -641,6 +643,12 @@ class UserManager:
         if token_quota is not UNSET:
             quota_arg = normalize_token_quota(token_quota)
             updates[POLICY_TOKEN_QUOTA] = None if quota_arg is None else str(quota_arg)
+            if quota_arg is None:
+                token_quota_days = None
+        if token_quota_days is not UNSET:
+            updates[POLICY_TOKEN_QUOTA_DAYS] = (
+                None if token_quota_days is None else str(token_quota_days)
+            )
         if max_agents is not UNSET:
             max_agents_arg = normalize_max_agents(max_agents)
             updates[POLICY_MAX_AGENTS] = None if max_agents_arg is None else str(max_agents_arg)
@@ -663,6 +671,13 @@ class UserManager:
                 action="user.set_token_quota",
                 target=username,
                 payload=str(quota_arg) if quota_arg is not None else "",
+            )
+        if token_quota_days is not UNSET:
+            self._services.audit_repo.write(
+                actor=ACTOR_ADMIN,
+                action="user.set_token_quota_days",
+                target=username,
+                payload=updates[POLICY_TOKEN_QUOTA_DAYS] or "",
             )
         if max_agents is not UNSET:
             self._services.audit_repo.write(

@@ -134,6 +134,59 @@ async def test_builtin_roles_invite_reads_role_at_redeem(env):
     assert admin_row["role_name"] == "管理员"
 
 
+async def test_periodic_token_quota_roundtrip(env):
+    c, _, auth = env
+    policies = [
+        {"name": "token_quota", "value": "100000000"},
+        {"name": "token_quota_days", "value": "3"},
+    ]
+    role = await c.post(
+        "/api/users/roles", headers=auth, json={"user_role_name": "周期配额", "policies": policies}
+    )
+    assert role.status_code == 201, role.text
+    assert role.json()["token_quota_days"] == 3
+    user = await c.post(
+        "/api/users",
+        headers=auth,
+        json={
+            "username": "periodic",
+            "password": TEST_PASSWORD,
+            "role": role.json()["user_role_id"],
+        },
+    )
+    assert user.status_code == 201, user.text
+    uid = user.json()["id"]
+    url = f"/api/users/{uid}"
+    assert (await c.get(url, headers=auth)).json()["token_quota_days"] == 3
+    invalid = await c.patch(url, headers=auth, json={"token_quota_days": 0})
+    assert invalid.status_code == 422
+    batch = await c.post(
+        "/api/users/batch",
+        headers=auth,
+        json={
+            "action": "set_token_quota",
+            "user_ids": [uid],
+            "token_quota": 500,
+            "token_quota_days": 1,
+        },
+    )
+    assert batch.json()["succeeded"] == 1
+    updated = (await c.get(url, headers=auth)).json()
+    assert (updated["token_quota"], updated["token_quota_days"]) == (500, 1)
+    legacy = await c.post(
+        "/api/users/batch",
+        headers=auth,
+        json={"action": "set_token_quota", "user_ids": [uid], "token_quota": 600},
+    )
+    assert legacy.json()["succeeded"] == 1
+    assert (await c.get(url, headers=auth)).json()["token_quota_days"] == 1
+    lifetime = await c.patch(url, headers=auth, json={"token_quota": 500, "token_quota_days": None})
+    assert lifetime.json()["token_quota_days"] is None
+    assert lifetime.json()["token_quota"] == 500
+    cleared = await c.patch(url, headers=auth, json={"role": "user"})
+    assert cleared.json()["token_quota"] is None
+
+
 async def test_role_patch_without_policies_keeps_existing_policies(env):
     c, _srv, auth = env
     created = await c.post(
